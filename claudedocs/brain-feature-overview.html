@@ -1,0 +1,401 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Singular Brain</title><style>
+@page { size: A4; margin: 0; }
+* { box-sizing: border-box; }
+html { scroll-behavior:smooth; }
+body { margin:0; background:#e9eef2; color:#152838; font-family:Inter,Arial,sans-serif; font-size:10pt; line-height:1.48; }
+.page { width:210mm; height:297mm; margin:12mm auto; padding:16mm 17mm 18mm; background:white; position:relative; break-after:page; page-break-after:always; box-shadow:0 8px 28px #15283816; }
+.page:last-child { break-after:auto; page-break-after:auto; }
+.topline { font-size:8pt; letter-spacing:1.7px; font-weight:700; text-transform:uppercase; color:#567181; border-bottom:1px solid #dbe4e9; padding-bottom:8px; margin-bottom:20px; }
+.topline span { float:right; font-weight:500; letter-spacing:.6px; }
+h1,h2,h3,p { margin:0; }
+h1 { font-size:39pt; line-height:1.04; letter-spacing:-1.9px; margin:6px 0 16px; font-weight:750; }
+h2 { font-size:25pt; line-height:1.13; letter-spacing:-.8px; margin:5px 0 10px; font-weight:750; }
+h3 { font-size:11pt; line-height:1.25; margin:0 0 6px; font-weight:720; }
+p { margin:0 0 10px; }
+.kicker { color:#077c80; font-size:8pt; font-weight:750; letter-spacing:1.6px; text-transform:uppercase; }
+.lead { font-size:12pt; line-height:1.43; color:#3b5668; margin:0 0 17px; }
+.caption { font-size:8pt; line-height:1.35; color:#5c7380; margin:5px 0 15px; }
+.foot { position:absolute; left:17mm; right:17mm; bottom:11mm; border-top:1px solid #dbe4e9; padding-top:7px; font-size:7.1pt; color:#5c7380; display:flex; justify-content:space-between; gap:15px; }
+.foot .num { font-weight:700; white-space:nowrap; }
+a { color:#077c80; text-decoration:none; }
+.refs { font-size:7.7pt; line-height:1.4; color:#5c7380; margin-top:11px; }
+.refs a { color:#466677; }
+.two { display:grid; grid-template-columns:1fr 1fr; gap:15px; }
+.three { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
+.card { padding:13px 14px; border:1px solid #dce5eb; border-radius:9px; background:#f7f9fb; }
+.card p:last-child, .callout p:last-child { margin-bottom:0; }
+.card .tiny { margin-bottom:4px; }
+.callout { padding:13px 16px; border-left:4px solid #078589; background:#eff8f7; border-radius:0 7px 7px 0; margin:13px 0; }
+.callout.warn { border-color:#b46b1c; background:#fff6eb; }
+.callout.dark { color:white; border:0; background:#153242; border-radius:10px; }
+.callout.dark p { color:#d9e8ec; }
+.small { font-size:9pt; }
+.tiny { font-size:8pt; color:#5c7380; }
+.mt { margin-top:14px; }
+.mb { margin-bottom:14px; }
+.rule { border-top:1px solid #dbe4e9; margin:16px 0; }
+code, pre { font-family:'DejaVu Sans Mono',monospace; }
+code { font-size:.84em; background:#f0f4f6; padding:1px 3px; border-radius:3px; overflow-wrap:anywhere; }
+pre { font-size:8.1pt; line-height:1.48; padding:13px 15px; background:#122c3b; color:#edf5f6; white-space:pre-wrap; overflow-wrap:anywhere; border-radius:8px; margin:10px 0; }
+pre code { background:none; padding:0; color:inherit; font-size:inherit; }
+table { border-collapse:collapse; width:100%; margin:9px 0 13px; font-size:9pt; line-height:1.4; }
+th { text-align:left; color:#536e7c; font-size:7.6pt; text-transform:uppercase; letter-spacing:.7px; border-bottom:1.4px solid #bacdd5; padding:7px 8px; }
+td { padding:8px; border-bottom:1px solid #e4ebef; vertical-align:top; }
+td:first-child { font-weight:650; }
+tr:last-child td { border-bottom:0; }
+.pill { display:inline-block; font-size:7.7pt; font-weight:700; padding:4px 8px; border-radius:5px; background:#e6f4f2; color:#077477; margin:0 4px 4px 0; }
+.pill.gray { background:#edf1f4; color:#587180; }
+.pill.amber { background:#fff0dc; color:#945514; }
+.big { display:block; font-size:28pt; line-height:1.05; letter-spacing:-.8px; font-weight:750; color:#087b7f; margin-bottom:5px; }
+.metric { border-top:3px solid #0b8688; padding:10px 0 9px; }
+.metric p { font-size:8.5pt; line-height:1.3; color:#536e7c; }
+svg { display:block; max-width:100%; height:auto; }
+.diagram { background:#f7fafb; border:1px solid #e2eaee; border-radius:10px; padding:9px; margin:14px 0 4px; }
+.legend { display:flex; gap:15px; margin:6px 0 12px; font-size:7.7pt; color:#587180; }
+.dot { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:4px; }
+.sourcegrid { display:grid; grid-template-columns:1fr 1fr; gap:7px 15px; margin-top:10px; }
+.sourcegrid div { font-size:7.6pt; line-height:1.35; }
+.sourcegrid b { color:#536e7c; display:inline-block; min-width:27px; }
+nav { text-align:center; padding:15px; font-size:9pt; position:sticky; top:0; background:#122c3bf5; z-index:20; }
+nav a { color:white; margin:0 10px; }
+.stage { font-size:8pt; letter-spacing:.5px; color:#077c80; font-weight:700; margin-bottom:4px; }
+.num2 { font-size:8pt; font-weight:750; color:#077c80; letter-spacing:1px; margin-bottom:3px; }
+@media print { body { background:white; } nav {display:none;} .page {margin:0;box-shadow:none;} a { text-decoration:none; } }
+@media screen and (max-width:800px) { .page { margin:12px auto; } nav {position:static;} }
+table.num th.n, table.num td.n { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+table.num td { padding:6px 8px; }
+table.num td:first-child { font-weight:650; }
+tr.total td { font-weight:700; border-top:1.4px solid #bacdd5; }
+tr.total.muted td { font-weight:600; color:#6b8290; border-top:0; }
+.muted { color:#7a909b; font-weight:500; }
+.small2 { font-size:7.7pt; font-weight:500; }
+.minibar { display:inline-block; width:74px; height:7px; background:#e4ebef; border-radius:4px; vertical-align:middle; margin-right:4px; overflow:hidden; }
+.minibar i { display:block; height:100%; background:#0b8688; }
+.legend.wrap { flex-wrap:wrap; gap:5px 14px; margin:6px 0 12px; }
+.legend.wrap span { white-space:nowrap; }
+.dot { vertical-align:baseline; }
+.diagram.tight { padding:4px 6px; margin:0; }
+.recs { display:grid; grid-template-columns:1fr 1fr; gap:8px 14px; }
+.rec { border-left:3px solid #0b8688; padding:6px 10px; background:#f7f9fb; border-radius:0 6px 6px 0; }
+.rec p { margin:0; }
+.rec .num2 { margin-bottom:2px; }
+
+.legend.wrap.sup { margin-top:-6px; }
+.reclist { margin:4px 0 0; padding-left:18px; font-size:9pt; line-height:1.42; }
+.reclist li { margin:0 0 5px; padding-left:2px; }
+.reclist li::marker { color:#077c80; font-weight:700; }
+#p3 table.num td { padding:4px 8px; }
+#p3 .diagram { margin:10px 0 4px; }
+#p3 h3.mt { margin-top:10px; }
+
+/* ---- redesign: diagnose → fix → prove ---- */
+h1 { font-size:36pt; }
+.steps { display:grid; grid-template-columns:1fr 16px 1fr 16px 1fr; gap:0 4px; align-items:stretch; margin:4px 0 12px; }
+.step { padding:10px 12px; border-radius:8px; background:#f7f9fb; border:1px solid #dce5eb; border-top-width:4px; }
+.step p { margin:0; }
+.step .tiny { font-weight:700; letter-spacing:.4px; margin-bottom:4px; font-size:7.4pt; }
+.step.diag { border-top-color:#c98a45; } .step.diag .tiny { color:#945514; }
+.step.fix { border-top-color:#153242; } .step.fix .tiny { color:#153242; }
+.step.proof { border-top-color:#0b8688; } .step.proof .tiny { color:#077477; }
+.arrow { display:flex; align-items:center; justify-content:center; color:#9fb3bd; font-size:14pt; font-weight:700; }
+.card.status { border-top-width:4px; }
+.card.status .tiny { font-weight:750; letter-spacing:.5px; }
+.card.status.proven { border-top-color:#0b8688; } .card.status.proven .tiny { color:#077477; }
+.card.status.signal { border-top-color:#7cc3bf; } .card.status.signal .tiny { color:#0b6f72; }
+.card.status.open { border-top-color:#c98a45; } .card.status.open .tiny { color:#945514; }
+.st { display:inline-block; font-size:7.5pt; font-weight:700; padding:2px 7px; border-radius:9px; white-space:nowrap; }
+.st-proven { background:#e6f4f2; color:#077477; }
+.st-signal { background:#e3f1f0; color:#0b6f72; border:1px dashed #7cc3bf; }
+.st-shipped { background:#edf1f4; color:#587180; }
+.st-open { background:#fff0dc; color:#945514; }
+.muted2 { color:#6b8290; font-size:8.6pt; }
+table.status-table td { padding:2px 8px; font-size:8.6pt; line-height:1.35; }
+table.status-table td:first-child { font-weight:600; }
+.metric .big { font-size:24pt; white-space:nowrap; }
+
+.cost { font-weight:600; color:#173746; font-size:8.8pt; }
+#p2 .metric .big { font-size:22pt; }
+
+h1.hero { font-size:30pt; letter-spacing:-1.2px; line-height:1.06; margin:4px 0 12px; }
+svg text { font-family: Inter, Arial, sans-serif; }
+.colh { font-size:7.6px; font-weight:700; letter-spacing:.8px; fill:#536e7c; }
+.bt { font-size:11px; font-weight:650; fill:#173746; }
+.bt2 { font-size:10px; font-weight:650; fill:#8a5214; }
+.bs { font-size:8.6px; fill:#4d6b7c; }
+.bh { font-size:11.2px; font-weight:700; fill:#173746; }
+.bh.w { fill:#ffffff; }
+.ck { font-size:8.8px; fill:#173746; }
+.ckw { font-size:8.6px; fill:#d9e8ec; }
+.ok { font-size:9px; font-weight:700; fill:#077477; }
+.okw { font-size:9.4px; font-weight:750; fill:#7cc3bf; }
+.bad { font-size:9px; font-weight:700; fill:#945514; }
+.bad2 { font-size:8.6px; fill:#945514; }
+.badw { font-size:9.4px; font-weight:750; fill:#f0b27a; }
+.tiny2 { font-size:7.8px; fill:#5c7380; }
+.note { font-size:8px; fill:#5c7380; }
+.st { font-size:9.6px; font-weight:700; fill:#173746; }
+.ss { font-size:8px; fill:#4d6b7c; }
+.ss2 { font-size:8.8px; fill:#173746; }
+.num { font-size:9px; font-weight:750; fill:#ffffff; }
+.ar { stroke:#718b98; stroke-width:1.4; }
+.ar2 { stroke:#718b98; stroke-width:1.5; }
+.lbl { font-size:9.4px; font-weight:750; fill:#077477; }
+.okb { font-size:8.8px; font-weight:700; fill:#077477; }
+.big1 { font-size:13px; font-weight:700; fill:#173746; }
+.rl { font-size:9.2px; font-weight:650; fill:#173746; }
+.rs { font-size:7.6px; fill:#7a909b; }
+.rv { font-size:9px; font-weight:700; fill:#173746; }
+.inw { font-size:9.4px; font-weight:700; fill:#ffffff; }
+.nb { font-size:10px; font-weight:750; fill:#ffffff; }
+.nt { font-size:8.8px; font-weight:650; fill:#173746; }
+.nd { font-size:7.8px; fill:#5c7380; }
+.rel { font-size:7.8px; font-weight:700; fill:#0b6f72; }
+.diagram.arch { padding:10px 10px 6px; margin:8px 0 12px; }
+.diagram.flat { background:transparent; border:0; padding:0; margin:4px 0 2px; }
+.tight2 { gap:18px; }
+table.matrix { font-size:8.8pt; margin:4px 0 4px; }
+table.matrix th { text-align:center; font-size:7pt; padding:4px 3px; line-height:1.15; }
+table.matrix td { text-align:center; padding:5px 3px; }
+table.matrix td:first-child { text-align:left; }
+.g { font-style:normal; font-weight:800; }
+.g.all { color:#0b8688; } .g.opt { color:#46687a; } .g.no { color:#b8573a; }
+.legendline { font-size:7.6pt; color:#5c7380; margin:2px 0 0; }
+.tightcap { margin:2px 0 8px; }
+.card.path .tiny { font-weight:700; letter-spacing:.4px; color:#077477; }
+pre.tree { font-size:8pt; padding:10px 12px; margin:6px 0 8px; white-space:pre; }
+.steps2 { margin:0 0 6px; padding-left:18px; font-size:9pt; line-height:1.45; }
+.steps2 li::marker { color:#077c80; font-weight:700; }
+.muted3 { color:#5c7380; }
+.callout.slim { padding:8px 12px; margin:8px 0 0; }
+.tiles { display:grid; grid-template-columns:1fr 1fr; gap:6px 12px; margin:8px 0; }
+.tile { border-top:3px solid #0b8688; padding:5px 0 2px; }
+.tile b { display:block; font-size:18pt; line-height:1.05; color:#087b7f; letter-spacing:-.4px; }
+.tile span { font-size:8pt; color:#536e7c; }
+.principles { display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px 12px; margin:10px 0; }
+.principles span { font-size:8.2pt; line-height:1.35; color:#3b5668; border-left:3px solid #9ccbc7; padding:2px 0 2px 8px; }
+.principles b { color:#173746; }
+
+table.matrix td:first-child { white-space:nowrap; font-size:8.6pt; }
+.g { font-size:12pt; line-height:1; }
+.steps2 { line-height:1.36; }
+pre.tree { margin:4px 0 6px; }
+.principles { gap:4px 12px; margin:8px 0; }
+.principles span { font-size:8pt; padding:1px 0 1px 8px; }
+#p2 h2 { margin-bottom:8px; }
+#p2 .diagram { margin:8px 0 4px; }
+pre.tree { font-size:7.6pt; padding:8px 11px; }
+#p2 .callout.dark { padding:10px 14px; margin:8px 0 0; }
+.steps2 { font-size:8.8pt; line-height:1.32; }
+#p2 h3.mt { margin-top:10px; }
+</style></head><body>
+<nav><a href="#p1">How it works</a><a href="#p2">Memory and proof</a></nav>
+
+<!-- ============================================================ PAGE 1 -->
+<article class="page" id="p1"><div class="topline">Singular / brain feature <span>0.23.2 · 16 SEP 2026</span></div>
+<div class="kicker">01 / How it works</div>
+<h1 class="hero">The right project knowledge,<br>for every model call.</h1>
+<p class="lead">The brain turns a project’s reviewed documents, code, run records and approved memory into a bounded, hash-bound context bundle. The host decides what each role receives, checks it at the moment of the call, and keeps a receipt.</p>
+
+<div class="diagram arch"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 650 320" role="img" aria-label="Brain architecture: sources, eligibility, context service, host admission, model call">
+<defs><marker id="a1" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z" fill="#718b98"/></marker></defs>
+<text x="0" y="11" class="colh">SOURCES</text>
+<text x="150" y="11" class="colh">B1 · ELIGIBILITY</text>
+<text x="318" y="11" class="colh">B2 · CONTEXT SERVICE</text>
+<text x="500" y="11" class="colh">B3 · HOST ADMISSION</text>
+
+<rect x="0" y="22" width="126" height="46" rx="7" fill="#efeafa" stroke="#c6b8e5"/><text x="10" y="41" class="bt">Brain documents</text><text x="10" y="56" class="bs">reviewed markdown</text>
+<rect x="0" y="76" width="126" height="46" rx="7" fill="#edf1f5" stroke="#bccbd5"/><text x="10" y="95" class="bt">Code</text><text x="10" y="110" class="bs">configured paths</text>
+<rect x="0" y="130" width="126" height="46" rx="7" fill="#fff1df" stroke="#e9c795"/><text x="10" y="149" class="bt">Run records</text><text x="10" y="164" class="bs">results, obligations</text>
+<rect x="0" y="184" width="126" height="46" rx="7" fill="#e6f4f2" stroke="#9ccbc7"/><text x="10" y="203" class="bt">Approved memory</text><text x="10" y="218" class="bs">B4 · see page 2</text>
+<rect x="0" y="250" width="126" height="46" rx="7" fill="#ffffff" stroke="#153242" stroke-width="1.6"/><text x="10" y="269" class="bt">Task contract</text><text x="10" y="284" class="bs">always included</text>
+
+<line x1="126" y1="45" x2="147" y2="45" class="ar" marker-end="url(#a1)"/>
+<line x1="126" y1="99" x2="147" y2="99" class="ar" marker-end="url(#a1)"/>
+<line x1="126" y1="153" x2="147" y2="153" class="ar" marker-end="url(#a1)"/>
+<line x1="126" y1="207" x2="147" y2="207" class="ar" marker-end="url(#a1)"/>
+<line x1="126" y1="273" x2="315" y2="273" class="ar" marker-end="url(#a1)"/>
+<text x="222" y="266" text-anchor="middle" class="note">mandatory · skips the gate</text>
+
+<rect x="150" y="22" width="150" height="214" rx="9" fill="#f7fafb" stroke="#bccbd5"/>
+<text x="162" y="42" class="bh">Is it eligible?</text>
+<text x="162" y="63" class="ck">✓ listed in the manifest</text>
+<text x="162" y="80" class="ck">✓ inside the declared root</text>
+<text x="162" y="97" class="ck">✓ hash matches its review</text>
+<text x="162" y="114" class="ck">✓ lifecycle current</text>
+<text x="162" y="131" class="ck">✓ not quarantined</text>
+<line x1="162" y1="143" x2="288" y2="143" stroke="#dbe4e9"/>
+<text x="162" y="160" class="ok">eligible → usable</text>
+<text x="162" y="177" class="bad">ineligible: named reason</text>
+<text x="162" y="190" class="bad2">recorded, never delivered</text>
+<line x1="162" y1="202" x2="288" y2="202" stroke="#dbe4e9"/>
+<text x="162" y="216" class="tiny2">code, runs: present, inside root</text>
+<text x="162" y="228" class="tiny2">memory: approved and trusted</text>
+<line x1="300" y1="129" x2="315" y2="129" class="ar" marker-end="url(#a1)"/>
+
+<rect x="318" y="22" width="164" height="274" rx="9" fill="#e6f4f2" stroke="#9ccbc7"/>
+<text x="330" y="42" class="bh">Compose one bundle</text>
+<g>
+<rect x="328" y="54" width="144" height="50" rx="7" fill="#fff" stroke="#9ccbc7"/><circle cx="341" cy="70" r="8" fill="#0b8688"/><text x="341" y="73.5" text-anchor="middle" class="num">1</text>
+<text x="354" y="73" class="st">Role policy</text><text x="354" y="87" class="ss">kinds each role may receive;</text><text x="354" y="98" class="ss">review roles never get runs</text>
+<rect x="328" y="112" width="144" height="50" rx="7" fill="#fff" stroke="#9ccbc7"/><circle cx="341" cy="128" r="8" fill="#0b8688"/><text x="341" y="131.5" text-anchor="middle" class="num">2</text>
+<text x="354" y="131" class="st">Mandatory first</text><text x="354" y="145" class="ss">task contract, obligations,</text><text x="354" y="156" class="ss">review evidence</text>
+<rect x="328" y="170" width="144" height="50" rx="7" fill="#fff" stroke="#9ccbc7"/><circle cx="341" cy="186" r="8" fill="#0b8688"/><text x="341" y="189.5" text-anchor="middle" class="num">3</text>
+<text x="354" y="189" class="st">Byte budget</text><text x="354" y="203" class="ss">65,536 bytes by default;</text><text x="354" y="214" class="ss">mandatory never dropped</text>
+<rect x="328" y="228" width="144" height="50" rx="7" fill="#fff" stroke="#9ccbc7"/><circle cx="341" cy="244" r="8" fill="#0b8688"/><text x="341" y="247.5" text-anchor="middle" class="num">4</text>
+<text x="354" y="247" class="st">Hash-bound bundle</text><text x="354" y="261" class="ss">every source version hashed;</text><text x="354" y="272" class="ss">retries resend only changes</text>
+</g>
+<line x1="482" y1="129" x2="497" y2="129" class="ar" marker-end="url(#a1)"/>
+
+<rect x="500" y="22" width="150" height="190" rx="9" fill="#153242"/>
+<text x="512" y="42" class="bh w">Admit at call time</text>
+<text x="512" y="63" class="ckw">✓ campaign binding, twice</text>
+<text x="512" y="80" class="ckw">✓ every source re-hashed</text>
+<text x="512" y="97" class="ckw">✓ envelope bound (0.23.1)</text>
+<line x1="512" y1="110" x2="638" y2="110" stroke="#2f5061"/>
+<text x="512" y="128" class="okw">admitted</text><text x="512" y="141" class="ckw">receipt + event recorded</text>
+<text x="512" y="163" class="badw">denied</text><text x="512" y="176" class="ckw">typed reason, exit 3,</text><text x="512" y="189" class="ckw">no model call made</text>
+<line x1="575" y1="212" x2="575" y2="231" class="ar" marker-end="url(#a1)"/>
+<rect x="500" y="234" width="150" height="62" rx="9" fill="#fff" stroke="#153242" stroke-width="1.6"/>
+<text x="575" y="256" text-anchor="middle" class="bt">Model call</text>
+<text x="575" y="272" text-anchor="middle" class="bs">planner · implementer</text>
+<text x="575" y="285" text-anchor="middle" class="bs">final and paired auditor</text>
+<text x="0" y="314" class="note">Arrows show the host composing context. Models never choose the contents of their own bundle.</text>
+</svg></div>
+
+<div class="two tight2">
+<div>
+<h3>Who receives what</h3>
+<table class="matrix">
+<tr><th></th><th>Task<br>contract</th><th>Brain<br>docs</th><th>Code</th><th>Run<br>records</th><th>Memory</th></tr>
+<tr><td>Planner</td><td><i class="g all">●</i></td><td><i class="g opt">○</i></td><td><i class="g opt">○</i></td><td><i class="g opt">○</i></td><td><i class="g opt">○</i></td></tr>
+<tr><td>Implementer</td><td><i class="g all">●</i></td><td><i class="g opt">○</i></td><td><i class="g opt">○</i></td><td><i class="g opt">○</i></td><td><i class="g opt">○</i></td></tr>
+<tr><td>Final auditor</td><td><i class="g all">●</i><sup>+</sup></td><td><i class="g opt">○</i></td><td><i class="g opt">○</i></td><td><i class="g no">✕</i></td><td><i class="g opt">○</i></td></tr>
+<tr><td>Paired auditor</td><td><i class="g all">●</i><sup>+</sup></td><td><i class="g opt">○</i></td><td><i class="g opt">○</i></td><td><i class="g no">✕</i></td><td><i class="g opt">○</i></td></tr>
+</table>
+<p class="legendline"><i class="g all">●</i> always &nbsp; <i class="g opt">○</i> only if the project grants it &nbsp; <i class="g no">✕</i> blocked in code &nbsp; <sup>+</sup> plus review evidence</p>
+</div>
+<div>
+<h3>Retries resend only what changed</h3>
+<div class="diagram flat"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 132" role="img" aria-label="Bundle bytes: first attempt, retry delta, final audit">
+<line x1="296" y1="6" x2="296" y2="108" stroke="#9fb3bd" stroke-dasharray="3 3"/><text x="318" y="119" text-anchor="end" class="note">65,536 budget</text>
+<text x="0" y="22" class="rl">First attempt</text><text x="0" y="33" class="rs">initial · TASK-1106</text>
+<rect x="96" y="12" width="39.7" height="20" fill="#153242"/><rect x="135.7" y="12" width="34.3" height="20" fill="#0b8688"/><text x="176" y="26" class="rv">24,275</text>
+<text x="0" y="56" class="rl">Retry</text><text x="0" y="67" class="rs">delta · same task</text>
+<rect x="96" y="46" width="43.8" height="20" fill="#153242"/><rect x="139.8" y="46" width="2.1" height="20" fill="#0b8688"/><text x="148" y="60" class="rv">15,024</text>
+<text x="0" y="90" class="rl">Final audit</text><text x="0" y="101" class="rs">always fresh · TASK-1114</text>
+<rect x="96" y="80" width="111.4" height="20" fill="#153242"/><rect x="207.4" y="80" width="34.3" height="20" fill="#0b8688"/><text x="248" y="94" class="rv">47,741</text>
+<rect x="96" y="120" width="9" height="9" fill="#153242"/><text x="109" y="128" class="note">mandatory</text>
+<rect x="160" y="120" width="9" height="9" fill="#0b8688"/><text x="173" y="128" class="note">optional sources</text>
+</svg></div>
+<p class="caption tightcap">Real bundles. On retry the unchanged 11,251-byte code document becomes a 676-byte hash reference.</p>
+</div>
+</div>
+
+<div class="two">
+<div class="card path"><p class="tiny">DELIVERED TO EVERY CALL · 33 BUNDLES IN THE CAMPAIGN</p><p class="small">13 first attempts, 7 retry deltas, 12 final audits, 1 paired audit. A final audit never gets a prior bundle, so it always starts fresh.</p></div>
+<div class="card path"><p class="tiny">LOOKED UP ON DEMAND · <code>exact-lexical.v1</code></p><p class="small"><code>singular context search | get</code>: exact reference +1000, exact phrase +100, +10 per matched token. It abstains below half the query tokens, and <code>get</code> refuses a stale version.</p></div>
+</div>
+<footer class="foot"><span>Singular brain · nodes B1–B5 · engine 0.23.2 · from engine code, schemas, tests and the campaign event log</span><span class="num">01 / 02</span></footer></article>
+
+<!-- ============================================================ PAGE 2 -->
+<article class="page" id="p2"><div class="topline">Singular / brain feature <span>0.23.2 · 16 SEP 2026</span></div>
+<div class="kicker">02 / Memory and proof</div>
+<h2>Memory must be earned.<br>Retrieval is measured.</h2>
+
+<div class="diagram"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 650 232" role="img" aria-label="Memory lifecycle">
+<defs><marker id="a2" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z" fill="#718b98"/></marker></defs>
+<text x="331" y="58" text-anchor="middle" class="okb">the only state delivered as context</text>
+<rect x="10" y="66" width="130" height="56" rx="8" fill="#efeafa" stroke="#c6b8e5"/><text x="75" y="89" text-anchor="middle" class="big1">Proposed</text><text x="75" y="106" text-anchor="middle" class="bs">untrusted · cited sources</text>
+<rect x="262" y="66" width="138" height="56" rx="8" fill="#e6f4f2" stroke="#0b8688" stroke-width="1.8"/><text x="331" y="89" text-anchor="middle" class="big1">Approved</text><text x="331" y="106" text-anchor="middle" class="bs">trusted · retrievable</text>
+<rect x="500" y="16" width="140" height="46" rx="8" fill="#edf1f5" stroke="#bccbd5"/><text x="570" y="36" text-anchor="middle" class="bt">Superseded</text><text x="570" y="51" text-anchor="middle" class="bs">retired by a newer record</text>
+<rect x="500" y="122" width="140" height="46" rx="8" fill="#edf1f5" stroke="#bccbd5"/><text x="570" y="142" text-anchor="middle" class="bt">Tombstoned</text><text x="570" y="157" text-anchor="middle" class="bs">retired · terminal</text>
+<rect x="0" y="172" width="70" height="40" rx="7" fill="#fff6eb" stroke="#e9c795"/><text x="35" y="196" text-anchor="middle" class="bt2">Rejected</text>
+<rect x="78" y="172" width="86" height="40" rx="7" fill="#fff6eb" stroke="#e9c795"/><text x="121" y="196" text-anchor="middle" class="bt2">Quarantined</text>
+
+<text x="200" y="85" text-anchor="middle" class="lbl">approve</text>
+<line x1="140" y1="94" x2="259" y2="94" class="ar2" marker-end="url(#a2)"/>
+<text x="200" y="108" text-anchor="middle" class="note">5 checks</text>
+<line x1="200" y1="112" x2="200" y2="140" stroke="#9fb3bd" stroke-dasharray="3 3"/>
+<path d="M40 122 L40 169" class="ar2" fill="none" marker-end="url(#a2)"/><text x="46" y="150" class="note">reject</text>
+<path d="M110 122 L110 169" class="ar2" fill="none" marker-end="url(#a2)"/><text x="116" y="150" class="note">quarantine</text>
+<path d="M400 80 L450 80 L450 39 L497 39" class="ar2" fill="none" marker-end="url(#a2)"/><text x="420" y="74" class="note">supersede</text>
+<path d="M400 108 L482 108 L482 145 L497 145" class="ar2" fill="none" marker-end="url(#a2)"/><text x="428" y="102" class="note">tombstone</text>
+<path d="M570 62 L570 119" class="ar2" fill="none" marker-end="url(#a2)"/><text x="576" y="95" class="note">tombstone</text>
+<text x="570" y="186" text-anchor="middle" class="note">a retry’s delta then carries</text><text x="570" y="198" text-anchor="middle" class="note">a revocation notice</text>
+
+<rect x="176" y="140" width="290" height="86" rx="8" fill="#fff" stroke="#dce5eb"/><rect x="176" y="140" width="4" height="86" fill="#0b8688"/>
+<text x="190" y="157" class="st">An approval must pass all five checks</text>
+<text x="190" y="175" class="ss2">1 signed credential (HMAC)</text><text x="190" y="190" class="ss2">2 scope allowed by policy</text><text x="190" y="205" class="ss2">3 approver role permitted</text>
+<text x="330" y="175" class="ss2">4 approver ≠ proposer</text><text x="330" y="190" class="ss2">5 a human, if policy says so</text>
+<text x="330" y="205" class="ss2">signing key never reaches models</text>
+<text x="190" y="219" class="tiny2">re-checked on every read: drifted source or authority → no longer trusted</text>
+</svg></div>
+
+<div class="two">
+<div>
+<h3>Crash-safe by construction</h3>
+<pre class="tree"><code>.singular-memory/
+├─ records/      authoritative revision
+├─ operations/   journal: prepared → committed
+├─ checkpoints/  bounded recovery points
+└─ index.json    derived · rebuild any time</code></pre>
+<ol class="steps2">
+<li>Lock, then finish any interrupted write.</li>
+<li>Replaying an operation ID returns the stored answer.</li>
+<li>Write the journal as <i>prepared</i>.</li>
+<li>Apply only onto the expected predecessor.</li>
+<li>Mark <i>committed</i>, then refresh the index.</li>
+<li>Readers take no lock, write nothing, and refuse while a journal is pending.</li>
+</ol>
+<div class="callout warn slim"><p class="small"><b>The bug it closes.</b> Replaying an interrupted approval once revived a tombstoned record.</p></div>
+</div>
+<div>
+<h3>Retrieval is measured (B5)</h3>
+<div class="diagram flat"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 64" role="img" aria-label="18 evaluation cases by expected outcome">
+<text x="0" y="11" class="rl">18 labeled cases · expected outcome</text>
+<rect x="0" y="20" width="160" height="26" fill="#0b8688"/><text x="80" y="37" text-anchor="middle" class="inw">9 results</text>
+<rect x="160" y="20" width="88.9" height="26" fill="#46687a"/><text x="204.4" y="37" text-anchor="middle" class="inw">5 abstain</text>
+<rect x="248.9" y="20" width="71.1" height="26" fill="#c98a45"/><text x="284.4" y="37" text-anchor="middle" class="inw">4 refuse</text>
+<text x="0" y="60" class="note">abstain: says “not found” · refuse: stale, revoked, outside root, over budget</text>
+</svg></div>
+<div class="tiles">
+<div class="tile"><b>14/14</b><span>expected references included</span></div>
+<div class="tile"><b>0</b><span>incorrect selections</span></div>
+<div class="tile"><b>2</b><span>budget omissions, both declared</span></div>
+<div class="tile"><b>0</b><span>deviations from labels</span></div>
+</div>
+<p class="small muted3">Negative control: one wrong expectation turns the run to <code>deviated</code>, exit 4. No model call is needed. Not yet covered: memory sources.</p>
+</div>
+</div>
+
+<h3 class="mt">Built node by node</h3>
+<div class="diagram flat"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 650 96" role="img" aria-label="Build timeline">
+<line x1="40" y1="30" x2="430" y2="30" stroke="#9ccbc7" stroke-width="2"/>
+<line x1="470" y1="30" x2="594" y2="30" stroke="#d3dde3" stroke-width="2"/>
+<g class="node"><circle cx="40" cy="30" r="15" fill="#0b8688"/><text x="40" y="34" text-anchor="middle" class="nb">B1</text><text x="40" y="58" text-anchor="middle" class="nt">sources</text><text x="40" y="70" text-anchor="middle" class="nd">11 Sep · TASK-1101</text></g>
+<g class="node"><circle cx="137" cy="30" r="15" fill="#0b8688"/><text x="137" y="34" text-anchor="middle" class="nb">B2</text><text x="137" y="58" text-anchor="middle" class="nt">context service</text><text x="137" y="70" text-anchor="middle" class="nd">12 Sep · TASK-1103</text></g>
+<g class="node"><circle cx="235" cy="30" r="15" fill="#0b8688"/><text x="235" y="34" text-anchor="middle" class="nb">B3</text><text x="235" y="58" text-anchor="middle" class="nt">every invocation</text><text x="235" y="70" text-anchor="middle" class="nd">12 Sep · TASK-1113</text></g>
+<g class="node"><circle cx="332" cy="30" r="15" fill="#0b8688"/><text x="332" y="34" text-anchor="middle" class="nb">B4</text><text x="332" y="58" text-anchor="middle" class="nt">reviewed memory</text><text x="332" y="70" text-anchor="middle" class="nd">14 Sep · TASK-1117</text></g>
+<g class="node"><circle cx="430" cy="30" r="15" fill="#0b8688"/><text x="430" y="34" text-anchor="middle" class="nb">B5</text><text x="430" y="58" text-anchor="middle" class="nt">evaluation</text><text x="430" y="70" text-anchor="middle" class="nd">15 Sep · TASK-1106</text></g>
+<g class="node"><circle cx="522" cy="30" r="12" fill="#fff" stroke="#46687a" stroke-width="2"/><text x="522" y="58" text-anchor="middle" class="nt">reconciliation</text><text x="522" y="70" text-anchor="middle" class="nd">15 Sep · TASK-1114</text></g>
+<g class="node"><circle cx="606" cy="30" r="12" fill="#fff" stroke="#46687a" stroke-width="2"/><text x="606" y="58" text-anchor="middle" class="nt">admission</text><text x="606" y="70" text-anchor="middle" class="nd">16 Sep · TASK-1115</text></g>
+
+<text x="564" y="9" text-anchor="middle" class="note">engine obligations</text>
+<rect x="18" y="80" width="336" height="14" rx="3" fill="#e6f4f2"/><text x="186" y="90.5" text-anchor="middle" class="rel">release 0.22.0</text>
+<rect x="400" y="80" width="60" height="14" rx="3" fill="#e6f4f2"/><text x="430" y="90.5" text-anchor="middle" class="rel">0.22.1</text>
+<rect x="492" y="80" width="60" height="14" rx="3" fill="#edf1f4"/><text x="522" y="90.5" text-anchor="middle" class="rel">0.23.0</text>
+<rect x="572" y="80" width="68" height="14" rx="3" fill="#edf1f4"/><text x="606" y="90.5" text-anchor="middle" class="rel">0.23.1–0.23.2</text>
+</svg></div>
+
+<div class="principles">
+<span><b>Opt-in.</b> Unconfigured projects are unchanged.</span>
+<span><b>Project-local.</b> No vector store or embeddings.</span>
+<span><b>Model output</b> is a candidate, not truth.</span>
+<span><b>Documents</b> can’t grant themselves authority.</span>
+<span><b>Readers never write.</b> Safe in a sandbox.</span>
+<span><b>Retirement sticks</b> through every rebuild.</span>
+</div>
+
+<div class="callout dark"><p class="small"><b style="color:white">What is live today.</b> Campaign runs used this path with code-only context: 33 admitted bundles. Brain documents, memory and lookups are proven in tests and the 18-case evaluation, not yet in a live campaign. That is the next milestone.</p></div>
+<footer class="foot"><span>Singular brain · nodes B1–B5 · engine 0.23.2 · from engine code, schemas, tests and the campaign event log</span><span class="num">02 / 02</span></footer></article>
+</body></html>
