@@ -1,0 +1,289 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Singular — Review &amp; Repair Policy Audit</title><style>
+@page { size: A4; margin: 0; }
+* { box-sizing: border-box; }
+html { scroll-behavior:smooth; }
+body { margin:0; background:#e9eef2; color:#152838; font-family:Inter,Arial,sans-serif; font-size:10pt; line-height:1.48; }
+.page { width:210mm; height:297mm; margin:12mm auto; padding:16mm 17mm 18mm; background:white; position:relative; break-after:page; page-break-after:always; box-shadow:0 8px 28px #15283816; }
+.page:last-child { break-after:auto; page-break-after:auto; }
+.topline { font-size:8pt; letter-spacing:1.7px; font-weight:700; text-transform:uppercase; color:#567181; border-bottom:1px solid #dbe4e9; padding-bottom:8px; margin-bottom:20px; }
+.topline span { float:right; font-weight:500; letter-spacing:.6px; }
+h1,h2,h3,p { margin:0; }
+h1 { font-size:39pt; line-height:1.04; letter-spacing:-1.9px; margin:6px 0 16px; font-weight:750; }
+h2 { font-size:25pt; line-height:1.13; letter-spacing:-.8px; margin:5px 0 10px; font-weight:750; }
+h3 { font-size:11pt; line-height:1.25; margin:0 0 6px; font-weight:720; }
+p { margin:0 0 10px; }
+.kicker { color:#077c80; font-size:8pt; font-weight:750; letter-spacing:1.6px; text-transform:uppercase; }
+.lead { font-size:12pt; line-height:1.43; color:#3b5668; margin:0 0 17px; }
+.caption { font-size:8pt; line-height:1.35; color:#5c7380; margin:5px 0 15px; }
+.foot { position:absolute; left:17mm; right:17mm; bottom:11mm; border-top:1px solid #dbe4e9; padding-top:7px; font-size:7.1pt; color:#5c7380; display:flex; justify-content:space-between; gap:15px; }
+.foot .num { font-weight:700; white-space:nowrap; }
+a { color:#077c80; text-decoration:none; }
+.refs { font-size:7.7pt; line-height:1.4; color:#5c7380; margin-top:11px; }
+.refs a { color:#466677; }
+.two { display:grid; grid-template-columns:1fr 1fr; gap:15px; }
+.three { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
+.card { padding:13px 14px; border:1px solid #dce5eb; border-radius:9px; background:#f7f9fb; }
+.card p:last-child, .callout p:last-child { margin-bottom:0; }
+.card .tiny { margin-bottom:4px; }
+.callout { padding:13px 16px; border-left:4px solid #078589; background:#eff8f7; border-radius:0 7px 7px 0; margin:13px 0; }
+.callout.warn { border-color:#b46b1c; background:#fff6eb; }
+.callout.dark { color:white; border:0; background:#153242; border-radius:10px; }
+.callout.dark p { color:#d9e8ec; }
+.small { font-size:9pt; }
+.tiny { font-size:8pt; color:#5c7380; }
+.mt { margin-top:14px; }
+.mb { margin-bottom:14px; }
+.rule { border-top:1px solid #dbe4e9; margin:16px 0; }
+code, pre { font-family:'DejaVu Sans Mono',monospace; }
+code { font-size:.84em; background:#f0f4f6; padding:1px 3px; border-radius:3px; overflow-wrap:anywhere; }
+pre { font-size:8.1pt; line-height:1.48; padding:13px 15px; background:#122c3b; color:#edf5f6; white-space:pre-wrap; overflow-wrap:anywhere; border-radius:8px; margin:10px 0; }
+pre code { background:none; padding:0; color:inherit; font-size:inherit; }
+table { border-collapse:collapse; width:100%; margin:9px 0 13px; font-size:9pt; line-height:1.4; }
+th { text-align:left; color:#536e7c; font-size:7.6pt; text-transform:uppercase; letter-spacing:.7px; border-bottom:1.4px solid #bacdd5; padding:7px 8px; }
+td { padding:8px; border-bottom:1px solid #e4ebef; vertical-align:top; }
+td:first-child { font-weight:650; }
+tr:last-child td { border-bottom:0; }
+.pill { display:inline-block; font-size:7.7pt; font-weight:700; padding:4px 8px; border-radius:5px; background:#e6f4f2; color:#077477; margin:0 4px 4px 0; }
+.pill.gray { background:#edf1f4; color:#587180; }
+.pill.amber { background:#fff0dc; color:#945514; }
+.big { display:block; font-size:28pt; line-height:1.05; letter-spacing:-.8px; font-weight:750; color:#087b7f; margin-bottom:5px; }
+.metric { border-top:3px solid #0b8688; padding:10px 0 9px; }
+.metric p { font-size:8.5pt; line-height:1.3; color:#536e7c; }
+svg { display:block; max-width:100%; height:auto; }
+.diagram { background:#f7fafb; border:1px solid #e2eaee; border-radius:10px; padding:9px; margin:14px 0 4px; }
+.legend { display:flex; gap:15px; margin:6px 0 12px; font-size:7.7pt; color:#587180; }
+.dot { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:4px; }
+.sourcegrid { display:grid; grid-template-columns:1fr 1fr; gap:7px 15px; margin-top:10px; }
+.sourcegrid div { font-size:7.6pt; line-height:1.35; }
+.sourcegrid b { color:#536e7c; display:inline-block; min-width:27px; }
+nav { text-align:center; padding:15px; font-size:9pt; position:sticky; top:0; background:#122c3bf5; z-index:20; }
+nav a { color:white; margin:0 10px; }
+.stage { font-size:8pt; letter-spacing:.5px; color:#077c80; font-weight:700; margin-bottom:4px; }
+.num2 { font-size:8pt; font-weight:750; color:#077c80; letter-spacing:1px; margin-bottom:3px; }
+#p3 td { padding:6px 8px; }
+#p3 .caption { margin-bottom:11px; }
+#p3 pre { margin:9px 0; }
+#p4 p { margin:0 0 8px; }
+#p4 .metric { padding:9px 0 7px; }
+#p4 .rule { margin:13px 0; }
+@media print { body { background:white; } nav {display:none;} .page {margin:0;box-shadow:none;} a { text-decoration:none; } }
+@media screen and (max-width:800px) { .page { margin:12px auto; } nav {position:static;} }
+</style></head><body>
+
+<nav><a href="#p1">Two budgets</a><a href="#p2">Programmability</a><a href="#p3">Ledger</a><a href="#p4">Correctness</a><a href="#p5">Recommendations</a></nav>
+
+<!-- ============================ PAGE 1 ============================ -->
+<article class="page" id="p1"><div class="topline">Singular / review &amp; repair policy audit <span>0.23.2 · 16 SEP 2026</span></div>
+<div class="kicker">01 / Start here</div>
+<h2>Two budgets meet at<br>one line of Bash.</h2>
+<p class="lead">Review rounds bound how often a change may be judged. Repair passes bound how often it may be rewritten. They are different mechanisms with different keys — and one clamp couples them.</p>
+<p class="small">This report audits the shipped implementation against the live tree: <code>engine/review_policy.py</code> (1,191 lines), the driver <code>engine/l1-drive.sh</code>, <code>engine/task_lifecycle.py</code>, the frozen campaign policy <code>config-A16.json</code>, and the durable ledger at <code>.singular-state/review-policy/ledger.json</code> — nine logical changes, nineteen recorded rounds, four exceptions, and a 33-item non-blocking backlog. Every behavioural claim in sections 03 and 04 was reproduced by calling the live module, not inferred from reading it.</p>
+
+<div class="diagram"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 650 186" role="img">
+<defs><marker id="ar" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z" fill="#718b98"/></marker></defs>
+<rect x="6" y="30" width="94" height="52" rx="7" fill="#edf1f5" stroke="#bccbd5"/><text x="53" y="53" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="11.5" font-weight="650" fill="#173746">Worker</text><text x="53" y="69" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="9" fill="#4d6b7c">implement</text>
+<rect x="114" y="30" width="94" height="52" rx="7" fill="#edf1f5" stroke="#bccbd5"/><text x="161" y="53" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="11.5" font-weight="650" fill="#173746">Host gate</text><text x="161" y="69" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="9" fill="#4d6b7c">declared tests</text>
+<rect x="222" y="30" width="94" height="52" rx="7" fill="#e6f4f2" stroke="#9ccbc7"/><text x="269" y="53" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="11.5" font-weight="650" fill="#173746">Round check</text><text x="269" y="69" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="9" fill="#4d6b7c">before spend</text>
+<rect x="330" y="30" width="94" height="52" rx="7" fill="#efeafa" stroke="#c6b8e5"/><text x="377" y="53" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="11.5" font-weight="650" fill="#173746">Auditor</text><text x="377" y="69" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="9" fill="#4d6b7c">fresh · readonly</text>
+<rect x="438" y="30" width="94" height="52" rx="7" fill="#e6f4f2" stroke="#9ccbc7"/><text x="485" y="53" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="11.5" font-weight="650" fill="#173746">Record</text><text x="485" y="69" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="9" fill="#4d6b7c">classify · ledger</text>
+<rect x="546" y="30" width="98" height="52" rx="7" fill="#163b4b" stroke="#163b4b"/><text x="595" y="53" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="11.5" font-weight="650" fill="white">Decider</text><text x="595" y="69" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="9" fill="#bcd4dc">retry or park</text>
+<line x1="100" y1="56" x2="112" y2="56" stroke="#718b98" stroke-width="1.4" marker-end="url(#ar)"/>
+<line x1="208" y1="56" x2="220" y2="56" stroke="#718b98" stroke-width="1.4" marker-end="url(#ar)"/>
+<line x1="316" y1="56" x2="328" y2="56" stroke="#718b98" stroke-width="1.4" marker-end="url(#ar)"/>
+<line x1="424" y1="56" x2="436" y2="56" stroke="#718b98" stroke-width="1.4" marker-end="url(#ar)"/>
+<line x1="532" y1="56" x2="544" y2="56" stroke="#718b98" stroke-width="1.4" marker-end="url(#ar)"/>
+<text x="6" y="106" font-family="Inter,Arial,sans-serif" font-size="7.6" font-weight="700" fill="#536e7c" letter-spacing="0.7">A FAILURE HERE IS CHARGED TO</text>
+<rect x="6" y="114" width="94" height="40" rx="6" fill="#fff1df" stroke="#e9c795"/><text x="53" y="130" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="9" font-weight="650" fill="#8a5214">repair budget</text><text x="53" y="144" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="8" fill="#8a5214">or worker-infra</text>
+<rect x="114" y="114" width="94" height="40" rx="6" fill="#fff1df" stroke="#e9c795"/><text x="161" y="130" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="9" font-weight="650" fill="#8a5214">repair budget</text><text x="161" y="144" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="8" fill="#8a5214">gate-red</text>
+<rect x="222" y="114" width="94" height="40" rx="6" fill="#f2f6f8" stroke="#d2dee4"/><text x="269" y="130" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="9" font-weight="650" fill="#4d6b7c">nothing</text><text x="269" y="144" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="8" fill="#4d6b7c">parks unspent</text>
+<rect x="330" y="114" width="94" height="40" rx="6" fill="#edf1f5" stroke="#bccbd5"/><text x="377" y="130" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="9" font-weight="650" fill="#4d6b7c">audit-infra</text><text x="377" y="144" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="8" fill="#4d6b7c">its own retry</text>
+<rect x="438" y="114" width="94" height="40" rx="6" fill="#e6f4f2" stroke="#9ccbc7"/><text x="485" y="130" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="9" font-weight="650" fill="#077477">review round</text><text x="485" y="144" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="8" fill="#077477">+ repair if needs-fix</text>
+<rect x="546" y="114" width="98" height="40" rx="6" fill="#f2f6f8" stroke="#d2dee4"/><text x="595" y="130" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="9" font-weight="650" fill="#4d6b7c">no spend</text><text x="595" y="144" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="8" fill="#4d6b7c">policy fast-path</text>
+<line x1="6" y1="170" x2="644" y2="170" stroke="#dbe4e9" stroke-width="1"/>
+<text x="6" y="182" font-family="Inter,Arial,sans-serif" font-size="8" fill="#5c7380">The round check runs before the auditor is launched — exhaustion is discovered before the money is spent.</text>
+</svg></div>
+<p class="caption">One attempt, six stations, three budget domains. Transport failures never reach the review ledger.</p>
+
+<table>
+<tr><th style="width:26%">&nbsp;</th><th>Review policy</th><th>Worker repair policy</th></tr>
+<tr><td>Owner</td><td><code>engine/review_policy.py</code></td><td><code>engine/l1-drive.sh</code></td></tr>
+<tr><td>Counts</td><td>completed, schema-valid auditor verdicts</td><td>implement → gate → audit passes</td></tr>
+<tr><td>Keyed on</td><td><b>logical change</b> — <code>dagNode</code>, else <code>taskId</code></td><td><b>lease</b> — <code>taskId</code></td></tr>
+<tr><td>Durable in</td><td><code>review-policy/ledger.json</code></td><td>the lease <code>retryCount</code></td></tr>
+<tr><td>Default</td><td>2 rounds, blocking P0 + P1</td><td>1 repair (normal) / 2 (high risk)</td></tr>
+<tr><td>Survives the task</td><td>yes — spans successors on one node</td><td>no — per lease, reset by <code>unpark</code></td></tr>
+</table>
+
+<div class="callout warn"><p class="small"><b>The clamp collapses the risk tier.</b> After the tier resolves, the driver caps repairs at <code>maxReviewRounds&nbsp;−&nbsp;1</code>. With the shipped ceiling of two rounds that is one repair — so a <code>Risk tier: high</code> task receives exactly what a normal task receives, and its risk-derived ceiling of two is unreachable. All eighteen <code>l1.review_policy_bound</code> events in this campaign carry the same pair: <code>maxReviewRounds 2, productRepairMax 1</code>.</p></div>
+
+<footer class="foot"><span>Campaign <b>BRAIN-RESCUE-20260910</b> · engine 0.23.2 · tree <b>5bb2550</b></span><span class="num">01 / 05</span></footer></article>
+
+<!-- ============================ PAGE 2 ============================ -->
+<article class="page" id="p2"><div class="topline">Singular / review &amp; repair policy audit <span>0.23.2 · 16 SEP 2026</span></div>
+<div class="kicker">02 / Programmability</div>
+<h2>Everything is configurable.<br>Not everything is equally privileged.</h2>
+<p class="lead">Both budgets resolve through a strict precedence chain. They do not resolve through the same one, and the difference is the point.</p>
+
+<div class="two">
+<div>
+<h3>Review policy</h3>
+<pre><code>code defaults
+    2 rounds · [P0,P1] · classify required
+  ↓
+campaign config
+    config-A16.json .reviewPolicy
+    → lib.sh exports it as
+      SINGULAR_REVIEW_POLICY_JSON
+    → pinned in the campaign manifest
+  ↓
+repo config file
+    $SINGULAR_JSON_CONFIG_FILE, else
+    $SINGULAR_ROOT/singular.config.json
+    (only if the env JSON is absent)
+  ↓
+per-field env
+    SINGULAR_REVIEW_MAX_ROUNDS
+    SINGULAR_REVIEW_BLOCKING_SEVERITIES
+    SINGULAR_REVIEW_REQUIRE_CLASSIFICATION
+  ↓
+CLI exception
+    grant --rounds --reason
+          --evidence --authority [--task]</code></pre>
+<p class="tiny">The <code>effective</code> verb prints the resolved policy with a <code>sources</code> map naming the winning layer per field. That is what makes the policy auditable at dispatch time rather than after the fact.</p>
+</div>
+<div>
+<h3>Worker repair policy</h3>
+<pre><code>operator env
+    SINGULAR_TASK_RISK_TIER
+  ↓
+task contract
+    "Risk tier:" header line
+  ↓
+environment default
+    SINGULAR_DEFAULT_RISK_TIER
+  ↓
+repo config
+    .retryPolicy.defaultRiskTier
+  ↓
+built-in
+    "normal"
+
+normal | low | ordinary  → ceiling 1
+high | critical          → ceiling 2
+unrecognised             → ceiling 2
+                           fails SAFE to
+                           the strict path
+
+SINGULAR_MAX_RETRIES may only LOWER the
+risk-derived ceiling, never raise it.</code></pre>
+<div class="callout"><p class="small"><b>The privilege asymmetry.</b> The task contract is a first-class input to the repair budget and has <b>no input at all</b> to the review budget. An author changes the repair tier by editing one markdown line; raising review rounds requires a CLI grant carrying <code>--authority</code> and at least one hashed evidence file. The direction is right — and worth stating, because the two headers sit three lines apart in the same contract.</p></div>
+</div>
+</div>
+
+<h3 class="mt">What is hardcoded</h3>
+<p class="small">Four things are configurable from no layer, by design: the severity vocabulary <code>P0–P3</code>; the verdict vocabulary <code>accepted / needs-fix / blocked / needs-human</code>; the evidence rule compiled into <code>classify()</code> — a P0 or P1 must carry <code>trigger</code>, <code>impact</code> and <code>requirement</code>; and the clamp, a literal in the driver. A grant may never exceed <code>maxReviewRounds</code> in one exception. An invalid value at any layer is a hard exit 2 — the driver refuses to spend money on a run whose policy will not load, rather than falling back to a default.</p>
+
+
+<footer class="foot"><span>Campaign <b>BRAIN-RESCUE-20260910</b> · engine 0.23.2 · tree <b>5bb2550</b></span><span class="num">02 / 05</span></footer></article>
+
+<!-- ============================ PAGE 3 ============================ -->
+<article class="page" id="p3"><div class="topline">Singular / review &amp; repair policy audit <span>0.23.2 · 16 SEP 2026</span></div>
+<div class="kicker">03 / Ledger and state integrity</div>
+<h2>The ledger keys on the change,<br>not on the task.</h2>
+<p class="lead">That single decision is why review history survived three task supersessions in this campaign — and it is also where the one real reset vector lives.</p>
+
+<pre><code>memory-lifecycle          status=accepted   rounds=3   exceptions=2
+  1  TASK-1105  needs-fix   (historical, backfilled)
+  2  TASK-1105  needs-fix   (historical, backfilled)
+  3  TASK-1117  accepted
+  exc-cc6aba1a1be9  +2  bound TASK-1116   authorized, never used
+  exc-68487d55c6f8  +2  bound TASK-1117   the migration grant</code></pre>
+<p class="caption">Live excerpt. Three task identities, one continuous budget carried by the node.</p>
+
+<p class="small">Writes are <code>fcntl</code>-locked and atomic; read verbs take a shared lock, create no state and never rewrite, so <code>updatedAt</code> keeps meaning “last recorded change”. Backfilled rounds carry <code>historical: true</code> and still count toward <code>used</code> — provenance without free budget. Exceptions are task-bound by default, so the two grants above could never combine: the migration ceremony the supervisor performed was enforced by the code, not merely observed by it.</p>
+
+<h3 class="mt">Can a task reset its budget?</h3>
+<table>
+<tr><th style="width:24%">Vector</th><th style="width:12%">Resets?</th><th>Why</th></tr>
+<tr><td>Rename the branch</td><td><span class="pill gray">No</span></td><td>The branch name appears in no key. Renaming or recreating a worker branch has zero ledger effect.</td></tr>
+<tr><td>New task id</td><td><span class="pill gray">No</span></td><td>With a DAG node declared, the successor inherits the node’s full history. Verified live: <code>invocation-envelope</code> holds both TASK-1115 rounds.</td></tr>
+<tr><td>Drop the DAG node</td><td><span class="pill amber">Yes</span></td><td><code>logical_change_id()</code> falls back to <code>taskId</code> when <code>dagNode</code> is blank. A fresh budget is minted under a new key, with no grant and no authority.</td></tr>
+<tr><td><code>unpark</code></td><td><span class="pill amber">Partly</span></td><td>Resets <code>retryCount</code> and clears <code>productPassStarted</code>; does <b>not</b> touch the review ledger. Re-entry buys worker passes, never review rounds.</td></tr>
+</table>
+
+<div class="callout warn"><p class="small"><b>The reset vector lives in the least-privileged file in the system.</b> A task contract is ordinary markdown that any author edits. Deleting or retyping its <code>DAG node:</code> line moves the most durable counter in the engine. Everything else that can extend a budget demands an authority string and hashed evidence.</p></div>
+
+<h3 class="mt">Acceptance closes the candidate — and zeroes the count</h3>
+<p class="small"><code>_open_round_count()</code> resets <code>used</code> to zero at every accepted verdict, so a later dispatch of the same node starts fresh at two. The intended “acceptance closes the candidate” rule, visible in the live ledger:</p>
+<pre><code>maintenance:a12-engine-boundary   needs-fix → accepted → needs-fix
+                                  used 1 · allowed 2 · status open</code></pre>
+<p class="small">The consequence: the ceiling is <b>per candidate, not per node</b>. A node that alternates accept and needs-fix has no cumulative bound. Defensible — each acceptance is a real gate passage — but not what “max 2 rounds” reads like in a config file.</p>
+
+<footer class="foot"><span>Campaign <b>BRAIN-RESCUE-20260910</b> · engine 0.23.2 · tree <b>5bb2550</b></span><span class="num">03 / 05</span></footer></article>
+
+<!-- ============================ PAGE 4 ============================ -->
+<article class="page" id="p4"><div class="topline">Singular / review &amp; repair policy audit <span>0.23.2 · 16 SEP 2026</span></div>
+<div class="kicker">04 / Correctness</div>
+<h2>Where it holds,<br>and the three traps.</h2>
+<p class="lead">The accounting is honest and the gates fire in the right order. The failures that remain are all in one place: what happens when a verdict is malformed rather than wrong.</p>
+
+<div class="three mb">
+<div class="metric"><span class="big">5</span><p>rounds recorded in the Claude phase — one per real verdict. No timeout, session-limit kill or provider failure produced a round.</p></div>
+<div class="metric"><span class="big">33</span><p>P2/P3 findings diverted to <code>backlog.ndjson</code> instead of blocking a merge, across nine logical changes.</p></div>
+<div class="metric"><span class="big">0</span><p>severity downgrades fired in the whole campaign. Trap 1 below is latent, not historical.</p></div>
+</div>
+
+<h3>Working exactly as intended</h3>
+<p class="small">The pre-audit <code>check</code> is the best design decision in the module: exhaustion is discovered before a paid call. Fail-closed classification works — a <code>needs-fix</code> carrying only prose findings synthesises <code>unclassified-N</code> items that are <b>blocking</b>, so an auditor cannot escape a fix by skipping the taxonomy. Every round stamps the reviewer’s runner, model and effort, which made this campaign’s provenance claims checkable afterwards.</p>
+
+<div class="rule"></div>
+
+<p class="num2">TRAP 01</p>
+<h3>A genuine P0 can be downgraded into an acceptance</h3>
+<p class="small"><code>classify()</code> requires <code>trigger</code>, <code>impact</code> <b>and</b> <code>requirement</code> to be non-blank on any P0 or P1, and demotes to P2 otherwise. The v1 schema requires only <code>id</code>, <code>severity</code> and <code>summary</code> — the three supporting fields are optional. So a <b>schema-valid</b> verdict exists in which the auditor reports a real P0 and the host converts the run to accepted. Reproduced against the live module:</p>
+<pre><code>input : verdict = needs-fix
+        F1  severity=P0  summary + trigger + impact   (no requirement)
+output: effectiveVerdict = accepted
+        downgraded = [F1]        applied = true</code></pre>
+<p class="small">Nothing blocks, the round records as accepted, integration proceeds. The rule is defensible as an anti-inflation measure — but “the claim is unsupported” and “the verdict is now accepted” should not be the same branch.</p>
+
+<p class="num2 mt">TRAP 02</p>
+<h3>Legacy verdicts validate in warn mode</h3>
+<p class="small"><code>SINGULAR_AUDIT_VERDICT_VALIDATE</code> defaults to <code>warn</code>. A v1 verdict is always fail-closed, but a v0 or legacy-schema verdict that fails validation emits <code>l1.audit_verdict_warned</code> and <b>proceeds to be recorded and to influence acceptance</b>. Campaign A16 runs the v1 contract, so it was never exposed. A consumer repository still on v0 is.</p>
+
+<p class="num2 mt">TRAP 03</p>
+<h3>Schema failures never reach the review budget at all</h3>
+<p class="small">A packet or verdict that cannot be parsed is an infrastructure class, so it consumes worker-repair budget while the review ledger stays untouched. That is the TASK-1114 failure in one sentence: a complete candidate — later audited clean and integrated — spent its entire product budget on two missing <code>createdAt</code> fields and parked, <b>having never been reviewed once</b>. The 0.22.0 repair pass and the 0.23.0 <code>createdAt</code> default close the two known shapes; the structural gap, a format slip billed to the product budget, is still open.</p>
+
+<footer class="foot"><span>Campaign <b>BRAIN-RESCUE-20260910</b> · engine 0.23.2 · tree <b>5bb2550</b></span><span class="num">04 / 05</span></footer></article>
+
+<!-- ============================ PAGE 5 ============================ -->
+<article class="page" id="p5"><div class="topline">Singular / review &amp; repair policy audit <span>0.23.2 · 16 SEP 2026</span></div>
+<div class="kicker">05 / Recommendations</div>
+<h2>Three minimal changes,<br>each independent of the others.</h2>
+<p class="lead">None requires new durable state, a new verb, or a migration. Two are single-function edits; the third is a classification move.</p>
+
+<div class="card mb"><p class="num2">01</p><h3>Never let a downgrade manufacture an acceptance</h3>
+<p class="small">In <code>classify()</code>, when <code>downgraded</code> is non-empty and no blocking item remains, set <code>effectiveVerdict</code> to <code>needs-human</code> — already a valid verdict in the vocabulary — instead of <code>accepted</code>. Roughly four lines, no schema change, no new state.</p>
+<p class="small">Alternatively, or in addition: make those three fields <code>required</code> in the v1 schema for P0 and P1 items. That moves the failure into the auditor’s own validation-repair loop, where a malformed verdict already belongs.</p></div>
+
+<div class="card mb"><p class="num2">02</p><h3>Make the logical-change key non-forgeable</h3>
+<p class="small">Require a <code>DAG node:</code> header in any contract that declares a <code>Target branch:</code>, and refuse dispatch when it is absent rather than falling back to <code>taskId</code>. Where a successor legitimately needs a new node, <code>grant --authority</code> is already the mechanism for that. This closes the only budget-reset vector a task author can reach unaided.</p></div>
+
+<div class="card mb"><p class="num2">03</p><h3>Give a format slip its own budget</h3>
+<p class="small">Classify <code>packet-invalid</code> and <code>worker-no-packet</code> on an <i>unchanged</i> candidate as an infrastructure domain with its own single retry, rather than charging the product-repair budget. The park rule added in 0.22.0 already grants one re-emit; this makes the accounting match the intent. It is the change that would have saved TASK-1114 outright.</p></div>
+
+<div class="callout"><p class="small"><b>Two smaller follow-ons.</b> Flip <code>SINGULAR_AUDIT_VERDICT_VALIDATE</code> to <code>strict</code> by default, keeping <code>warn</code> as an explicit opt-out for v0 consumers. And decide the coupling in section 01 deliberately: if high-risk tasks are meant to get two repairs, <code>maxReviewRounds</code> must be 3, because today the clamp erases the distinction the risk tier exists to make.</p></div>
+
+<div class="rule"></div>
+<h3>What this audit does and does not establish</h3>
+<div class="two">
+<div class="card"><p class="tiny">ESTABLISHED</p><p class="small">The precedence chains, the ledger keying and the three traps are properties of the shipped code, reproduced by direct invocation on 2026-09-16.</p></div>
+<div class="card"><p class="tiny">NOT ESTABLISHED</p><p class="small">That trap 01 has ever fired — zero downgrades are recorded. That the policy holds under concurrent dispatch: this campaign ran one driver at a time.</p></div>
+</div>
+
+<p class="refs mt"><b>Sources.</b> <code>engine/review_policy.py</code> · <code>engine/l1-drive.sh</code> (risk tier, the clamp, the repair loop) · <code>engine/lib.sh</code> (config → env projection, <code>singular_lease_unpark</code>) · <code>engine/task_lifecycle.py</code> · <code>config-A16.json</code> · <code>review-policy/ledger.json</code> and <code>backlog.ndjson</code> · <code>events.ndjson</code> · <code>audit-verdict.v0/v1.schema.json</code>. <b>Runtime note.</b> The A16 campaign runtime is frozen and carries the pre-0.23.2 campaign-drift check; any campaign adopting these recommendations must be built from a runtime at 0.23.2 or later.</p>
+
+<footer class="foot"><span>Campaign <b>BRAIN-RESCUE-20260910</b> · engine 0.23.2 · tree <b>5bb2550</b></span><span class="num">05 / 05</span></footer></article>
+
+</body></html>
