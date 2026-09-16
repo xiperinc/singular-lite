@@ -87,3 +87,31 @@ tr.total.muted td { font-weight:600; color:#6b8290; border-top:0; }
 #p3 table.num td { padding:4px 8px; }
 #p3 .diagram { margin:10px 0 4px; }
 #p3 h3.mt { margin-top:10px; }
+
+/* ---- redesign: diagnose → fix → prove ---- */
+h1 { font-size:36pt; }
+.steps { display:grid; grid-template-columns:1fr 16px 1fr 16px 1fr; gap:0 4px; align-items:stretch; margin:4px 0 12px; }
+.step { padding:10px 12px; border-radius:8px; background:#f7f9fb; border:1px solid #dce5eb; border-top-width:4px; }
+.step p { margin:0; }
+.step .tiny { font-weight:700; letter-spacing:.4px; margin-bottom:4px; font-size:7.4pt; }
+.step.diag { border-top-color:#c98a45; } .step.diag .tiny { color:#945514; }
+.step.fix { border-top-color:#153242; } .step.fix .tiny { color:#153242; }
+.step.proof { border-top-color:#0b8688; } .step.proof .tiny { color:#077477; }
+.arrow { display:flex; align-items:center; justify-content:center; color:#9fb3bd; font-size:14pt; font-weight:700; }
+.card.status { border-top-width:4px; }
+.card.status .tiny { font-weight:750; letter-spacing:.5px; }
+.card.status.proven { border-top-color:#0b8688; } .card.status.proven .tiny { color:#077477; }
+.card.status.signal { border-top-color:#7cc3bf; } .card.status.signal .tiny { color:#0b6f72; }
+.card.status.open { border-top-color:#c98a45; } .card.status.open .tiny { color:#945514; }
+.st { display:inline-block; font-size:7.5pt; font-weight:700; padding:2px 7px; border-radius:9px; white-space:nowrap; }
+.st-proven { background:#e6f4f2; color:#077477; }
+.st-signal { background:#e3f1f0; color:#0b6f72; border:1px dashed #7cc3bf; }
+.st-shipped { background:#edf1f4; color:#587180; }
+.st-open { background:#fff0dc; color:#945514; }
+.muted2 { color:#6b8290; font-size:8.6pt; }
+table.status-table td { padding:2px 8px; font-size:8.6pt; line-height:1.35; }
+table.status-table td:first-child { font-weight:600; }
+.metric .big { font-size:24pt; white-space:nowrap; }
+
+.cost { font-weight:600; color:#173746; font-size:8.8pt; }
+#p2 .metric .big { font-size:22pt; }
