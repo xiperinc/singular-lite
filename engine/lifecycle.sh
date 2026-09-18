@@ -117,7 +117,7 @@ singular_lifecycle_exit_write() {
   done
   python3 "$SINGULAR_TASK_LIFECYCLE" write-exit \
     --record "$(singular_dispatch_record_path "$task_id")" \
-    --exit-file "$(singular_dispatch_exit_path "$task_id")" \
+    --exit-file "$(singular_dispatch_exit_path_gen "$task_id" "$generation")" \
     --owner "$owner" --generation "$generation" --exit-code "$ec"
 }
 
@@ -145,9 +145,12 @@ singular_lifecycle_legacy_finish() {
 
 singular_lifecycle_dispatch_finalize() {
   local task_id="$1" ec="$2" outcome="$3" owner="$4" generation="$5"
+  local exit_file
+  exit_file="$(singular_dispatch_exit_resolve "$task_id" "$generation" \
+    || singular_dispatch_exit_path_gen "$task_id" "$generation")"
   python3 "$SINGULAR_TASK_LIFECYCLE" finalize \
     --record "$(singular_dispatch_record_path "$task_id")" \
-    --exit-file "$(singular_dispatch_exit_path "$task_id")" \
+    --exit-file "$exit_file" \
     --owner "$owner" --generation "$generation" --exit-code "$ec" --outcome "$outcome"
 }
 
@@ -156,10 +159,13 @@ singular_lifecycle_dispatch_finalize() {
 singular_lifecycle_close_dispatch() {
   local task_id="$1" ec="$2" outcome="$3" owner="$4" generation="$5"
   local reason="${6:-successor-reservation-owns-lease}"
+  local exit_file
+  exit_file="$(singular_dispatch_exit_resolve "$task_id" "$generation" \
+    || singular_dispatch_exit_path_gen "$task_id" "$generation")"
   python3 "$SINGULAR_TASK_LIFECYCLE" close-dispatch \
     --record "$(singular_dispatch_record_path "$task_id")" \
     --lease "$(singular_lease_path "$task_id")" \
-    --exit-file "$(singular_dispatch_exit_path "$task_id")" \
+    --exit-file "$exit_file" \
     --owner "$owner" --generation "$generation" \
     --exit-code "$ec" --outcome "$outcome" --reason "$reason"
 }
@@ -167,6 +173,7 @@ singular_lifecycle_close_dispatch() {
 singular_lifecycle_reap_dispatches() {
   local run_id="$1" reaped_ok=0 reaped_failures=0 reaped_refused=0 reaped_terminal=0 workers_running=0
   local record tid state pid pid_start pgid rec_run ec owner generation batch outcome exit_data
+  local exit_file archived_exit
   local finish_reason finish_next
   if [[ -d "$SINGULAR_DISPATCH_DIR" ]]; then
     for record in "$SINGULAR_DISPATCH_DIR"/*.json; do
@@ -213,14 +220,25 @@ singular_lifecycle_reap_dispatches() {
         fi
         continue
       fi
-      if [[ -f "$(singular_dispatch_exit_path "$tid")" ]]; then
+      exit_file="$(singular_dispatch_exit_resolve "$tid" "$generation" || true)"
+      if [[ -n "$exit_file" ]]; then
         mapfile -t exit_data < <(python3 "$SINGULAR_TASK_LIFECYCLE" read-exit \
-          --record "$record" --exit-file "$(singular_dispatch_exit_path "$tid")" 2>/dev/null) || exit_data=()
+          --record "$record" --exit-file "$exit_file" 2>/dev/null) || exit_data=()
         if [[ ${#exit_data[@]} -ne 3 ]]; then
-          # Stale/malformed exit remains evidence; do not consume the current dispatch.
-          workers_running=$((workers_running + 1))
-          continue
+          # Unusable exit evidence: corrupt, or written for another generation
+          # through the legacy shared path. Archive the bytes off the read path
+          # and fall through to process observation, which is the only thing
+          # that can decide whether a worker is alive. Pinning the record here
+          # counted a dead worker as running on every cycle, forever.
+          archived_exit="$(singular_dispatch_exit_archive "$exit_file" || true)"
+          singular_append_event "origin.dispatch_exit_unattributed" \
+            "exit evidence could not be attributed to this dispatch; archived" \
+            "{\"runId\":\"$run_id\",\"taskId\":\"$tid\",\"reservationOwner\":\"$owner\",\"reservationGeneration\":$generation,\"exitFile\":\"$exit_file\",\"archivedTo\":\"$archived_exit\"}" \
+            2>/dev/null || true
+          exit_file=""
         fi
+      fi
+      if [[ -n "$exit_file" ]]; then
         ec="${exit_data[0]}"; owner="${exit_data[1]}"; generation="${exit_data[2]}"
         case "$ec" in
           0) outcome="ok" ;;

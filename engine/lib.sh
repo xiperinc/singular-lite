@@ -6201,8 +6201,53 @@ singular_dispatch_record_path() {
   printf '%s/%s.json' "$SINGULAR_DISPATCH_DIR" "$1"
 }
 
+# Legacy shared exit path: one file per TASK. Kept for dispatch records already
+# in the field and for the pre-generation compatibility branch. New dispatches
+# use the generation-qualified path below.
 singular_dispatch_exit_path() {
   printf '%s/%s.exit' "$SINGULAR_DISPATCH_DIR" "$1"
+}
+
+# Generation-qualified exit path: one file per DISPATCH. The reservation
+# generation is monotonic per lineage, so (task, generation) names exactly one
+# dispatch. On the shared path a predecessor's exit sat where a successor's
+# record would be read against it; the attribution check then rejected it and
+# the reaper pinned the record as a running worker forever.
+singular_dispatch_exit_path_gen() {
+  local task_id="$1" generation="${2:-}"
+  if [[ "$generation" =~ ^[1-9][0-9]*$ ]]; then
+    printf '%s/%s.g%s.exit' "$SINGULAR_DISPATCH_DIR" "$task_id" "$generation"
+  else
+    singular_dispatch_exit_path "$task_id"
+  fi
+}
+
+# Resolve an exit file for READING: the qualified path first, then the legacy
+# shared path for records written before 0.23.3. Prints nothing and returns 1
+# when neither exists.
+singular_dispatch_exit_resolve() {
+  local task_id="$1" generation="${2:-}" candidate
+  candidate="$(singular_dispatch_exit_path_gen "$task_id" "$generation")"
+  if [[ -f "$candidate" ]]; then printf '%s' "$candidate"; return 0; fi
+  candidate="$(singular_dispatch_exit_path "$task_id")"
+  if [[ -f "$candidate" ]]; then printf '%s' "$candidate"; return 0; fi
+  return 1
+}
+
+# Move unusable exit evidence off the read path, preserving its bytes. Discarding
+# it would destroy the only owner-bound record of how a dispatch ended; leaving
+# it in place makes the reaper re-read and re-reject it every cycle. Prints the
+# archived path.
+singular_dispatch_exit_archive() {
+  local exit_file="$1" dest n=0
+  [[ -f "$exit_file" ]] || return 1
+  dest="$exit_file.unattributed"
+  while [[ -e "$dest" ]]; do
+    n=$((n + 1))
+    dest="$exit_file.unattributed.$n"
+  done
+  mv -f "$exit_file" "$dest" 2>/dev/null || return 1
+  printf '%s' "$dest"
 }
 
 singular_dispatch_pid_start() {
@@ -6292,7 +6337,15 @@ with open(tmp, "w", encoding="utf-8") as f:
     f.write("\n")
 os.replace(tmp, path)
 PY
+  # Remove the legacy shared exit and, when the record names a generation, its
+  # qualified exit too. Leaving either behind lets the next reap re-read a
+  # consumed observation.
+  local finalize_generation
+  finalize_generation="$(singular_json_field "$record" reservationGeneration 2>/dev/null || true)"
   rm -f "$(singular_dispatch_exit_path "$task_id")"
+  if [[ "$finalize_generation" =~ ^[1-9][0-9]*$ ]]; then
+    rm -f "$(singular_dispatch_exit_path_gen "$task_id" "$finalize_generation")"
+  fi
 }
 
 # Whole-tree dispatch liveness. The 0.4.0 reaper checked only the recorded root

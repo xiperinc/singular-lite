@@ -177,7 +177,9 @@ PY
       fi
       continue
     fi
-    if [[ -f "$drec" && ! -f "$(singular_dispatch_exit_path "$task_id")" ]] \
+    if [[ -f "$drec" ]] \
+      && ! singular_dispatch_exit_resolve "$task_id" \
+           "$(singular_json_field "$drec" reservationGeneration 2>/dev/null || true)" >/dev/null \
       && [[ "$(singular_json_field "$drec" state 2>/dev/null || true)" == "launched" ]]; then
       dpid="$(singular_json_field "$drec" pid 2>/dev/null || true)"
       dpid_start="$(singular_json_field "$drec" pidStart 2>/dev/null || true)"

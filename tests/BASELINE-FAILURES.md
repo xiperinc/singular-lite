@@ -1,7 +1,8 @@
 # Baseline test failures
 
 Tests on `codex/brain-integration` that do **not** pass cleanly, recorded so the
-0.23.3 release gate is enforceable rather than advisory.
+0.23.3 release gate is enforceable rather than advisory. Entries 1-5 are
+deterministic; entry 6 is a flake and carries its own gate rule.
 
 **Gate definition for 0.23.3.** "Tests pass" means:
 
@@ -102,6 +103,26 @@ Each entry was reproduced against baseline commit **`d5d5b37`** in a detached
 - **Cleanup note:** a failed teardown leaves a read-only scratch tree under
   `$TMPDIR/singular-frozen-terminal.*`. Remove it with `chmod -R u+w` first, and
   only when no run is in flight — the glob will match a live run's directory.
+
+## 6. `test-l1-parallel` — FLAKY, not deterministically red
+
+- **Baseline verified against:** `edb39bb` (the item ②a commit)
+- **Observed:** 2 failures in 4 consecutive runs at that commit, with **two
+  different** messages:
+  ```
+  FAIL: fanout imports both planned nodes: want '2' got '1'
+  FAIL: one free slot imports exactly one planned task: want '1' got '0'
+  ```
+- **Classification:** nondeterministic. The test exercises planner fanout and
+  concurrent slot accounting, so it is timing-sensitive. Two distinct
+  assertions failing across runs of the same commit rules out a deterministic
+  defect in the code under test.
+- **Gate rule:** unlike entries 1-5 this one cannot be matched against a fixed
+  error line. Retry up to **3 times**; one pass is a pass. **Three consecutive
+  failures is a regression** and must be investigated.
+- **Not fixed here.** Recorded as a 0.23.4 item: diagnose the race in planner
+  fanout slot accounting. Fixing it inline would have been out of scope for
+  0.23.3 and the non-goal on landing-rate work.
 
 ---
 
