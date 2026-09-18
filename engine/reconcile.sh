@@ -641,9 +641,34 @@ os.execvp(sys.argv[1], sys.argv[1:])' "$SCRIPT_DIR/dispatch-wrap.sh" "$tid" "$l1
     if ! singular_lifecycle_dispatch_record_write "$tid" "$run_id" "$dispatch_pid" \
         "$(singular_dispatch_pid_start "$dispatch_pid")" "$dispatch_log" "$base_sha" "$batch_id" \
         "$dispatch_owner" "$dispatch_generation"; then
-      # The process has no attributable dispatch record. Stop only that child;
-      # leave the reservation failed and actionable rather than launching blind.
-      kill "$dispatch_pid" 2>/dev/null || true
+      # The process has no attributable dispatch record. A bare `kill` of
+      # $dispatch_pid stopped only that pid, and in detached mode the child has
+      # already setsid into its own session, so provider grandchildren survived
+      # and kept writing the candidate while the reservation was marked failed.
+      #
+      # singular_kill_tree is PID-keyed, which matters precisely here: the
+      # dispatch-record write is what just failed, so the record-keyed
+      # singular_kill_dispatch_pgroup would return 1 at its [[ -f "$record" ]]
+      # guard and could not act at all. kill_tree resolves the group itself
+      # through a live os.getpgid() rather than trusting two integers from a
+      # file that does not exist.
+      singular_kill_tree "$dispatch_pid" "$(singular_kill_grace_sec 2>/dev/null || echo 5)" session \
+        2>/dev/null || true
+      dispatch_fence_mode="${SINGULAR_KILL_TREE_MODE:-unknown}"
+      dispatch_fence_result="${SINGULAR_KILL_TREE_RESULT:-unknown}"
+      # Termination is delivery, not absence. Only a proven group entitles this
+      # to be treated as cleaned up; anything else is quarantined and needs
+      # `singular fence` before the resource can be reused.
+      if [[ "$dispatch_fence_result" == "verified" && "$dispatch_fence_mode" == "group-proven" ]]; then
+        dispatch_fence_state="fenced"
+      else
+        dispatch_fence_state="quarantined"
+      fi
+      singular_append_event "origin.dispatch_bind_failed" \
+        "dispatch record publication failed; process group cleanup attempted" \
+        "{\"runId\":\"$run_id\",\"taskId\":\"$tid\",\"pid\":$dispatch_pid,\"fenceState\":\"$dispatch_fence_state\",\"killMode\":\"$dispatch_fence_mode\",\"killResult\":\"$dispatch_fence_result\",\"nextAction\":\"singular fence $tid\"}" || true
+      [[ "$dispatch_fence_state" == "quarantined" ]] \
+        && echo "actuation: $tid quarantined; run 'singular fence $tid' before reuse" >&2
       singular_lifecycle_finish "$tid" "$dispatch_owner" "$dispatch_generation" "$batch_id" \
         "dispatch-record-publication-failed" "retry after dispatch record publication is repaired" 2>/dev/null || true
       wait "$dispatch_pid" 2>/dev/null || true

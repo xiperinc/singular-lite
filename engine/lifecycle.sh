@@ -30,11 +30,20 @@ singular_lifecycle_dispatch_record_write() {
   campaign_binding="$(singular_lease_field "$task_id" campaignBinding 2>/dev/null || echo legacy)"
   pgid="$(singular_pgid_of "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
   [[ "$pgid" =~ ^[0-9]+$ ]] || pgid=0
+  # Q-OPEN-2 (claudedocs/design-pgid-fencing.md): reconcile swallows OSError
+  # from os.setsid(), so a child that failed to become a session leader was
+  # recorded as if it were detached and its recorded pgid was the scheduler own
+  # group -- which the fence then correctly refuses, turning a containment
+  # failure into a permanent `unknown`. pgid == pid is the session-leader proof;
+  # record it at bind time so the condition is diagnosable rather than inferred.
+  local session_leader=false
+  [[ "$pgid" == "$pid" && "$pgid" != 0 ]] && session_leader=true
   python3 "$SINGULAR_TASK_LIFECYCLE" bind-dispatch \
     --record "$(singular_dispatch_record_path "$task_id")" --task "$task_id" \
     --run "$run_id" --pid "$pid" --pid-start "$pid_start" --pgid "$pgid" \
     --log "$log" --base "$base_sha" --batch "$batch_id" \
-    --owner "$owner" --generation "$generation" --campaign "$campaign_binding"
+    --owner "$owner" --generation "$generation" --campaign "$campaign_binding" \
+    --session-leader "$session_leader"
 }
 
 singular_lifecycle_record_attempt() {

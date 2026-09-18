@@ -2512,6 +2512,7 @@ main() {
     ask)           run_engine ops.sh ask "$@" ;;
     report)        run_engine ops.sh report "$@" ;;
     lease)         run_engine lease.sh "$@" ;;
+    fence)         run_engine fence.sh "$@" ;;
     accept-packet) run_engine accept-existing-packet.sh "$@" ;;
     campaign)      run_engine campaign.sh "$@" ;;
     metrics)       cmd_metrics "$@" ;;

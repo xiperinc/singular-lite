@@ -808,6 +808,12 @@ def bind_dispatch(args: argparse.Namespace) -> None:
             "reservationGeneration": args.generation,
             "campaignBinding": args.campaign,
         })
+        # Whether the child actually became a session leader (pgid == pid).
+        # reconcile swallows OSError from os.setsid(), so without this a
+        # containment failure is indistinguishable from a healthy detached
+        # dispatch until the fence refuses it much later.
+        if args.session_leader in ("true", "false"):
+            record["sessionLeader"] = args.session_leader == "true"
 
 
 def record_attempt(args: argparse.Namespace) -> None:
@@ -2461,6 +2467,7 @@ def parser() -> argparse.ArgumentParser:
     bind.add_argument("--pid", type=int, required=True)
     bind.add_argument("--pgid", type=int, default=0)
     bind.add_argument("--generation", type=int, required=True)
+    bind.add_argument("--session-leader", default="")
     bind.add_argument("--campaign", default="legacy")
     bind.set_defaults(action=bind_dispatch)
 
