@@ -5914,7 +5914,22 @@ if os.path.exists(path):
         pass
 owned_files = parse_array(owned_raw, scope.split())
 forbidden_files = parse_array(forbidden_raw, [])
-data = {
+# Lifecycle authority and historical accounting survive compatibility lease
+# updates. They are validated by task_lifecycle.py; this writer may carry them
+# forward but never invent or rewrite them. Carrying forward is therefore the
+# default: every key this writer does not itself compute is preserved, including
+# keys it has no knowledge of. Until 0.23.3 an allowlist enumerated the keys to
+# keep, so everything outside it was silently dropped on each write
+# (operatorReentries, campaignBinding, nextAction, failureReason across the
+# BRAIN-RESCUE-20260910 leases). Dropping operatorReentries defeated the
+# _deleteRecord history guard in task_lifecycle.py: a lease whose only history
+# was an operator re-entry was deleted outright by the next driver refusal.
+# Underscore-prefixed names are lifecycle control sentinels, never durable
+# record state: task_lifecycle.py's locked() consumes "_deleteRecord" before it
+# publishes, so one must never reach disk. Carrying one forward would turn a
+# transient in-memory instruction into a persistent one.
+data = {k: v for k, v in previous.items() if not k.startswith("_")}
+data.update({
     "taskId": task_id,
     "branch": branch,
     "area": area,
@@ -5932,25 +5947,16 @@ data = {
     "productPassStarted": product_pass_started,
     "createdAt": created,
     "updatedAt": now,
-}
-# Lifecycle authority and historical accounting survive compatibility lease
-# updates. They are validated by task_lifecycle.py; this writer may carry them
-# forward but never invent or rewrite them.
-for key in (
-    "acceptedCandidate", "candidateHistory", "recoveryAuthorization",
-    "recoveryAuthorizations", "failureBudgets", "failureLimits",
-    "reservationOwner", "reservationGeneration", "reservationRunId",
-    "reservationDeadlineAt", "lastReservationOwner", "lastReservationGeneration",
-    "continuationAuthorization", "attemptLifecycle", "attemptHistory",
-    "terminalDisposition", "terminalDispositionHistory",
-    "reservationBaseSha",
+})
+# The product-pass markers stay absent rather than empty, as before.
+for marker, marker_value in (
+    ("productPassStartedAt", product_pass_started_at),
+    ("productPassStartedRunId", product_pass_started_run_id),
 ):
-    if key in previous:
-        data[key] = previous[key]
-if product_pass_started_at:
-    data["productPassStartedAt"] = product_pass_started_at
-if product_pass_started_run_id:
-    data["productPassStartedRunId"] = product_pass_started_run_id
+    if marker_value:
+        data[marker] = marker_value
+    else:
+        data.pop(marker, None)
 tmp = path + ".tmp"
 with open(tmp, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
