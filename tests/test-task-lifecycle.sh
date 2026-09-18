@@ -135,15 +135,44 @@ JSON
 python3 "$SINGULAR_TASK_LIFECYCLE" write-exit --record "$cas_record" \
   --exit-file "$(singular_dispatch_exit_path "$cas_task")" \
   --owner old-owner --generation 1 --exit-code 3
+# A dead predecessor whose lease has moved to a successor generation. finish()
+# still refuses to settle that lease (it is not the predecessor's to settle),
+# but the dispatch record is historical bookkeeping for a dead generation and is
+# now closed independently. Until 0.23.3 the reaper answered the failed finish
+# CAS by counting the record as a running worker and leaving it `launched`
+# forever, so the successor could never bind: the reserve-before-bind deadlock
+# of 2026-09-14. This block previously asserted workers_running=1 and a retained
+# `launched` record -- it pinned the deadlock. The expectation is inverted here
+# deliberately; the stale-owner refusals below are what must not change.
+cp "$cas_lease" "$tmp/cas-successor-before.json"
 reap_out="$(singular_lifecycle_reap_dispatches REAPER-CAS)"
-[[ "$reap_out" == *"workers_running=1"* ]] || fail "failed finish CAS was not retained as active evidence"
-[[ -f "$(singular_dispatch_exit_path "$cas_task")" ]] || fail "failed finish CAS consumed exit evidence"
-[[ "$(singular_json_field "$cas_record" state)" == launched ]] || fail "failed finish CAS finalized dispatch evidence"
-[[ "$(singular_json_field "$cas_lease" reservationOwner)" == new-owner ]] || fail "reaper changed successor lease"
+[[ "$reap_out" == *"workers_running=0"* ]] || fail "dead predecessor was counted as a running worker"
+[[ "$(singular_json_field "$cas_record" state)" == reaped ]] || fail "historical dispatch was not closed"
+cmp -s "$cas_lease" "$tmp/cas-successor-before.json" \
+  || fail "closing a historical dispatch rewrote the successor lease"
+[[ ! -f "$(singular_dispatch_exit_path "$cas_task")" ]] \
+  || fail "predecessor exit file left behind; it would misattribute the successor"
+python3 - "$cas_record" <<'PY' || exit 1
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+assert d["closure"]["leaseAction"] == "preserved-successor", d.get("closure")
+assert d["closure"]["leaseOwner"] == "new-owner", d.get("closure")
+assert d["exitEvidence"]["exitCode"] == 3, d.get("exitEvidence")
+assert d["exitEvidence"]["reservationOwner"] == "old-owner", d.get("exitEvidence")
+assert d["reservationOwner"] == "old-owner" and d["reservationGeneration"] == 1, d
+PY
+# The successor's authority is untouched: a third party still cannot reserve,
+# and the dead predecessor still cannot settle or complete the successor lease.
 if singular_lifecycle_reserve "$cas_task" duplicate RUN-DUP agent/test/TASK-0005 \
     test '[]' duplicate-base duplicate-batch /tmp/duplicate 2>/dev/null; then
-  fail "failed finish CAS permitted a duplicate reservation"
+  fail "closing a historical dispatch permitted a duplicate reservation"
 fi
+if singular_lifecycle_finish "$cas_task" old-owner 1 old-batch \
+    stale stale RUN-OLD legacy 2>/dev/null; then
+  fail "dead predecessor acquired successor lease authority"
+fi
+[[ "$(singular_json_field "$cas_lease" reservationGeneration)" == 2 ]] \
+  || fail "stale completion changed the successor generation"
 
 cat >"$SINGULAR_TASKS_DIR/$task.md" <<'EOF'
 # TASK-0001: lifecycle fixture

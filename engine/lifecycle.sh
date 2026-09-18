@@ -151,6 +151,19 @@ singular_lifecycle_dispatch_finalize() {
     --owner "$owner" --generation "$generation" --exit-code "$ec" --outcome "$outcome"
 }
 
+# Close a historical dispatch whose lease has already moved to a successor.
+# Never touches the successor's lease; refuses if the lease is still ours.
+singular_lifecycle_close_dispatch() {
+  local task_id="$1" ec="$2" outcome="$3" owner="$4" generation="$5"
+  local reason="${6:-successor-reservation-owns-lease}"
+  python3 "$SINGULAR_TASK_LIFECYCLE" close-dispatch \
+    --record "$(singular_dispatch_record_path "$task_id")" \
+    --lease "$(singular_lease_path "$task_id")" \
+    --exit-file "$(singular_dispatch_exit_path "$task_id")" \
+    --owner "$owner" --generation "$generation" \
+    --exit-code "$ec" --outcome "$outcome" --reason "$reason"
+}
+
 singular_lifecycle_reap_dispatches() {
   local run_id="$1" reaped_ok=0 reaped_failures=0 reaped_refused=0 reaped_terminal=0 workers_running=0
   local record tid state pid pid_start pgid rec_run ec owner generation batch outcome exit_data
@@ -227,10 +240,28 @@ singular_lifecycle_reap_dispatches() {
         # a very fast wrapper could not yet verify its dispatch record.
         if ! singular_lifecycle_finish "$tid" "$owner" "$generation" "$batch" \
             "$finish_reason" "$finish_next" 2>/dev/null; then
-          # Keep the launched record and exit evidence intact. Finalizing after
-          # a failed lease CAS would discard the only actionable owner-bound
-          # evidence and could make a successor look safe to launch.
-          workers_running=$((workers_running + 1))
+          # The lease has moved to a successor generation, so finish() refuses
+          # to settle it -- correctly. This dispatch is still historical process
+          # bookkeeping for a dead generation: close it independently, retaining
+          # its exit evidence inside the closed record, so the successor can
+          # bind. Counting it as a running worker instead was the
+          # reserve-before-bind deadlock (field 2026-09-14).
+          if singular_lifecycle_close_dispatch "$tid" "$ec" "$outcome" \
+              "$owner" "$generation" "$finish_reason" >/dev/null 2>&1; then
+            case "$ec" in
+              0) reaped_ok=$((reaped_ok + 1)) ;;
+              2) reaped_refused=$((reaped_refused + 1)) ;;
+              3) reaped_terminal=$((reaped_terminal + 1)) ;;
+              *) reaped_failures=$((reaped_failures + 1)) ;;
+            esac
+            singular_append_event "origin.dispatch_reaped" \
+              "historical dispatch closed; successor lease preserved" \
+              "{\"runId\":\"$run_id\",\"taskId\":\"$tid\",\"exitCode\":$ec,\"outcome\":\"$outcome\",\"reservationOwner\":\"$owner\",\"reservationGeneration\":$generation,\"leaseAction\":\"preserved-successor\"}"
+          else
+            # Could not establish that the lease belongs to someone else.
+            # Keep the record and its evidence and report it as occupied.
+            workers_running=$((workers_running + 1))
+          fi
           continue
         fi
         singular_lifecycle_dispatch_finalize "$tid" "$ec" "$outcome" "$owner" "$generation" || {
@@ -261,6 +292,14 @@ singular_lifecycle_reap_dispatches() {
         singular_lifecycle_dispatch_finalize "$tid" -1 crashed "$owner" "$generation" || true
         singular_append_event "origin.dispatch_reaped" "dispatch crashed (tree dead, no exit file)" \
           "{\"runId\":\"$run_id\",\"taskId\":\"$tid\",\"exitCode\":-1,\"outcome\":\"crashed\",\"reservationOwner\":\"$owner\",\"reservationGeneration\":$generation}"
+      elif singular_lifecycle_close_dispatch "$tid" -1 crashed "$owner" "$generation" \
+          "dispatch-tree-vanished" >/dev/null 2>&1; then
+        # Same historical-closure rule as the exit-file path above: a dead
+        # generation whose lease belongs to a successor is closed on its own.
+        reaped_failures=$((reaped_failures + 1))
+        singular_append_event "origin.dispatch_reaped" \
+          "historical dispatch closed (tree dead); successor lease preserved" \
+          "{\"runId\":\"$run_id\",\"taskId\":\"$tid\",\"exitCode\":-1,\"outcome\":\"crashed\",\"reservationOwner\":\"$owner\",\"reservationGeneration\":$generation,\"leaseAction\":\"preserved-successor\"}"
       else
         workers_running=$((workers_running + 1))
       fi

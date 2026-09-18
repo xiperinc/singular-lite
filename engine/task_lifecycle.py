@@ -1490,6 +1490,81 @@ def finalize(args: argparse.Namespace) -> None:
         pass
 
 
+def close_dispatch(args: argparse.Namespace) -> None:
+    """Close a historical dispatch without touching the current lease.
+
+    finish() refuses a predecessor whose lease has moved to a successor
+    generation ("stale owner cannot finish successor lease"). That refusal is
+    correct for LEASE MUTATION and stays. It is not a reason to leave the
+    dispatch record `launched`: the reaper used to count such a record as a
+    running worker forever, and the successor could not bind because the record
+    was still open -- the reserve-before-bind deadlock (field 2026-09-14).
+
+    A dispatch record is historical process bookkeeping for one generation. Its
+    closure is independent of who owns the lease now. This verb closes only the
+    record, and refuses when the lease IS still ours -- that case must go
+    through finish() so the lease is settled rather than skipped.
+    """
+    record_path = Path(args.record)
+    lease_path = Path(args.lease)
+    exit_path = Path(args.exit_file)
+    with locked(record_path) as record:
+        if not reservation_matches(record, args.owner, args.generation):
+            raise LifecycleError("stale reaper cannot close this dispatch")
+        if record.get("state") == "reaped":
+            print("already-closed")
+            return
+        # Read the lease WITHOUT locked(): that context republishes on exit, so
+        # merely inspecting a successor's lease would rewrite its bytes.
+        lease = read_object(lease_path, missing=True)
+        lease_owner = str(lease.get("reservationOwner", ""))
+        lease_generation = int(lease.get("reservationGeneration", 0) or 0)
+        if lease and reservation_matches(lease, args.owner, args.generation):
+            raise LifecycleError(
+                "lease is still owned by this dispatch; settle it with finish"
+            )
+        # The exit observation is this generation's only owner-bound evidence.
+        # Retain it inside the closed record before the shared exit file is
+        # consumed, so closing cannot destroy it.
+        evidence: dict[str, Any] = {}
+        if exit_path.exists():
+            try:
+                observed = read_object(exit_path)
+            except LifecycleError:
+                observed = {}
+            if observed:
+                evidence = {
+                    "exitCode": observed.get("exitCode"),
+                    "reservationOwner": observed.get("reservationOwner"),
+                    "reservationGeneration": observed.get("reservationGeneration"),
+                    "writtenAt": observed.get("writtenAt"),
+                }
+        record.update({
+            "state": "reaped",
+            "exitCode": args.exit_code,
+            "outcome": args.outcome,
+            "reapedAt": now(),
+            "closure": {
+                "leaseAction": "preserved-successor",
+                "reason": args.reason,
+                "leaseOwner": lease_owner,
+                "leaseGeneration": lease_generation,
+                "closedAt": now(),
+            },
+        })
+        if evidence:
+            record["exitEvidence"] = evidence
+    # Only after the record is durably closed. A crash before this leaves the
+    # exit file for a replay of the same close, which is idempotent.
+    # The exit path is shared per task, so leaving a predecessor's exit behind
+    # would fail the successor's attribution check and stall it in turn.
+    try:
+        exit_path.unlink()
+    except FileNotFoundError:
+        pass
+    print("preserved-successor")
+
+
 def retain_candidate(args: argparse.Namespace) -> None:
     packet_path = Path(args.packet)
     packet = read_object(packet_path)
@@ -2396,6 +2471,13 @@ def parser() -> argparse.ArgumentParser:
     finalize_p.add_argument("--generation", type=int, required=True)
     finalize_p.add_argument("--exit-code", type=int, required=True)
     finalize_p.set_defaults(action=finalize)
+
+    close_p = commands.add_parser("close-dispatch")
+    for flag in ("record", "lease", "exit_file", "owner", "outcome", "reason"):
+        close_p.add_argument("--" + flag.replace("_", "-"), required=True)
+    close_p.add_argument("--generation", type=int, required=True)
+    close_p.add_argument("--exit-code", type=int, required=True)
+    close_p.set_defaults(action=close_dispatch)
 
     orphan = commands.add_parser("reconcile-orphan-reservation")
     for flag in (

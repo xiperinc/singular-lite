@@ -78,9 +78,8 @@ Each entry was reproduced against baseline commit **`d5d5b37`** in a detached
 
 ## 5. `test-frozen-campaign-terminal`
 
-- **Verified against:** `d5d5b37` + the Item ① change (the lease-writer fix).
-  Not re-run on bare `d5d5b37`: this test takes ~30 minutes, and its failure is
-  `rm` against vendored `.mjs` files, which cannot interact with lease writing.
+- **Baseline verified against:** `d5d5b37` (~30 min run; 15 `ok:`, 0 `FAIL:`,
+  `PASS:` line present, exit 1 from the teardown)
 - **Exit code:** 1
 - **Assertions:** **all pass** — 15 `ok:` lines, zero `FAIL:` lines, and the
   test prints its own success line:
