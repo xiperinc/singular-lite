@@ -1175,7 +1175,38 @@ def claim_continuation(args: argparse.Namespace) -> None:
             raise LifecycleError("continuation dispatch already has an attempt")
         with locked(lease_path) as lease:
             authority = lease.get("continuationAuthorization")
-            if not isinstance(authority, dict) or authority.get("state") != "reserved":
+            if not isinstance(authority, dict):
+                raise LifecycleError("continuation authority is not reserved or was already consumed")
+            if authority.get("state") == "claimed":
+                # Crash-window repair. The lease is published BEFORE the dispatch
+                # record here: the inner lock exits first. A crash between the two
+                # leaves the authority consumed on the lease and no attempt on the
+                # record, and the task could never be redispatched -- the
+                # authority reads as spent and there is no verb to reissue it.
+                #
+                # This grants no additional invocation. l1-drive claims at the
+                # worker invocation boundary and invokes only after the claim
+                # returns, so a record still missing its attempt proves the
+                # worker was never reached. The identity is pinned exactly: same
+                # authorization, same execution run, and the attempt recorded on
+                # the lease must belong to that run. A replay where the record
+                # ALREADY carries the attempt is refused above -- that
+                # transaction completed, the worker may have run, and returning
+                # success would spend a one-shot authority twice (S2).
+                claimed_attempt = lease.get("attemptLifecycle")
+                if (
+                    authority.get("authorizationId") == args.authorization_id
+                    and authority.get("executionRunId") == args.run
+                    and isinstance(claimed_attempt, dict)
+                    and claimed_attempt.get("runId") == args.run
+                    and claimed_attempt.get("reservationOwner") == args.owner
+                    and claimed_attempt.get("reservationGeneration") == args.generation
+                ):
+                    record["attemptLifecycle"] = copy.deepcopy(claimed_attempt)
+                    print("repaired-interrupted-claim")
+                    return
+                raise LifecycleError("continuation authority is not reserved or was already consumed")
+            if authority.get("state") != "reserved":
                 raise LifecycleError("continuation authority is not reserved or was already consumed")
             if authority.get("authorizationId") != args.authorization_id:
                 raise LifecycleError("continuation authorization id mismatch")

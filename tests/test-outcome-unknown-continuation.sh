@@ -252,6 +252,65 @@ if singular_lifecycle_claim_continuation TASK-1120 "$authorization_id" "$next_ow
 fi
 pass "native reserve/claim consumes the authority exactly once"
 
+# Crash between the two publications inside claim_continuation. The lease is
+# published first (the inner lock exits first), so a crash there leaves the
+# authority consumed on the lease and no attempt on the dispatch record. Before
+# 0.23.3 the next claim read the authority as spent and raised, and there was no
+# verb to reissue it: the task could not be redispatched at all.
+#
+# The crash state is reproduced on the DISPATCH RECORD only -- never by editing
+# a lease -- because that is exactly what the interrupted transaction leaves.
+record_path="$(singular_dispatch_record_path TASK-1120)"
+python3 - "$record_path" <<'PY' || exit 1
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p, encoding="utf-8"))
+assert isinstance(d.get("attemptLifecycle"), dict), "fixture: record should carry the claimed attempt"
+d.pop("attemptLifecycle")
+json.dump(d, open(p, "w", encoding="utf-8"), indent=2)
+PY
+out="$(singular_lifecycle_claim_continuation TASK-1120 "$authorization_id" "$next_owner" \
+  "$next_generation" "$next_worker_run" "$candidate_source" "$integration_target" \
+  "$worktree" "$SINGULAR_TASKS_DIR/TASK-1120.md" "$candidate_base" 2>&1)" \
+  || fail "an interrupted claim could not be repaired: $out"
+[[ "$out" == *repaired-interrupted-claim* ]] || fail "repair was not reported as such: $out"
+python3 - "$record_path" "$lease_path" "$next_worker_run" <<'PY' || exit 1
+import json, sys
+rec = json.load(open(sys.argv[1], encoding="utf-8"))
+lease = json.load(open(sys.argv[2], encoding="utf-8"))
+run = sys.argv[3]
+attempt = rec.get("attemptLifecycle")
+assert isinstance(attempt, dict), "record was not repaired"
+assert attempt.get("runId") == run, attempt
+a = lease.get("continuationAuthorization") or {}
+assert a.get("additionalWorkerAttemptsClaimed") == 1, a
+assert a.get("additionalWorkerAttemptsRemaining") == 0, a
+assert a.get("state") == "claimed", a
+PY
+pass "an interrupted continuation claim repairs the dispatch record without reissuing the authority"
+
+# The repair is not a general replay: once the record carries its attempt the
+# transaction completed and the worker may already have run. Claiming again must
+# stay refused, or a restarted driver would spend a one-shot authority twice.
+if singular_lifecycle_claim_continuation TASK-1120 "$authorization_id" "$next_owner" \
+    "$next_generation" "$next_worker_run" "$candidate_source" "$integration_target" \
+    "$worktree" "$SINGULAR_TASKS_DIR/TASK-1120.md" "$candidate_base" >/dev/null 2>&1; then
+  fail "a completed claim was replayed and would authorize a second worker"
+fi
+python3 - "$record_path" <<'PY' || exit 1
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p, encoding="utf-8"))
+d.pop("attemptLifecycle", None)
+json.dump(d, open(p, "w", encoding="utf-8"), indent=2)
+PY
+if singular_lifecycle_claim_continuation TASK-1120 "$authorization_id" "$next_owner" \
+    "$next_generation" OTHER-RUN "$candidate_source" "$integration_target" \
+    "$worktree" "$SINGULAR_TASKS_DIR/TASK-1120.md" "$candidate_base" >/dev/null 2>&1; then
+  fail "a different execution run claimed through the repair path"
+fi
+pass "repair is confined to the interrupted run; replay and foreign runs stay refused"
+
 # Live ownership must block a fresh authorization.
 if "${recover_env[@]}" "$ROOT/engine/recover.sh" "${continuation_args[@]}" >/dev/null 2>&1; then
   fail "continuation was authorized while the reservation is actively owned"
