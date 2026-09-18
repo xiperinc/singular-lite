@@ -4538,22 +4538,37 @@ if waiver=="yes":
 with open(packet,"w") as f: json.dump(p,f,indent=2); f.write("\n")
 PY
 
-singular_lease_set_status "$task_id" "accepted"
+# Ownership is proved BEFORE anything is published. l1_record_attempt is the
+# owner-bound transition: it refuses a reservation that no longer owns the lease
+# ("attempt does not own the current lease"). It used to run last -- after the
+# lease said `accepted`, after the task file said `accepted`, after the decision
+# was recorded, and after the packet had been copied into the inbox where the
+# reconciler integrates from. A stale-generation driver reaching this point
+# therefore clobbered a successor's lease and queued its own packet, and the
+# owner check could only report the damage afterwards.
+_l1_outcome="accepted"
+l1_record_attempt terminal completed "" accepted || {
+  echo "l1-drive: refusing to publish acceptance; this reservation no longer owns the lease" >&2
+  l1_campaign_publication_end
+  exit 75
+}
+singular_lease_set_status_owned "$task_id" "accepted" \
+  "${SINGULAR_RESERVATION_OWNER:-}" "${SINGULAR_RESERVATION_GENERATION:-}" || {
+  echo "l1-drive: refusing to publish acceptance; lease ownership changed" >&2
+  l1_campaign_publication_end
+  exit 75
+}
 singular_task_set_status "$task_file" "accepted"
 dec_rationale="auditor accepted; regression gate green; scope clean"
 [[ "$waiver" == "yes" ]] && dec_rationale="accepted via decider waiver (auditor: $verdict); gate green"
 "$SCRIPT_DIR/record-decision.sh" --task "$task_id" --decision "accept" \
   --rationale "$dec_rationale" --run "$run_id" --branch "$worker_branch"
 
+# Last: the packet becomes visible to the reconciler only once every
+# owner-bound check above has passed.
 inbox_packet="$SINGULAR_INBOX_DIR/$run_id.json"
 cp "$packet" "$inbox_packet.tmp"
 mv "$inbox_packet.tmp" "$inbox_packet"
-_l1_outcome="accepted"
-l1_record_attempt terminal completed "" accepted || {
-  echo "l1-drive: accepted state is durable but owner-bound disposition publication failed" >&2
-  l1_campaign_publication_end
-  exit 75
-}
 l1_status integrating active "Accepted packet queued for origin integration" true \
   "Finish acceptance bookkeeping and let origin reconcile"
 singular_append_event "l1.task_accepted" "l1 task accepted" \

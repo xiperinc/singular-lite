@@ -5966,6 +5966,43 @@ PY
 }
 
 # Update only the status (and updatedAt) of an existing lease.
+# Owner-checked status publication. singular_lease_set_status performs NO
+# ownership check, which is correct for the administrative callers that use it
+# (supersede, the reaper's legacy compatibility branch, a driver marking its own
+# failure) but not for publishing acceptance: a stale-generation driver reaching
+# the accept path could stamp `accepted` over a successor's lease. Refuses
+# unless the lease's current reservation is exactly owner@generation.
+singular_lease_set_status_owned() {
+  local task_id="$1" status="$2" owner="${3:-}" generation="${4:-}"
+  local lease lease_owner lease_generation have_claim have_reservation
+  lease="$(singular_lease_path "$task_id")"
+  [[ -f "$lease" ]] || return 1
+  lease_owner="$(singular_json_field "$lease" reservationOwner 2>/dev/null || true)"
+  lease_generation="$(singular_json_field "$lease" reservationGeneration 2>/dev/null || true)"
+  have_claim=no
+  [[ -n "$owner" && "$generation" =~ ^[1-9][0-9]*$ ]] && have_claim=yes
+  have_reservation=no
+  [[ -n "$lease_owner" || "$lease_generation" =~ ^[1-9][0-9]*$ ]] && have_reservation=yes
+  # Neither side carries a reservation: direct/legacy invocation, where there is
+  # no generation to be stale against and l1_record_attempt is likewise a no-op.
+  if [[ "$have_claim" == no && "$have_reservation" == no ]]; then
+    singular_lease_set_status "$task_id" "$status"
+    return $?
+  fi
+  # Any asymmetry is a stale publisher: an unidentified writer over a reserved
+  # lease, or a reservation that was released out from under this driver.
+  if [[ "$have_claim" != "$have_reservation" \
+      || "$lease_owner" != "$owner" || "$lease_generation" != "$generation" ]]; then
+    singular_append_event "lease.status_write_refused_stale" \
+      "refused a status publication from a reservation that no longer owns the lease" \
+      "{\"taskId\":\"$task_id\",\"status\":\"$status\",\"owner\":\"$owner\",\"generation\":\"$generation\",\"leaseOwner\":\"$lease_owner\",\"leaseGeneration\":\"$lease_generation\"}" \
+      2>/dev/null || true
+    echo "lease status write refused: $task_id is owned by ${lease_owner:-none}@${lease_generation:-none}, not $owner@$generation" >&2
+    return 1
+  fi
+  singular_lease_set_status "$task_id" "$status"
+}
+
 singular_lease_set_status() {
   local task_id="$1" status="$2"
   local lease
