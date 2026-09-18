@@ -29,10 +29,22 @@ Each entry was reproduced against baseline commit **`d5d5b37`** in a detached
   ```
 - **Classification:** environment / fixture. Not an assertion failure — the run
   produces no `FAIL:` line and no `ok:` line; it exits on the first engine call.
-- **Mechanism:** the JSON-config selector guard at `engine/lib.sh:210` refuses
-  when `SINGULAR_JSON_CONFIG_SOURCE` is `selector` and the selected file does not
-  exist. The test never creates `singular.config.json` (no reference to it
-  anywhere in the file).
+- **Mechanism (diagnosed 2026-09-18, while building the item ③ test; not
+  fixed):** the JSON-config selector guard at `engine/lib.sh:210` refuses when
+  `SINGULAR_JSON_CONFIG_SOURCE` is `selector` and the selected file does not
+  exist. `lib.sh` *exports* the resolved config location every time it is
+  sourced. A test that builds more than one fixture repo therefore re-sources
+  `lib.sh` with `SINGULAR_ROOT` changed while `SINGULAR_JSON_CONFIG_FILE` still
+  points at the PREVIOUS repo; the incoming value no longer matches the newly
+  computed default, so the source flips from `default` to `selector`, and the
+  stale path does not exist. The tests never create `singular.config.json`, so
+  the first fixture is fine and every later one dies.
+  Reproduced independently: the item ③ test hit exactly this on its second
+  fixture and was fixed by unsetting `SINGULAR_JSON_CONFIG_FILE`,
+  `SINGULAR_JSON_CONFIG_SOURCE`, `SINGULAR_JSON_CONFIG_DEFAULT_ROOT` and
+  `SINGULAR_JSON_CONFIG_DEFAULT_FILE` before re-sourcing. The same one-line
+  change is the likely fix for entries 1 and 4 — a **0.23.4 item**, not fixed
+  here, because it is a test-harness defect and out of 0.23.3's scope.
 
 ## 2. `test-orphan-continuation`
 
@@ -74,8 +86,11 @@ Each entry was reproduced against baseline commit **`d5d5b37`** in a detached
   ```
   singular: selected JSON configuration is missing: <TMPDIR>/repo/singular.config.json
   ```
-- **Classification:** environment / fixture. Same shape as entry 1; the test
-  contains no reference to `singular.config.json`.
+- **Classification:** environment / fixture. Same shape and, per the mechanism
+  diagnosed under entry 1, the same likely cause: a second fixture re-sources
+  `lib.sh` with a stale exported config path. Entry 4 gets one `ok:` line first
+  (`ok: preflight`), consistent with the first fixture succeeding and the second
+  failing. 0.23.4 item; not fixed here.
 
 ## 5. `test-frozen-campaign-terminal`
 
@@ -128,10 +143,11 @@ Each entry was reproduced against baseline commit **`d5d5b37`** in a detached
 
 ## Notes
 
-- Entries 1, 3 and 4 share the `engine/lib.sh:210` selector guard but **do not
-  share one root cause**: entry 3 is an explicit `/dev/null` idiom in the test,
-  entries 1 and 4 are a fixture that never creates the file. They are recorded
-  separately and are not assumed to be one fix.
+- Entries 1, 3 and 4 all reach the `engine/lib.sh:210` selector guard, but **not
+  by one route**: entry 3 is an explicit `/dev/null` idiom inside the test,
+  while entries 1 and 4 are a stale exported config path leaking across fixture
+  rebuilds (mechanism under entry 1). Entries 1 and 4 probably share one fix;
+  entry 3 does not.
 - Entry 2 is the only genuine product-behaviour failure recorded here.
 - **Coverage gap.** Entries 1 and 2 are the two tests most likely to catch a
   regression in the reaper and retained-worktree work (plan items 2 and 3).

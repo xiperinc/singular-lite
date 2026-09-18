@@ -1580,6 +1580,31 @@ l1_note_refusal_and_maybe_park() {
   l1_campaign_publication_end
 }
 
+# Does the lease's CURRENT reservation belong to this driver invocation?
+#
+# Lease status alone does not say whose reservation it is. Under detached
+# dispatch the scheduler publishes a `planned` lease before l1-drive starts, so
+# a status-only retained-worktree guard refused the driver its own reservation
+# and the task could only proceed after an operator removed the worktree by hand
+# (field 2026-09-14, stall 8). dispatch-wrap.sh exports the owning identity;
+# compare it with the lease.
+#
+# Fails closed: if this invocation cannot prove its own reservation, or the
+# lease carries none, the answer is "not mine" and the caller refuses. Admitting
+# on an unprovable identity is the S1 violation that dropping `planned` from the
+# guard outright would have caused.
+l1_lease_reservation_is_self() {
+  local lease_owner lease_generation
+  [[ -n "${SINGULAR_RESERVATION_OWNER:-}" ]] || return 1
+  [[ "${SINGULAR_RESERVATION_GENERATION:-}" =~ ^[1-9][0-9]*$ ]] || return 1
+  lease_owner="$(singular_lease_field "$task_id" reservationOwner 2>/dev/null || true)"
+  lease_generation="$(singular_lease_field "$task_id" reservationGeneration 2>/dev/null || true)"
+  [[ -n "$lease_owner" ]] || return 1
+  [[ "$lease_generation" =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ "$lease_owner" == "$SINGULAR_RESERVATION_OWNER" ]] || return 1
+  [[ "$lease_generation" == "$SINGULAR_RESERVATION_GENERATION" ]]
+}
+
 # Auto-heal stranded accepted work (E5): an `accepted` lease whose packet
 # never reached the inbox (driver died post-acceptance, reap race) used to
 # refuse every re-dispatch forever (exit-2 loop -> breaker). If the prior
@@ -1701,9 +1726,19 @@ elif singular_worktree_registered "$worktree" || [[ -e "$worktree" ]]; then
         exit 2
       fi
       assess_existing=yes ;;
-    running|planned|needs-review|integrated)
+    integrated)
+      # Terminal: no reservation, whoever holds it, admits implementation.
       if [[ "$reset" != yes ]]; then
-        l1_note_refusal_and_maybe_park "active/accepted worktree (lease: $existing_lease)"
+        l1_note_refusal_and_maybe_park "integrated worktree (lease: $existing_lease)"
+        echo "active/accepted worktree for $task_id (lease: $existing_lease); refusing (use --reset)" >&2
+        exit 2
+      fi
+      assess_existing=yes ;;
+    running|planned|needs-review)
+      # An active status is only a refusal when the reservation is SOMEONE
+      # ELSE'S. Our own detached dispatch published this lease moments ago.
+      if [[ "$reset" != yes ]] && ! l1_lease_reservation_is_self; then
+        l1_note_refusal_and_maybe_park "active worktree held by another reservation (lease: $existing_lease)"
         echo "active/accepted worktree for $task_id (lease: $existing_lease); refusing (use --reset)" >&2
         exit 2
       fi
