@@ -151,6 +151,8 @@ failed_imports=0
 dispatched_this_run=0
 failed_dispatches=0
 refused_dispatches=0
+new_refusals_this_run=0
+parked_refusals_this_run=0
 refill_requested_this_run=0
 integrations_this_run=0
 integration_failures=0
@@ -584,11 +586,37 @@ PY
     if [[ -z "$dispatch_generation" ]]; then
       refused_dispatches=$((refused_dispatches + 1))
       echo "actuation: reservation refused for $tid; launch suppressed"
+      # Account the refusal against a stable condition so a repeatedly refused
+      # task parks instead of spinning at the poll interval forever.
+      refusal_reason="$(tail -3 "$run_dir/reservation-$tid.log" 2>/dev/null \
+        | tr '\n' ' ' | sed 's/  */ /g;s/^ //;s/ $//')"
+      [[ -n "$refusal_reason" ]] || refusal_reason="reservation refused without a recorded reason"
+      refusal_out="$(singular_refusal_note "$tid" "$refusal_reason" 2>/dev/null || true)"
+      refusal_count="$(printf '%s\n' "$refusal_out" | sed -n 's/^count=//p' | tail -1)"
+      refusal_new="$(printf '%s\n' "$refusal_out" | sed -n 's/^new=//p' | tail -1)"
+      refusal_park="$(printf '%s\n' "$refusal_out" | sed -n 's/^park=//p' | tail -1)"
+      refusal_condition="$(printf '%s\n' "$refusal_out" | sed -n 's/^condition=//p' | tail -1)"
+      [[ "$refusal_count" =~ ^[0-9]+$ ]] || refusal_count=0
+      [[ "$refusal_new" == "yes" ]] && new_refusals_this_run=$((new_refusals_this_run + 1))
       singular_append_event "origin.reservation_refused" \
         "dispatch suppressed because reservation acquisition failed" \
-        "{\"runId\":\"$run_id\",\"taskId\":\"$tid\",\"owner\":\"$dispatch_owner\",\"log\":\"$run_dir/reservation-$tid.log\"}" || true
+        "{\"runId\":\"$run_id\",\"taskId\":\"$tid\",\"owner\":\"$dispatch_owner\",\"log\":\"$run_dir/reservation-$tid.log\",\"refusals\":$refusal_count,\"conditionKey\":\"$refusal_condition\",\"newCondition\":\"$refusal_new\",\"reason\":$(printf '%s' "$refusal_reason" | singular_json_escape)}" || true
+      if [[ "$refusal_park" == "yes" ]]; then
+        # Park the TASK, never the lease: the reservation was refused, so this
+        # scheduler does not own that lease and must not write to it.
+        singular_task_set_status "$task_file" "blocked" 2>/dev/null || true
+        parked_refusals_this_run=$((parked_refusals_this_run + 1))
+        singular_append_event "origin.reservation_refusal_parked" \
+          "task parked after repeated reservation refusals of the same condition" \
+          "{\"runId\":\"$run_id\",\"taskId\":\"$tid\",\"refusals\":$refusal_count,\"conditionKey\":\"$refusal_condition\",\"reason\":$(printf '%s' "$refusal_reason" | singular_json_escape),\"failureReason\":\"reservation-refusal-limit\",\"nextAction\":\"inspect the refusal condition, then unpark or supersede\"}" || true
+        echo "actuation: parked $tid after $refusal_count refusals of the same condition"
+      fi
       continue
     fi
+    # The reservation succeeded, so the refusal condition is resolved. Without
+    # this a task refused twice, dispatched, and refused once much later would
+    # park on that single unrelated refusal.
+    singular_refusal_clear "$tid"
     echo "actuation: dispatching $tid (batch=$batch_id base=$base_sha detached=${SINGULAR_DETACHED_DISPATCH:-0} reservation=$dispatch_owner@$dispatch_generation)"
     singular_append_event "origin.dispatch" "origin dispatching task" \
       "{\"runId\":\"$run_id\",\"taskId\":\"$tid\",\"batchId\":\"$batch_id\",\"baseSha\":\"$base_sha\",\"detached\":${SINGULAR_DETACHED_DISPATCH:-0},\"reservationOwner\":\"$dispatch_owner\",\"reservationGeneration\":$dispatch_generation}"
@@ -968,6 +996,8 @@ if [[ "$mode" == "actuate" ]]; then
   echo "dispatched_this_run=$dispatched_this_run"
   echo "failed_dispatches=$failed_dispatches"
   echo "refused_dispatches=$refused_dispatches"
+  echo "new_refusals_this_run=$new_refusals_this_run"
+  echo "parked_refusals_this_run=$parked_refusals_this_run"
   echo "refill_requested_this_run=$refill_requested_this_run"
   echo "detached_dispatch=${SINGULAR_DETACHED_DISPATCH:-0}"
   echo "reaped_ok=$reaped_ok"

@@ -3729,6 +3729,14 @@ singular_runner_install_traps() {
   SINGULAR_RUNNER_PROVIDER="$1"
   SINGULAR_RUNNER_LABEL="${2:-$1-run}"
   SINGULAR_RUNNER_RESULT_WRITTEN="no"
+  # Host wall clock for this invocation, stamped before any provider work and
+  # read back by the runner.completed emitter. Distinct from provider-reported
+  # duration: only this one includes process start, transport and in-runner
+  # retries, and only this one can be compared against a task clock.
+  export SINGULAR_RUNNER_HOST_STARTED_EPOCH="$(date +%s)"
+  # A stable identity for this invocation, so a retry is countable as the same
+  # operation rather than an unrelated call.
+  export SINGULAR_RUNNER_OPERATION_ID="${SINGULAR_RUNNER_OPERATION_ID:-op-${run_id:-unknown}-${runner_role:-unknown}-$$}"
   trap singular_runner_on_exit EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
@@ -4493,7 +4501,9 @@ PY
   local runner_completed_json
   runner_completed_json="$(python3 - "$result_file" <<'PY' 2>/dev/null || true
 import json
+import os
 import sys
+import time
 
 path = sys.argv[1]
 try:
@@ -4511,8 +4521,47 @@ record = {
     "outcome": result.get("outcome"),
     "failureClass": result.get("failureClass"),
 }
-if isinstance(result.get("usage"), dict):
-    record["usage"] = result["usage"]
+
+# Lineage. Without a task id this event could only be attributed by correlating
+# run ids, which misattributes planner and decider calls to whichever task
+# happened to share their scheduler run.
+for field, value in (
+    ("taskId", os.environ.get("SINGULAR_ATTEMPT_TASK_ID", "")),
+    ("operationId", os.environ.get("SINGULAR_RUNNER_OPERATION_ID", "")),
+):
+    if value:
+        record[field] = value
+
+# Host wall time is NOT provider duration: it includes process start, transport,
+# retries inside the runner and host-side waiting. Conflating the two makes
+# any cost-per-landed-change figure unfalsifiable, so they are recorded as
+# separate, separately-labelled fields and neither is inferred from the other.
+started = os.environ.get("SINGULAR_RUNNER_HOST_STARTED_EPOCH", "")
+if started.isdigit():
+    try:
+        record["hostWallSeconds"] = max(0, int(time.time()) - int(started))
+    except (OverflowError, ValueError):
+        pass
+provider_duration = result.get("durationSeconds")
+if isinstance(provider_duration, (int, float)):
+    record["providerDurationSeconds"] = provider_duration
+
+# Missing usage is not zero usage. Reporting an absent field as 0 understates
+# spend and silently biases every aggregate built on this event; the completeness
+# flag lets a consumer exclude the call instead of counting it as free.
+usage = result.get("usage")
+if isinstance(usage, dict):
+    record["usage"] = usage
+    missing = [
+        field for field in ("inputTokens", "outputTokens")
+        if not isinstance(usage.get(field), (int, float))
+    ]
+    record["usageComplete"] = not missing
+    if missing:
+        record["usageMissingFields"] = missing
+else:
+    record["usageComplete"] = False
+    record["usageMissingFields"] = ["usage"]
 print(json.dumps(record, separators=(",", ":")))
 PY
 )"
@@ -5966,6 +6015,95 @@ PY
 }
 
 # Update only the status (and updatedAt) of an existing lease.
+# Durable, condition-keyed accounting for scheduler reservation refusals.
+#
+# A refused reservation was logged and retried on the next cycle, forever: the
+# refusal advanced no counter the breaker reads, so a task could spin at the
+# poll interval with nothing but an event stream to show for it (field
+# 2026-09-14: 28 refusals in nine minutes, invisible to the loop). The count
+# must key on a STABLE condition -- never on runId or reservation generation,
+# which change every attempt and would reset the count each time, which is
+# precisely why the spin was unbounded.
+#
+# Prints three fields for the caller: count, new (first observation of THIS
+# condition) and park (the count reached the threshold).
+singular_refusal_note() {
+  local task_id="$1" reason="$2"
+  local dir="$SINGULAR_STATE_DIR/refusals"
+  mkdir -p "$dir"
+  python3 - "$dir/$task_id.json" "$task_id" "$reason" \
+    "${SINGULAR_REFUSAL_PARK_THRESHOLD:-3}" <<'PY'
+import hashlib
+import json
+import os
+import re
+import sys
+from datetime import datetime, timezone
+
+path, task_id, reason, threshold_raw = sys.argv[1:5]
+try:
+    threshold = max(1, int(threshold_raw))
+except ValueError:
+    threshold = 3
+
+# The condition, not the attempt. Run ids, generations, timestamps, pids and
+# absolute paths all vary between identical refusals; keying on them would
+# restart the count on every cycle and the task would never park.
+normalized = reason.strip()
+normalized = re.sub(r"RUN-[0-9A-Za-z._-]+", "RUN", normalized)
+normalized = re.sub(r"ORIGIN-[0-9A-Za-z._-]+", "ORIGIN", normalized)
+normalized = re.sub(r"reconcile:[^\s]+", "reconcile:OWNER", normalized)
+normalized = re.sub(r"/[^\s:]+", "PATH", normalized)
+normalized = re.sub(r"\b[0-9a-f]{7,40}\b", "SHA", normalized)
+normalized = re.sub(r"\b\d+\b", "N", normalized)
+normalized = re.sub(r"\s+", " ", normalized).strip()
+key = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+entry = {}
+if os.path.exists(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            entry = json.load(handle)
+    except (OSError, ValueError):
+        entry = {}
+if not isinstance(entry, dict):
+    entry = {}
+
+fresh = entry.get("conditionKey") != key
+if fresh:
+    entry = {
+        "taskId": task_id,
+        "conditionKey": key,
+        "condition": normalized,
+        "reason": reason.strip(),
+        "count": 0,
+        "firstAt": now,
+    }
+entry["count"] = int(entry.get("count", 0) or 0) + 1
+entry["lastAt"] = now
+entry["reason"] = reason.strip()
+
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as handle:
+    json.dump(entry, handle, indent=2)
+    handle.write("\n")
+os.replace(tmp, path)
+
+print(f"count={entry['count']}")
+print("new=yes" if fresh else "new=no")
+print("park=yes" if entry["count"] >= threshold else "park=no")
+print(f"condition={entry['conditionKey']}")
+PY
+}
+
+# Forget a task's refusal history once it makes progress. Without this a task
+# that is refused twice, succeeds, and is later refused once would park on that
+# single refusal.
+singular_refusal_clear() {
+  rm -f "$SINGULAR_STATE_DIR/refusals/$1.json" 2>/dev/null || true
+}
+
 # Owner-checked status publication. singular_lease_set_status performs NO
 # ownership check, which is correct for the administrative callers that use it
 # (supersede, the reaper's legacy compatibility branch, a driver marking its own

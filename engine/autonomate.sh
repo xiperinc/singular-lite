@@ -378,10 +378,12 @@ PY
   planner_failures="$(field planner_failures_this_run)"
   planner_backoff_deferred="$(field planner_backoff_active_this_run)"
   l1_import_rejections="$(field l1_import_rejections_this_run)"
+  new_refusals="$(field new_refusals_this_run)"
+  parked_refusals="$(field parked_refusals_this_run)"
   reaped_ok="$(field reaped_ok)"; reaped_failures="$(field reaped_failures)"
   workers_running="$(field workers_running)"
   promoted="$(field gates_promoted_this_run)"
-  for v in dispatched integrated accepted faild faili planner_failures planner_backoff_deferred l1_import_rejections reaped_ok reaped_failures workers_running promoted; do [[ "${!v}" =~ ^[0-9]+$ ]] || printf -v "$v" 0; done
+  for v in dispatched integrated accepted faild faili planner_failures planner_backoff_deferred l1_import_rejections reaped_ok reaped_failures workers_running promoted new_refusals parked_refusals; do [[ "${!v}" =~ ^[0-9]+$ ]] || printf -v "$v" 0; done
   if [[ "$planner_backoff_at_cycle_start" -eq 1 && "$planner_failures" -gt 0 ]]; then
     echo "  [autonomate] active planner backoff made planner refusal neutral; ignoring $planner_failures planner failure(s) for breaker accounting"
     singular_append_event "autonomate.planner_backoff_neutral" \
@@ -426,7 +428,14 @@ PY
     # congestion is real. No-op unless the selected provider is actually
     # throttled, so a healthy loop writes no state.
     singular_provider_pressure_success >/dev/null 2>&1 || true
-  elif [[ "$faild" -gt 0 || "$faili" -gt 0 || "$planner_failures" -gt 0 || "$l1_import_rejections" -gt 0 || ( "${SINGULAR_DETACHED_DISPATCH:-0}" == "1" && "$reaped_failures" -gt 0 ) ]]; then
+  elif [[ "$faild" -gt 0 || "$faili" -gt 0 || "$planner_failures" -gt 0 || "$l1_import_rejections" -gt 0 || "$new_refusals" -gt 0 || ( "${SINGULAR_DETACHED_DISPATCH:-0}" == "1" && "$reaped_failures" -gt 0 ) ]]; then
+    # A scheduler reservation refusal used to advance nothing the breaker reads,
+    # so a task refused every cycle spun at the poll interval with no bound. Only
+    # NEWLY OBSERVED conditions count: re-observing the same refusal is the same
+    # unresolved fact, not fresh evidence, and counting it every cycle would trip
+    # the breaker on a single stuck task. Refusals are never limit evidence --
+    # they are deterministic host decisions, not provider windows -- so they stay
+    # out of limit_eligible below.
     # C2 (0.5.0): a usage-limit / 403 / overload window can poison the decider,
     # auditor, L1 fanout, or dispatch paths, producing cycle failures with NO
     # active quota backoff. When a validated runner-result/provider-error pair
@@ -483,7 +492,7 @@ print(kinds.get(d.get("kind"), ""), d.get("resultRef", ""))
     fi
   fi
 
-  singular_write_status "$iteration" "running (disp=$dispatched accepted=$accepted int=$integrated failD=$faild failI=$faili planFail=$planner_failures planBackoff=$planner_backoff_deferred importReject=$l1_import_rejections reapOK=$reaped_ok reapFail=$reaped_failures workers=$workers_running)"
+  singular_write_status "$iteration" "running (disp=$dispatched accepted=$accepted int=$integrated failD=$faild failI=$faili refuse=$new_refusals/$parked_refusals planFail=$planner_failures planBackoff=$planner_backoff_deferred importReject=$l1_import_rejections reapOK=$reaped_ok reapFail=$reaped_failures workers=$workers_running)"
 
   # Periodic supervisor briefing (0.10.0). BYTE-INERT when the interval knob is
   # unset/0: a single string test skips the whole block, so no supervisor/ dir,
