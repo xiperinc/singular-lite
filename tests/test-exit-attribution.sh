@@ -32,6 +32,8 @@ source "$ROOT/engine/lib.sh" >/dev/null
 source "$ROOT/engine/lifecycle.sh" >/dev/null
 singular_ensure_state_dirs
 
+# The run id must be unique on the host: with no live tree the reaper falls back
+# to `pgrep -f <runId>`, and a bare "RUN-2" matches every live RUN-2026... run.
 # Record at <generation>, owned by <owner>; lease already at generation 2 so the
 # reaper's closure path (item 2a) applies and never blocks on the lease.
 write_record() {
@@ -39,7 +41,7 @@ write_record() {
   local record; record="$(singular_dispatch_record_path "$tid")"
   mkdir -p "$(dirname "$record")"
   cat >"$record" <<JSON
-{"taskId":"$tid","runId":"RUN-$generation","pid":999995,"pidStart":"gone","pgid":0,
+{"taskId":"$tid","runId":"RUN-EXITATTR-$$-$generation","pid":999995,"pidStart":"gone","pgid":0,
  "baseSha":"b","batchId":"batch","state":"launched",
  "reservationOwner":"$owner","reservationGeneration":$generation,"campaignBinding":"legacy"}
 JSON
