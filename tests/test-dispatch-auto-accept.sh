@@ -4,6 +4,9 @@ set -euo pipefail
 # E5 (0.5.0): a dispatch against an `accepted` lease whose packet never reached
 # the inbox auto-heals via accept-existing-packet (exit 0, packet enqueued)
 # instead of refusing forever (0.4.0: infinite exit-2 loop -> breaker).
+# Since 0.23.4 the auto-heal publishes only through the acceptance predicate;
+# this fixture has no accepted certificate, so every route must refuse
+# (a decided exit 3, not the old exit-2 refusal loop) and publish nothing.
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
@@ -157,42 +160,50 @@ cat >"$SINGULAR_LEASES_DIR/TASK-9001.json" <<EOF
 }
 EOF
 
-# 1. Dispatch heals: exit 0, packet enqueued, event emitted.
+# 0.23.4: an accepted packet is published only when the acceptance predicate
+# (host gate G, fresh accepted audit A, review-ledger round D, evidence E)
+# holds for the exact candidate. This fixture has none of them -- no fresh
+# audit, no ledger round, no host verification -- so no route may publish it.
+# The positive auto-heal path, with a genuine accepted certificate, is pinned
+# in tests/test-acceptance-invariant.sh.
+assert_unpublished() {
+  [[ ! -f "$SINGULAR_INBOX_DIR/$run_id.json" ]] || fail "$1: packet was enqueued"
+  [[ ! -f "$run_dir/audit.json" ]] || fail "$1: an audit was manufactured"
+  [[ "$(cat "$SINGULAR_EVENTS_FILE" 2>/dev/null || true)" != *'"type":"packet.accepted_existing"'* ]] \
+    || fail "$1: deterministic re-acceptance ran"
+}
+
+# 1. Accepted lease, unaccepted packet, no audit: recognized as an invalid
+#    retained acceptance and refused with the checkpoint preserved.
 rc=0
 out="$(bash "$SCRIPT_DIR/l1-drive.sh" TASK-9001 2>&1)" || rc=$?
-assert_eq "0" "$rc" "auto-heal dispatch exits 0 (out: $out)"
-assert_contains "$out" "auto-accepted stranded packet" "heal reported"
-[[ -f "$SINGULAR_INBOX_DIR/$run_id.json" ]] || fail "packet must be enqueued to inbox"
-assert_contains "$(cat "$SINGULAR_EVENTS_FILE")" '"type":"l1.auto_accepted_existing"' "heal event"
-assert_contains "$(cat "$SINGULAR_EVENTS_FILE")" '"type":"packet.accepted_existing"' "deterministic acceptance ran"
-assert_eq "singular.orchestration.audit-verdict.v1" \
-  "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["schema"])' "$run_dir/audit.json")" \
-  "v2 deterministic acceptance writes audit-verdict.v1"
+assert_eq "$rc" "3" "invalid retained acceptance is refused (out: $out)"
+assert_contains "$out" "accepted-checkpoint-invalid-retained-state" "refusal reason"
+assert_unpublished "invalid retained acceptance"
+assert_eq "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$run_dir/packet.json")" \
+  "needs-review" "packet left unaccepted"
 
-# 2. Re-dispatch while queued: no-op exit 0 (work is in flight, no refusal churn).
+# 2. A stranded packet marked accepted but carrying no fresh audit reaches the
+#    E5 auto-heal route (evidence resume disabled). The acceptance predicate
+#    refuses before accept-existing-packet can author an audit of its own.
+python3 - "$run_dir/packet.json" <<'PY2'
+import json, sys
+p = json.load(open(sys.argv[1]))
+p["status"] = "accepted"
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY2
+rc=0
+out="$(SINGULAR_RESUME_ACCEPTED_EVIDENCE=0 bash "$SCRIPT_DIR/l1-drive.sh" TASK-9001 2>&1)" || rc=$?
+assert_eq "$rc" "3" "stranded packet without an audit is refused (out: $out)"
+assert_unpublished "stranded packet without an audit"
+assert_contains "$(cat "$SINGULAR_EVENTS_FILE")" '"type":"l1.acceptance_refused"' "predicate refusal event"
+assert_contains "$(cat "$SINGULAR_EVENTS_FILE")" '"path":"stranded-packet"' "refusal names the auto-heal route"
+assert_contains "$(cat "$SINGULAR_EVENTS_FILE")" '"reason":"audit-missing"' "refusal reason"
+
+# 3. The same packet through the default evidence-resume route is refused too.
 rc=0
 out="$(bash "$SCRIPT_DIR/l1-drive.sh" TASK-9001 2>&1)" || rc=$?
-assert_eq "0" "$rc" "queued packet makes dispatch a no-op"
-assert_contains "$out" "already queued/imported" "no-op reported"
-
-# 3. Broken packet (headSha moved) falls back to refusal exit 2.
-rm -f "$SINGULAR_INBOX_DIR/$run_id.json"
-python3 - "$run_dir/packet.json" <<'PY'
-import json, sys
-p = json.load(open(sys.argv[1]))
-p["headSha"] = "0" * 40
-json.dump(p, open(sys.argv[1], "w"), indent=2)
-PY
-# Reset packet status so the earlier acceptance doesn't short-circuit.
-python3 - "$run_dir/packet.json" <<'PY'
-import json, sys
-p = json.load(open(sys.argv[1]))
-p["status"] = "needs-review"
-json.dump(p, open(sys.argv[1], "w"), indent=2)
-PY
-rm -rf "$SINGULAR_ORCH_DIR/packets/imported/TASK-9001"
-rc=0
-bash "$SCRIPT_DIR/l1-drive.sh" TASK-9001 >/dev/null 2>&1 || rc=$?
-assert_eq "2" "$rc" "invalid packet falls back to refusal"
+assert_eq "$rc" "3" "accepted packet without an audit is not resumed (out: $out)"
+assert_unpublished "accepted packet without an audit"
 
 echo "PASS: test-dispatch-auto-accept"
