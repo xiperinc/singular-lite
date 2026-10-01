@@ -132,21 +132,55 @@ def bind(host_report: Path, verdict_path: Path | None) -> str:
     return aggregate
 
 
+def echo_statuses(verdict: dict[str, Any]) -> list[str]:
+    """Return the model's verification statuses when they form a clean echo.
+
+    An echo is clean when every result is an object carrying one of the four
+    host classifications. Anything else (missing, empty, non-object entries,
+    unknown status words) is not an echo of the host observation at all, so
+    the host may not paper over it by rewriting.
+    """
+    results = verdict.get("verificationResults")
+    if not isinstance(results, list) or not results:
+        raise ValueError("verificationResults is missing or empty; not an echo")
+    statuses: list[str] = []
+    for index, result in enumerate(results):
+        status = result.get("status") if isinstance(result, dict) else None
+        if status not in CLASSIFICATIONS:
+            raise ValueError(
+                f"verificationResults[{index}] is not a host classification echo: "
+                f"{status!r}"
+            )
+        statuses.append(status)
+    return statuses
+
+
 def normalize(
     host_report: Path, verdict_path: Path, command: str, evidence_ref: str
 ) -> str:
-    """Rewrite the verdict's verificationResults to the host classification.
+    """Rewrite an echo mismatch in verificationResults to the host classification.
 
-    The host owns the classification; the model was only asked to echo it. When
-    the echo disagrees (or is malformed), the model's product judgment is kept
-    and its verification aggregate is replaced by one host-authored result. The
-    original verdict is preserved beside the file for the record. A verdict
-    that already matches is left byte-identical.
+    The host owns the classification; the model was only asked to echo it. Only
+    an unequivocal echo mismatch is rewritten: every result is a well-formed
+    host classification and none of them reports `failed-product` while the
+    host does not. A model-reported `failed-product` is independent product-
+    failure evidence, not an echo, and is never overwritten with `passed`
+    (0.23.4, protocol 4.3). Those verdicts, and malformed ones, are refused so
+    the driver's bounded auditor repair retry handles them and nothing is
+    accepted on a rewritten result. The model's verdict and findings are never
+    touched; the original verdict is preserved beside the file. A verdict that
+    already matches is left byte-identical.
     """
     host = host_classification(read_object(host_report, "host verification report"))
     verdict = read_object(verdict_path, "audit verdict")
     if verdict.get("schema") != AUDIT_V1:
         raise ValueError("audit verdict is not audit-verdict.v1")
+    statuses = echo_statuses(verdict)
+    if "failed-product" in statuses and host != "failed-product":
+        raise ValueError(
+            "model reported failed-product while the host classified "
+            f"{host}; refusing to overwrite product-failure evidence"
+        )
     reason = ""
     try:
         aggregate, statuses = model_aggregate(verdict)
@@ -155,6 +189,7 @@ def normalize(
         elif aggregate != host:
             reason = f"model={aggregate} host={host}"
     except ValueError as exc:
+        # Clean statuses that only mix passed and not-rerun-evidence-verified.
         reason = str(exc)
     if not reason:
         return host
