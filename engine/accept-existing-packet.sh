@@ -332,6 +332,8 @@ if ! "$SCRIPT_DIR/secret-scan.sh" --worktree "$verification_worktree" \
   cat "$secret_log" >&2
   exit 2
 fi
+singular_check_result_write "$run_dir/scope-check-result.json" scope passed 0 "$scope_log"
+singular_check_result_write "$run_dir/secret-scan-result.json" secret passed 0 "$secret_log"
 
 cmd_list="$run_dir/accept-existing-packet-commands.jsonl"
 python3 - "$packet" "$workspace" "$run_dir" "$cmd_list" <<'PY'
