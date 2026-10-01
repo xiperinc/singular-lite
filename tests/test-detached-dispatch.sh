@@ -171,6 +171,11 @@ with_fixture() {
   export SINGULAR_BREAKER_FILE="$SINGULAR_STATE_DIR/circuit.json"
   export SINGULAR_PLANNER_BACKOFF_FILE="$SINGULAR_STATE_DIR/planner-backoff.json"
   export SINGULAR_TARGET_BRANCH="target"
+  # A fresh fixture is a fresh consumer: drop the previous fixture's resolved
+  # JSON-config provenance, which lib.sh exports, or the next source treats the
+  # stale path as an explicit selection and refuses it as missing.
+  unset SINGULAR_JSON_CONFIG_FILE SINGULAR_JSON_CONFIG_SOURCE \
+    SINGULAR_JSON_CONFIG_DEFAULT_ROOT SINGULAR_JSON_CONFIG_DEFAULT_FILE
   source "$SCRIPT_DIR/lib.sh"
 }
 

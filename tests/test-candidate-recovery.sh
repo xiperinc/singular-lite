@@ -161,10 +161,13 @@ if python3 "$ROOT/engine/task_lifecycle.py" reserve --lease "$lease" --task TASK
 fi
 
 # A repair must have exact host evidence and distinct successor identities.
+# An explicitly selected JSON configuration must be a regular file (lib.sh
+# refuses /dev/null as missing), so "no JSON settings" is an empty object.
+printf '{}\n' >"$tmp/empty-config.json"
 ops_env=(env SINGULAR_ROOT="$tmp" SINGULAR_STATE_DIR="$state"
   SINGULAR_LEASES_DIR="$state/leases" SINGULAR_TASKS_DIR="$tasks"
   SINGULAR_ORCH_DIR="$tmp/orchestration" SINGULAR_ENGINE_HOME="$ROOT/engine"
-  SINGULAR_LOCAL_CONFIG_FILE=/dev/null SINGULAR_JSON_CONFIG_FILE=/dev/null)
+  SINGULAR_LOCAL_CONFIG_FILE=/dev/null SINGULAR_JSON_CONFIG_FILE="$tmp/empty-config.json")
 cp "$packet" "$tmp/RUN-OLD.pristine.json"
 printf 'tampered\n' >>"$packet"
 if "${ops_env[@]}" "$ROOT/engine/recover.sh" candidate TASK-1107 \

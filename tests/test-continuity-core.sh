@@ -62,6 +62,11 @@ with_fixture() {
   export SINGULAR_ENGINE_HOME="$ENGINE_HOME"
   unset SINGULAR_MODULES SINGULAR_WORKER_RED_LOG SINGULAR_WORKER_CONTRACT_EXTRA SINGULAR_RUNNER \
     SINGULAR_PREFLIGHT_REQUIRE_ACCEPTANCE SINGULAR_ATTEMPT_TASK_ID SINGULAR_ATTEMPT_STARTED_AT 2>/dev/null || true
+  # A fresh fixture is a fresh consumer: drop the previous fixture's resolved
+  # JSON-config provenance, which lib.sh exports, or the next source treats the
+  # stale path as an explicit selection and refuses it as missing.
+  unset SINGULAR_JSON_CONFIG_FILE SINGULAR_JSON_CONFIG_SOURCE \
+    SINGULAR_JSON_CONFIG_DEFAULT_ROOT SINGULAR_JSON_CONFIG_DEFAULT_FILE
   # Re-source so derived paths (events file, lock dirs) follow the fixture env.
   # shellcheck source=/dev/null
   source "$SCRIPT_DIR/lib.sh"
@@ -390,7 +395,9 @@ test_dry_run_byte_identical_to_head() {
 
   local old_engine="$FIXTURE_TMP/old-engine"
   mkdir -p "$old_engine"
-  cp "$SCRIPT_DIR"/*.sh "$old_engine/"
+  # The whole engine, not just *.sh: the driver also execs its python helpers
+  # (task_parser.py and friends) from its own directory.
+  cp -R "$SCRIPT_DIR"/. "$old_engine/"
   git -C "$ENGINE_HOME" show HEAD:engine/l1-drive.sh >"$old_engine/l1-drive.sh" \
     || fail "cannot extract HEAD l1-drive.sh"
   chmod +x "$old_engine/l1-drive.sh"
