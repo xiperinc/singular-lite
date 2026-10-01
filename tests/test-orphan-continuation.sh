@@ -39,6 +39,7 @@ Continue retained partial work through the native worker path.
 ## Scope
 Owned files:
 - `app.txt`
+- `untracked.txt`
 ## Acceptance Criteria
 - The retained partial bytes survive one native continuation.
 MD
@@ -57,6 +58,8 @@ successor_source="$(git -C "$repo" rev-parse HEAD)"
 
 worktree="$repo/.worktrees/TASK-1108"
 printf 'retained tracked partial\n' >"$worktree/app.txt"
+# Both partials are owned: candidate admission (ff29c88) scope-checks a
+# continuation before provider work and refuses out-of-scope content.
 printf 'retained untracked partial\n' >"$worktree/untracked.txt"
 tracked_before="$(shasum -a 256 "$worktree/app.txt" | awk '{print $1}')"
 untracked_before="$(shasum -a 256 "$worktree/untracked.txt" | awk '{print $1}')"
@@ -81,7 +84,7 @@ source "$ROOT/engine/lifecycle.sh"
 
 owner='reconcile:RUN-OLD:TASK-1108'
 generation="$(singular_lifecycle_reserve TASK-1108 "$owner" RUN-OLD \
-  agent/brain/TASK-1108 brain '["app.txt"]' "$successor_source" BATCH-OLD "$worktree")"
+  agent/brain/TASK-1108 brain '["app.txt","untracked.txt"]' "$successor_source" BATCH-OLD "$worktree")"
 [[ "$generation" == 1 ]] || fail "unexpected predecessor generation: $generation"
 python3 - "$(singular_lease_path TASK-1108)" <<'PY'
 import json, os, sys
@@ -161,7 +164,7 @@ git -C "$repo" commit -qm 'advance target control state'
 advanced_target="$(git -C "$repo" rev-parse HEAD)"
 
 if singular_lifecycle_reserve TASK-1108 reconcile:RUN-WRONG:TASK-1108 RUN-WRONG \
-    agent/brain/TASK-1108 brain '["app.txt"]' "$predecessor_source" BATCH-WRONG "$worktree" \
+    agent/brain/TASK-1108 brain '["app.txt","untracked.txt"]' "$predecessor_source" BATCH-WRONG "$worktree" \
     >/dev/null 2>&1; then
   fail "continuation reservation accepted the wrong successor source"
 fi
@@ -179,7 +182,7 @@ SH
 chmod +x "$never_runner"
 prepare_owner='reconcile:RUN-PREPARE:TASK-1108'
 prepare_generation="$(singular_lifecycle_reserve TASK-1108 "$prepare_owner" RUN-PREPARE \
-  agent/brain/TASK-1108 brain '["app.txt"]' "$advanced_target" BATCH-PREPARE "$worktree")"
+  agent/brain/TASK-1108 brain '["app.txt","untracked.txt"]' "$advanced_target" BATCH-PREPARE "$worktree")"
 singular_lifecycle_dispatch_record_write TASK-1108 RUN-PREPARE $$ gone "$tmp/prepare-dispatch.log" \
   "$advanced_target" BATCH-PREPARE "$prepare_owner" "$prepare_generation"
 prepare_rc=0
@@ -206,7 +209,7 @@ singular_lifecycle_dispatch_finalize TASK-1108 "$prepare_rc" terminal \
 
 next_owner='reconcile:RUN-NEXT:TASK-1108'
 next_generation="$(singular_lifecycle_reserve TASK-1108 "$next_owner" RUN-NEXT \
-  agent/brain/TASK-1108 brain '["app.txt"]' "$advanced_target" BATCH-NEXT "$worktree")"
+  agent/brain/TASK-1108 brain '["app.txt","untracked.txt"]' "$advanced_target" BATCH-NEXT "$worktree")"
 [[ "$next_generation" == 3 ]] || fail "continuation did not retain generation history"
 python3 - "$(singular_lease_path TASK-1108)" "$next_owner" "$next_generation" <<'PY'
 import json, sys
@@ -267,7 +270,7 @@ assert d["terminalDisposition"]["kind"] == "blocked", d
 assert d["terminalDispositionHistory"][0]["kind"] == "orphan-reservation", d
 PY
 if singular_lifecycle_reserve TASK-1108 reconcile:RUN-REPLAY:TASK-1108 RUN-REPLAY \
-    agent/brain/TASK-1108 brain '["app.txt"]' "$advanced_target" BATCH-REPLAY "$worktree" \
+    agent/brain/TASK-1108 brain '["app.txt","untracked.txt"]' "$advanced_target" BATCH-REPLAY "$worktree" \
     >/dev/null 2>&1; then
   fail "claimed continuation authority was replayed"
 fi
