@@ -332,6 +332,15 @@ if ! "$SCRIPT_DIR/secret-scan.sh" --worktree "$verification_worktree" \
   cat "$secret_log" >&2
   exit 2
 fi
+# evidence-manifest.sh reads these structured results, not the logs, and
+# refuses a committed delta without a passing secret check. Record this
+# verification's own results so a stale or absent worker-run record cannot
+# decide the acceptance.
+if ! singular_check_result_write "$run_dir/scope-check-result.json" scope passed 0 "$scope_log" \
+  || ! singular_check_result_write "$run_dir/secret-scan-result.json" secret passed 0 "$secret_log"; then
+  echo "could not record deterministic acceptance check results" >&2
+  exit 2
+fi
 
 cmd_list="$run_dir/accept-existing-packet-commands.jsonl"
 python3 - "$packet" "$workspace" "$run_dir" "$cmd_list" <<'PY'
