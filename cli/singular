@@ -2445,7 +2445,7 @@ Setup / lifecycle:
                        evaluation, and analysis of retained campaign evidence
   memory propose|review|approve|reject|quarantine|supersede|tombstone|checkpoint|show|rebuild
                                                       governed project-local memory lifecycle
-  review-policy effective|show|check|record|grant|backfill|backlog
+  review-policy effective|show|check|reserve|record|release|reopen|grant|backfill|backlog
                                                       programmable review policy (rounds, severities, exceptions)
   test [--status [--json]|--wait|--no-wait|--new-run|--rerun-failures]
                        supervised engine regression run — one live run at a time

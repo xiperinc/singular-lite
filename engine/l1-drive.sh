@@ -3342,10 +3342,34 @@ PY
   local auditor_log="$run_dir/auditor-codex.log"
   local review_check_file="$run_dir/review-policy-check-attempt-${n}.json"
   local review_check_err="$run_dir/review-policy-check-attempt-${n}.err"
-  local review_check_rc=0
-  python3 "$SCRIPT_DIR/review_policy.py" check \
+  local review_check_rc=0 review_operation_id=""
+  # An authorized repair recovery of an accepted candidate requires a fresh
+  # audit (recoveryAuthorization.freshAuditRequired). Its recovery authority is
+  # the explicit authority that opens a new review series once acceptance has
+  # closed the logical change; a replayed authority opens nothing.
+  if [[ "${#authorized_repair[@]}" -eq 7 ]]; then
+    local review_reopen_evidence
+    review_reopen_evidence="$(singular_lease_field "$task_id" \
+      recoveryAuthorization.authorityPath 2>/dev/null || true)"
+    python3 "$SCRIPT_DIR/review_policy.py" reopen \
+      --logical-change "$review_logical_change" --task "$task_id" \
+      --authority "recovery-authorization:${authorized_repair[0]}" \
+      --reason "authorized repair recovery requires a fresh audit" \
+      --evidence "${review_reopen_evidence:-/nonexistent}" --if-closed \
+      >"$run_dir/review-policy-reopen-attempt-${n}.json" \
+      2>"$run_dir/review-policy-reopen-attempt-${n}.err" || true
+  fi
+  # Atomic admission: the reserved operation holds the review slot for every
+  # auditor transport retry below and is completed exactly once by `record`.
+  python3 "$SCRIPT_DIR/review_policy.py" reserve \
     --logical-change "$review_logical_change" --task "$task_id" \
+    --run "$run_id" --attempt "$n" --head "$head_sha" \
+    --campaign "$l1_campaign_binding" --lane native \
     >"$review_check_file" 2>"$review_check_err" || review_check_rc=$?
+  if [[ "$review_check_rc" -eq 0 ]]; then
+    review_operation_id="$(singular_json_field "$review_check_file" operationId 2>/dev/null || true)"
+    [[ -n "$review_operation_id" ]] || review_check_rc=3
+  fi
   if [[ "$review_check_rc" -eq 4 ]]; then
     local review_used review_allowed
     review_used="$(singular_json_field "$review_check_file" used 2>/dev/null || echo 0)"
@@ -3689,6 +3713,8 @@ PY
       --reviewer-runner "$(basename "$audit_runner")" \
       --reviewer-model "$reviewer_model" \
       --reviewer-effort "$reviewer_effort" \
+      --operation "$review_operation_id" \
+      --host-verification "${model_verification_status:-}" \
       --apply >"$review_record_file" 2>"$review_record_err"
     then
       attempt_failure="audit-infra"
@@ -3767,6 +3793,13 @@ print(json.dumps({"taskId": sys.argv[1], "runId": sys.argv[2], "attempt": int(sy
       "auditor infrastructure retry budget exhausted" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"budgetDomain\":\"auditor-infrastructure\",\"retriesUsed\":$audit_infra_max,\"maxExtraRetries\":$audit_infra_max,\"consumesProductRepairBudget\":false}" \
       || true
+    # No verdict was produced: end the reserved operation without a semantic
+    # round so its slot is not held by an operation that can never complete.
+    python3 "$SCRIPT_DIR/review_policy.py" release \
+      --logical-change "$review_logical_change" --operation "$review_operation_id" \
+      --reason "auditor infrastructure retries exhausted (${infra_reason:-unknown})" \
+      >"$run_dir/review-policy-release-attempt-${n}.json" \
+      2>"$run_dir/review-policy-release-attempt-${n}.err" || true
     attempt_failure="audit-infra"; attempt_ctx="$run_dir/worker-codex.log"
     [[ -f "$audit_record" ]] && attempt_ctx="$audit_record"
     return 1
