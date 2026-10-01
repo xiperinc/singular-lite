@@ -95,6 +95,7 @@ FIXTURE_RUNNER=""
 FIXTURE_MODE=""
 CASE_MAX_RETRIES="1"
 REVIEW_MAX_ROUNDS="3"
+CASE_AUDIT_INFRA_MAX="0"
 SEED_HEAD=""
 CAMPAIGN_BINDING=""
 ENGINE_FINGERPRINT=""
@@ -264,6 +265,7 @@ PY
     ;;
   auditor)
     call="$(bump auditor)"
+    [[ -z "$prompt" ]] || cp "$prompt" "$FIRST_AUDIT_COUNTERS/auditor-prompt-$call.md"
     host_report="$(dirname "$output")/audit-verification.json"
     [[ -f "$host_report" ]] || exit 101
     status="$($FIRST_AUDIT_PYTHON - "$host_report" <<'PY'
@@ -287,7 +289,11 @@ canonical = "FINDING_ALPHA: replace the seeded implementation"
 verdict = "needs-fix"
 findings = [canonical]
 required_fixes = [canonical]
-if mode in {"accept", "required-fixes"} and call > 1:
+if mode == "format-correction":
+    verdict = "accepted"
+    findings = []
+    required_fixes = []
+elif mode in {"accept", "required-fixes"} and call > 1:
     verdict = "accepted"
     findings = []
     required_fixes = []
@@ -355,6 +361,9 @@ record = {
 }
 if classified:
     record["classifiedFindings"] = classified
+if mode == "format-correction" and call == 1:
+    # Schema-valid, host-invalid: a first review that invents prior IDs.
+    record["findingsStatus"] = {"F1": "resolved"}
 with open(os.environ["FIRST_AUDIT_OUTPUT"], "w", encoding="utf-8") as handle:
     json.dump(record, handle)
     handle.write("\n")
@@ -395,7 +404,7 @@ run_engine() {
       SINGULAR_REQUIRE_AUDIT=1 \
       SINGULAR_AUDIT_VERIFY=0 \
       SINGULAR_WORKER_INFRA_MAX=0 \
-      SINGULAR_AUDIT_INFRA_MAX=0 \
+      SINGULAR_AUDIT_INFRA_MAX="${CASE_AUDIT_INFRA_MAX:-0}" \
       SINGULAR_MAX_RETRIES="$CASE_MAX_RETRIES" \
       SINGULAR_DECIDER_FAST=1 \
       SINGULAR_REVIEW_MAX_ROUNDS="${REVIEW_MAX_ROUNDS:-3}" \
@@ -406,6 +415,8 @@ run_engine() {
 make_fixture() {
   local name="$1" mode="$2" max_retries="$3" risk_tier="$4"
   REVIEW_MAX_ROUNDS="${5:-3}"
+  # Frozen into the campaign at start, so it is a fixture property.
+  CASE_AUDIT_INFRA_MAX="${6:-0}"
   FIXTURE_ROOT="$scratch/$name/repo"
   FIXTURE_COUNTERS="$scratch/$name/counters"
   FIXTURE_RUNNER="$scratch/$name/runner.sh"
@@ -959,6 +970,33 @@ JSON
   echo "ok: pre-filled review rounds exhaust before auditor launch"
 }
 
+test_findings_status_format_correction() {
+  local name=format-correction events
+  make_fixture "$name" format-correction 1 normal 2 1
+  reconcile "$name" dispatch
+  # An invented findingsStatus on a first review is an auditor-format failure:
+  # one fresh auditor correction, no worker rerun, no product or review charge.
+  assert_eq "$(calls worker)" "1" "$name worker calls"
+  assert_eq "$(calls auditor)" "2" "$name auditor calls (one fresh correction)"
+  events="$(cat "$FIXTURE_ROOT/.singular-state/events.ndjson")"
+  assert_contains "$events" '"type":"l1.audit_format_invalid"' "$name format failure"
+  assert_contains "$events" '"budgetDomain":"auditor-infrastructure"' "$name audit-infra domain"
+  assert_contains "$events" '"type":"l1.audit_repair_retry"' "$name repair prompt used"
+  assert_contains "$events" '"type":"l1.task_accepted"' "$name accepted after correction"
+  assert_eq "$(event_count review.policy_applied)" "1" "$name one semantic review round"
+  assert_not_contains "$events" '"type":"l1.product_repair_budget_consumed"' \
+    "$name no product repair"
+  grep -q 'findingsStatus must be omitted' "$FIXTURE_COUNTERS/auditor-prompt-2.md" \
+    || fail "$name correction prompt lacks the host diagnostic"
+  grep -q 'When the host supplied no prior findings, OMIT findingsStatus.' \
+    "$FIXTURE_COUNTERS/auditor-prompt-1.md" \
+    || fail "$name initial auditor prompt lacks the findingsStatus fragment"
+  assert_attempt_count 1
+  finish_and_prove_no_redispatch "$name" 1 2
+  assert_terminal_contract completed "" accepted 0
+  echo "ok: invented findingsStatus spends one fresh auditor correction, never a worker pass"
+}
+
 echo "NOTE: deterministic fixture provider; this test is not live unattended-provider evidence"
 case "${FIRST_AUDIT_CASE:-all}" in
   identity) test_feedback_identity_contract ;;
@@ -972,6 +1010,7 @@ case "${FIRST_AUDIT_CASE:-all}" in
   p2-only) test_p2_only_accepted_without_repair ;;
   p1-then-accept) test_p1_then_accept ;;
   rounds-exhausted) test_rounds_exhausted_without_auditor ;;
+  format-correction) test_findings_status_format_correction ;;
   all)
     test_feedback_identity_contract
     test_corrected_after_fresh_audit
@@ -984,6 +1023,7 @@ case "${FIRST_AUDIT_CASE:-all}" in
     test_p2_only_accepted_without_repair
     test_p1_then_accept
     test_rounds_exhausted_without_auditor
+    test_findings_status_format_correction
     ;;
   *) fail "unknown FIRST_AUDIT_CASE=${FIRST_AUDIT_CASE}" ;;
 esac

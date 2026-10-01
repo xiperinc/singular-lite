@@ -790,11 +790,16 @@ PY
 
 # ---- Auditor prompt assembly ----
 audit_prompt="$run_dir/auditor-prompt.md"
+SINGULAR_AUDIT_FINDINGS_STATUS_CONTRACT="$(singular_audit_findings_status_contract)" \
 python3 - "$SINGULAR_ORCH_DIR/prompts/auditor.md" "$audit_prompt" "$task_json" "$run_id" \
   "$run_dir" "$SCRIPT_DIR" "$audit_write_contract" <<'PY'
 import json
+import os
 import sys
 template_path, out_path, task_raw, run_id, run_dir, script_dir, audit_contract = sys.argv[1:8]
+findings_status_contract = os.environ.get("SINGULAR_AUDIT_FINDINGS_STATUS_CONTRACT", "").strip()
+if not findings_status_contract:
+    raise SystemExit("findingsStatus output contract is unavailable")
 t = json.loads(task_raw)
 with open(template_path, "r", encoding="utf-8") as f:
     tmpl = f.read().replace("[TASK-ID]", t["taskId"])
@@ -819,9 +824,12 @@ block merge. P1 is a correctness or contract break that must block merge.
 P2 is a non-blocking defect. P3 is a nit, style note, or suggestion. P0/P1
 items MUST also carry non-blank trigger, impact, and requirement. findings[]
 and requiredFixes[] strings MUST correspond to classified items. The host
-records P2/P3 as non-blocking backlog; do not emit reviewPolicy (host-owned).
-No additional top-level fields are permitted except optional findingsStatus
-and classifiedFindings. Emit ONLY that JSON object."""
+records P2/P3 as non-blocking backlog. No additional top-level fields are
+permitted except optional findingsStatus and classifiedFindings.
+
+{findings_status_contract}
+
+Emit ONLY that JSON object."""
 else:
     verdict_contract = f"""Your FINAL message MUST be a single JSON object matching
 `schemas/orchestration/audit-verdict.v0.schema.json`: schema
@@ -2769,9 +2777,11 @@ validate_audit_record() {
 render_audit_repair_prompt() {
   local base_prompt="$1" output_prompt="$2" error_file="$3"
   local invalid_response_file="$4" contract="$5"
+  SINGULAR_AUDIT_FINDINGS_STATUS_CONTRACT="$(singular_audit_findings_status_contract)" \
   python3 - "$base_prompt" "$output_prompt" "$error_file" \
     "$invalid_response_file" "$contract" <<'PY'
 import json
+import os
 import sys
 
 base_path, output_path, error_path, invalid_path, contract = sys.argv[1:6]
@@ -2793,12 +2803,20 @@ if contract == "v1":
 Required top-level members: schema, taskId, runId, branch, verdict,
 evidenceReviewed, verificationResults, commandsRun, findings, requiredFixes,
 and rationale. No other top-level members are allowed except optional
-findingsStatus, classifiedFindings, and reviewPolicy. Each
+findingsStatus and classifiedFindings. Each
 verificationResults[] object requires exactly status, command, evidenceRefs,
 and rationale; optional integer exitCode is also allowed. status must be one
 of passed, failed-product, inconclusive-infrastructure, or
 not-rerun-evidence-verified. command and rationale must be non-empty strings.
 evidenceRefs must be an array of non-empty strings."""
+    # The shared findingsStatus/severity contract, once: a base prompt rendered
+    # by the initial or re-audit renderer already carries it.
+    findings_status_contract = os.environ.get(
+        "SINGULAR_AUDIT_FINDINGS_STATUS_CONTRACT", "").strip()
+    if not findings_status_contract:
+        raise SystemExit("findingsStatus output contract is unavailable")
+    if findings_status_contract not in base:
+        required_contract += "\n\n" + findings_status_contract
 else:
     required_contract = """Return exactly one audit-verdict.v0 JSON object.
 Required top-level members: schema, taskId, runId, branch, verdict,
@@ -2821,7 +2839,8 @@ repair = f"""
 
 Your previous response was rejected before its verdict could influence
 acceptance. Produce a corrected response from a fresh evaluation. Do not repeat
-the invalid shape.
+the invalid shape. A correction is not an appeal: do not drop or demote a
+finding the invalid response reported as P0 or P1.
 
 {required_contract}
 
@@ -2982,14 +3001,21 @@ run_audit_phase() {
   # plain copy (byte-identical to the base audit prompt). Renderer failure ->
   # warning event + fall back to the base audit prompt.
   local prior_head active_audit_prompt="$run_dir/auditor-active-prompt.md"
+  # The host's record of which prior finding IDs this auditor is shown. It is
+  # the only authority for findingsStatus validation below: whether this is a
+  # "first" review is decided by that set, not by the attempt number.
+  local audit_prior_findings="$run_dir/audit-prior-findings-attempt-${n}.json"
+  rm -f "$audit_prior_findings"
   prior_head="$(singular_json_field "$run_dir/reviewer-capsule.json" auditedHeadSha 2>/dev/null || true)"
   export SINGULAR_REVIEW_ROUND_LABEL="Round $n of $review_max_rounds"
   if singular_render_reaudit_prompt "$active_audit_prompt" "$audit_prompt" "$run_dir" "$n" \
-       "$prior_head" "$head_sha" "$worktree" 2>/dev/null; then
+       "$prior_head" "$head_sha" "$worktree" "$audit_prior_findings" 2>/dev/null; then
     :
   else
     singular_append_event "l1.reaudit_prompt_fallback" "re-audit prompt render failed; using base audit prompt" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n}" || true
+    # The base prompt supplies no prior findings.
+    singular_audit_prior_findings_write "$audit_prior_findings" "$n" 2>/dev/null || true
     if cp "$audit_prompt" "$active_audit_prompt" 2>/dev/null; then
       # Same n>=2 gate as the renderer: attempt 1 stays byte-identical to the base.
       [[ "$n" -ge 2 ]] && singular_review_round_policy_append "$active_audit_prompt" 2>/dev/null || true
@@ -3583,6 +3609,24 @@ PY
         cp "$audit_record" "$audit_record.invalid.json" 2>/dev/null || true
         singular_append_event "l1.audit_invalid_verdict" "legacy auditor verdict failed schema validation" \
           "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"detail\":\"$(head -1 "$run_dir/audit-validate.err" 2>/dev/null | tr '"' "'" | head -c 300)\"}"
+      elif [[ "$audit_schema" == "singular.orchestration.audit-verdict.v1" ]] \
+          && ! python3 "$SCRIPT_DIR/audit-verdict-host-bind.py" --validate-audit-format \
+            --verdict "$audit_record" --prior-findings "$audit_prior_findings" \
+            >/dev/null 2>"$run_dir/audit-format.err"; then
+        # findingsStatus against the host-supplied prior findings, and the
+        # P0/P1 support the generic schema checker cannot express. A violation
+        # is an auditor-format failure: it spends the one fresh auditor
+        # correction (auditor-infrastructure domain), never a worker pass.
+        infra_reason="invalid-audit-format"
+        audit_repair_response_file="$run_dir/audit-attempt-${n}-try-${audit_try}.invalid.json"
+        audit_repair_error_file="$run_dir/audit-attempt-${n}-try-${audit_try}.format.err"
+        cp "$audit_record" "$audit_repair_response_file"
+        cp "$run_dir/audit-format.err" "$audit_repair_error_file"
+        cp "$audit_record" "$audit_record.invalid.json" 2>/dev/null || true
+        singular_append_event "l1.audit_format_invalid" \
+          "auditor verdict failed host findingsStatus/severity validation" \
+          "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"try\":$audit_try,\"budgetDomain\":\"auditor-infrastructure\",\"consumesProductRepairBudget\":false,\"detail\":\"$(head -1 "$run_dir/audit-format.err" 2>/dev/null | tr '"\\' "''" | head -c 300)\"}" \
+          || true
       elif [[ "$audit_schema" == "singular.orchestration.audit-verdict.v1" ]]; then
         # Schema validity is not enough: the model must reproduce the
         # host-owned verification aggregate exactly. A model cannot upgrade

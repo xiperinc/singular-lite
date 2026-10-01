@@ -179,6 +179,137 @@ def normalize(
     return host
 
 
+# ---- Audit-format validation (findingsStatus + blocking support) -----------
+# A pure check over the model's verdict and the host's record of the prior
+# findings it supplied to that auditor (singular_render_reaudit_prompt writes
+# it). A violation is an audit-format failure: the driver spends its one fresh
+# auditor correction on it, never a product repair. Nothing here coerces or
+# deletes model output; the verdict file is only read.
+
+FINDINGS_STATUS_VALUES = ("resolved", "still-open")
+BLOCKING_SEVERITIES = ("P0", "P1")
+BLOCKING_SUPPORT = ("trigger", "impact", "requirement")
+
+
+def finding_ledger_id(text: Any) -> str:
+    """The findings-ledger identity (lib.sh singular_findings_ledger_update)."""
+    import hashlib
+
+    normalized = " ".join(str(text).replace("`", "").lower().split())
+    return "f-" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
+
+
+def read_prior_findings(path: Path) -> tuple[list[str], list[str]]:
+    record = read_object(path, "host prior-finding record")
+    supplied = record.get("suppliedIds")
+    required = record.get("requiredIds")
+    if not isinstance(supplied, list) or not isinstance(required, list):
+        raise ValueError("host prior-finding record lacks suppliedIds/requiredIds arrays")
+    if not all(isinstance(item, str) and item.strip() for item in supplied + required):
+        raise ValueError("host prior-finding record contains a blank or non-string id")
+    if not set(required) <= set(supplied):
+        raise ValueError("host prior-finding record requires an id it did not supply")
+    return list(supplied), list(required)
+
+
+def validate_findings_status(
+    verdict: dict[str, Any], supplied: list[str], required: list[str]
+) -> None:
+    present = "findingsStatus" in verdict
+    status = verdict.get("findingsStatus")
+    if not present:
+        if required:
+            raise ValueError(
+                "findingsStatus is missing but the host supplied prior findings; "
+                "report every required id: " + ", ".join(required)
+            )
+        return
+    if not isinstance(status, dict):
+        raise ValueError(
+            "findingsStatus must be a JSON object mapping finding IDs to "
+            f"\"resolved\" or \"still-open\", got {type(status).__name__}"
+        )
+    for key, value in status.items():
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError("findingsStatus contains a blank finding id")
+        if not isinstance(value, str) or value not in FINDINGS_STATUS_VALUES:
+            raise ValueError(
+                f"findingsStatus[{key!r}] must be exactly \"resolved\" or "
+                f"\"still-open\", got {value!r}"
+            )
+    if not supplied:
+        if status:
+            raise ValueError(
+                "findingsStatus must be omitted: the host supplied no prior findings, "
+                "so these ids are invented: " + ", ".join(sorted(status))
+            )
+        return
+    unknown = sorted(set(status) - set(supplied))
+    if unknown:
+        raise ValueError(
+            "findingsStatus reports ids the host did not supply: " + ", ".join(unknown)
+        )
+    missing = [ident for ident in required if ident not in status]
+    if missing:
+        raise ValueError(
+            "findingsStatus omits required prior finding ids: " + ", ".join(missing)
+        )
+    # "resolved" is an auditor assessment, not a host fact; it cannot erase a
+    # blocking finding on its own. The converse is checkable here: an accepted
+    # verdict may keep a prior finding still-open only by carrying it in its own
+    # findings/requiredFixes, where the review policy must classify it (P2/P3
+    # backlog, or blocking). Otherwise acceptance would silently close it.
+    if verdict.get("verdict") == "accepted":
+        carried = {
+            finding_ledger_id(item)
+            for key in ("findings", "requiredFixes")
+            for item in (verdict.get(key) if isinstance(verdict.get(key), list) else [])
+            if isinstance(item, str)
+        }
+        dropped = sorted(
+            ident for ident, value in status.items()
+            if value == "still-open" and ident not in carried
+        )
+        if dropped:
+            raise ValueError(
+                "an accepted verdict reports prior findings still-open without "
+                "carrying them in findings/requiredFixes: " + ", ".join(dropped)
+            )
+
+
+def validate_blocking_support(verdict: dict[str, Any]) -> None:
+    """Mirror of the schema's conditional P0/P1 requirement.
+
+    singular_json_schema_check does not implement allOf/if/then, so the stdlib
+    host check is what actually enforces it for new responses.
+    """
+    items = verdict.get("classifiedFindings")
+    if items is None:
+        return
+    if not isinstance(items, list):
+        raise ValueError("classifiedFindings must be an array")
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise ValueError(f"classifiedFindings[{index}] must be an object")
+        if item.get("severity") not in BLOCKING_SEVERITIES:
+            continue
+        for field in BLOCKING_SUPPORT:
+            value = item.get(field)
+            if not isinstance(value, str) or not re.search(r"\S", value):
+                raise ValueError(
+                    f"classifiedFindings[{index}] ({item.get('severity')}) requires "
+                    f"nonblank {field}; missing support never downgrades a finding"
+                )
+
+
+def validate_audit_format(verdict_path: Path, prior_findings: Path) -> str:
+    verdict = read_object(verdict_path, "audit verdict")
+    supplied, required = read_prior_findings(prior_findings)
+    validate_findings_status(verdict, supplied, required)
+    validate_blocking_support(verdict)
+    return "ok"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host-report", type=Path)
@@ -194,13 +325,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-run", default="")
     parser.add_argument("--expected-branch", default="")
     parser.add_argument("--expected-head", default="")
+    parser.add_argument("--validate-audit-format", action="store_true",
+                        help="check findingsStatus and P0/P1 support against "
+                             "the host's --prior-findings record")
+    parser.add_argument("--prior-findings", type=Path)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     try:
-        if args.validate_identity or args.validate_acceptance:
+        if args.validate_audit_format:
+            if args.verdict is None or args.prior_findings is None:
+                raise ValueError(
+                    "--validate-audit-format requires --verdict and --prior-findings"
+                )
+            print(validate_audit_format(args.verdict, args.prior_findings))
+        elif args.validate_identity or args.validate_acceptance:
             if args.verdict is None or not all((
                 args.expected_task, args.expected_run,
                 args.expected_branch, args.expected_head,
