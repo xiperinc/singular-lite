@@ -185,7 +185,13 @@ run_provider() {
   local root="${5:-$repo}" target="${6:-$branch}" fallback="${7:-callsite-fallback}"
   local runner_provider="$provider"
   [[ "$provider" == "cursor-agent" ]] && runner_provider="cursor"
+  # An explicitly selected JSON config must exist (lib.sh refuses a missing
+  # selection); the legacy repository declares no config at all.
+  local -a config_selection=()
+  [[ -f "$root/singular.config.json" ]] \
+    && config_selection=(SINGULAR_JSON_CONFIG_FILE="$root/singular.config.json")
   env \
+    -u SINGULAR_JSON_CONFIG_FILE \
     -u SINGULAR_CAPABILITY_PROFILES_JSON \
     -u SINGULAR_ROLE_PROFILES_JSON \
     -u SINGULAR_CAPABILITIES_JSON \
@@ -195,7 +201,7 @@ run_provider() {
     FAKE_INVOCATION_ID="$invocation" \
     SINGULAR_ROOT="$root" \
     SINGULAR_STATE_DIR="$root/.singular-state" \
-    SINGULAR_JSON_CONFIG_FILE="$root/singular.config.json" \
+    ${config_selection[@]+"${config_selection[@]}"} \
     SINGULAR_TARGET_BRANCH="$target" \
     SINGULAR_CODEX_BIN="$fake_bin/codex" \
     SINGULAR_CODEX_TIMEOUT_SEC=0 \
