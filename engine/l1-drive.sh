@@ -2194,6 +2194,95 @@ rehydrate_inject_packet() {
   return 0
 }
 
+# ---- Provider window at invocation boundaries (0.23.4) ----------------------
+# A validated provider limit (usage limit, entitlement, overload) is a fact
+# about the provider, not about the candidate. It outranks every packet or
+# transport classification of the same invocation, and it is checked before
+# every actual launch -- worker tries, resume fallbacks, auditor tries and the
+# decider -- against the shared backoff record keyed to the provider that ROLE
+# would launch. A deferral launches nothing further, charges neither product
+# repair nor an infrastructure allowance, and ends the drive non-accepting
+# (exit 3) with the pending phase recorded. Before this, the worker loop let a
+# quota fall through into packet validation, so a provider refusal became
+# worker-no-packet and was charged to product repair.
+l1_provider_deferral_json=""
+
+# args: role phase attempt failure_class evidence_ref invocation_started(yes|no)
+# Records the deferral (event + l1_provider_deferral_json) from the shared
+# backoff record; never fails the caller.
+l1_provider_deferred() {
+  local role="$1" phase="$2" attempt="$3" failure_class="$4" evidence_ref="$5" started="$6"
+  l1_provider_deferral_json="$(python3 - "$task_id" "$run_id" "$role" "$phase" "$attempt" \
+    "$failure_class" "$evidence_ref" "$started" "$SINGULAR_PLANNER_BACKOFF_FILE" <<'PY' 2>/dev/null || true
+import json
+import sys
+
+(task_id, run_id, role, phase, attempt, failure_class, evidence_ref, started,
+ backoff_path) = sys.argv[1:10]
+try:
+    backoff = json.load(open(backoff_path, encoding="utf-8"))
+except Exception:
+    backoff = {}
+record = {
+    "taskId": task_id,
+    "runId": run_id,
+    "attempt": int(attempt) if attempt.isdigit() else attempt,
+    "role": role,
+    "phase": phase,
+    "failureClass": failure_class,
+    "provider": backoff.get("provider"),
+    "providerCode": backoff.get("providerCode"),
+    "until": backoff.get("until"),
+    "evidenceRef": evidence_ref or backoff.get("evidenceRef"),
+    "invocationStarted": started == "yes",
+    "budgetDomain": "provider-window",
+    "consumesProductRepairBudget": False,
+    "consumesInfrastructureBudget": False,
+}
+print(json.dumps(record, separators=(",", ":")))
+PY
+)"
+  [[ -n "$l1_provider_deferral_json" ]] \
+    || l1_provider_deferral_json="{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"$role\",\"phase\":\"$phase\",\"failureClass\":\"$failure_class\"}"
+  echo "  $role provider window closed ($failure_class); deferring the $phase phase"
+  singular_append_event "l1.provider_deferred" \
+    "provider window closed for the $role; $phase phase deferred without a product or infrastructure charge" \
+    "$l1_provider_deferral_json" || true
+  return 0
+}
+
+# Pre-launch check. args: role runner phase attempt. Returns 0 (and records the
+# deferral) when the window for the provider this role would launch is still
+# closed; 1 when the launch is admitted. An expired record admits the launch.
+l1_provider_window_preflight() {
+  local role="$1" runner="$2" phase="$3" attempt="$4" record failure_class
+  record="$(singular_provider_window_active_json "$runner" 2>/dev/null)" || return 1
+  failure_class="$(printf '%s' "$record" | python3 -c \
+    'import json,sys; print(json.load(sys.stdin).get("failureClass") or "quota")' 2>/dev/null || echo quota)"
+  l1_provider_deferred "$role" "$phase" "$attempt" "$failure_class" "" no
+  return 0
+}
+
+# Post-launch check on THIS invocation's own runner result. args: role phase
+# attempt result_file. Returns 0 (backoff armed through the shared state owner,
+# deferral recorded) when the result is validated provider-window evidence.
+l1_provider_window_observed() {
+  local role="$1" phase="$2" attempt="$3" result_file="$4" failure_class
+  failure_class="$(singular_runner_provider_window_class "$result_file" "$role")" || return 1
+  singular_planner_backoff_set "$failure_class" "$run_id" "$task_id" "$result_file" \
+    >/dev/null 2>&1 || true
+  l1_provider_deferred "$role" "$phase" "$attempt" "$failure_class" "$result_file" yes
+  return 0
+}
+
+# Clear a result path before the launch that will write it, so a sidecar left by
+# an earlier invocation can never be read as this invocation's evidence.
+l1_clear_runner_result() {
+  local result_file="$1"
+  [[ -n "$result_file" ]] || return 0
+  rm -f "$result_file" "${result_file%.json}.provider-error.json" 2>/dev/null || true
+}
+
 # Worker invocation through scope/gate/commit/packet stamping + validation.
 # Sets head_sha, attempt_failure, attempt_ctx, worker_rc. Returns 0 when a
 # validated packet exists on a committed branch, 1 otherwise.
@@ -2244,10 +2333,10 @@ run_worker_phase() {
   # model ran fine and emitted prose: output EXISTS but carries no packet) — which
   # the packet-validation path below already classifies. We re-run ONLY the worker
   # up to SINGULAR_WORKER_INFRA_MAX extra times; this never bumps the lease retryCount.
-  # QUOTA GUARD: singular_planner_failure_class returns "quota" (priority over timeout/
-  # empty) when the log carries a usage/rate-limit marker; we must NOT swallow that
-  # as worker-infra, so a quota classification falls through to the normal path
-  # (the breaker/quota-backoff machinery owns it).
+  # PROVIDER WINDOW: a validated quota/overload/entitlement result on THIS
+  # invocation is neither worker-infra nor a packet problem. It ends the phase
+  # as provider-deferred before packet validation (see l1_provider_window_*),
+  # and a still-closed window is checked before every launch.
   local worker_try worker_fc worker_result_file worker_try_log worker_classification_log
   local worker_context_status worker_context_denial
 
@@ -2373,6 +2462,12 @@ run_worker_phase() {
   for ((worker_try=0; worker_try<=worker_infra_max; worker_try++)); do
     worker_try_log="$run_dir/worker-attempt-${n}-try-${worker_try}.log"
     worker_classification_log="$worker_try_log"
+    # Provider window first: a closed window launches nothing, so it is checked
+    # before the retry is announced and before a one-shot continuation is claimed.
+    if l1_provider_window_preflight implementer "$l2_runner" implement "$n"; then
+      attempt_failure="provider-deferred"; attempt_ctx="$SINGULAR_PLANNER_BACKOFF_FILE"
+      return 1
+    fi
     if [[ "$worker_try" -gt 0 ]]; then
       singular_append_event "worker.infra_retry" "worker infra failure; re-running worker only" \
         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"try\":$worker_try,\"reason\":\"$worker_fc\",\"budgetDomain\":\"worker-infrastructure\",\"maxExtraRetries\":$worker_infra_max,\"consumesProductRepairBudget\":false}"
@@ -2392,6 +2487,7 @@ run_worker_phase() {
       echo "  running L2 worker via $l2_runner_basename..."
       worker_result_file="$run_dir/implementer-attempt-${n}-try-${worker_try}-runner-result.json"
     fi
+    l1_clear_runner_result "$worker_result_file"
     worker_rc=0
     worker_capability_profile="${SINGULAR_IMPLEMENTER_CAPABILITY_PROFILE:-implementer-core}"
     singular_runner_contract_prepare \
@@ -2452,18 +2548,31 @@ run_worker_phase() {
       >>"$run_dir/worker-codex.log" || true
     cat "$worker_try_log" >>"$run_dir/worker-codex.log" 2>/dev/null || true
 
-    # Resume-refused (86) or resume-failure (86): the runner could not reuse the
-    # session. Fall back to FRESH within the SAME try (don't consume an infra/main
-    # retry on a resume miss). This is a pure optimization miss; the task outcome
-    # is unchanged.
+    # This invocation's own validated provider evidence outranks its exit code
+    # (including 86/87) and anything its output does or does not contain.
+    if l1_provider_window_observed implementer implement "$n" "$worker_result_file"; then
+      attempt_failure="provider-deferred"; attempt_ctx="$worker_result_file"
+      return 1
+    fi
+
+    # Resume-refused (86): the runner refused the resume before any provider
+    # work started. Fall back to FRESH within the SAME try (don't consume an
+    # infra/main retry on a resume miss). This is a pure optimization miss; the
+    # task outcome is unchanged. A resume that started and failed (87) is not
+    # free: it is classified below as a worker-infrastructure failure.
     if [[ "$worker_rc" -eq 86 && -n "$worker_resume_id" && "$worker_resume_failed" == "no" ]]; then
       worker_resume_failed="yes"
       singular_append_event "context.resume_failed" "implementer resume failed; re-running fresh" \
-        "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"implementer\",\"attempt\":$n,\"sessionId\":\"$worker_resume_id\"}" || true
+        "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"implementer\",\"attempt\":$n,\"sessionId\":\"$worker_resume_id\",\"resumeOutcome\":\"refused\",\"consumesInfrastructureBudget\":false}" || true
       worker_strategy="fresh"; worker_strategy_reason="resume-failed"
+      if l1_provider_window_preflight implementer "$l2_runner" implement "$n"; then
+        attempt_failure="provider-deferred"; attempt_ctx="$SINGULAR_PLANNER_BACKOFF_FILE"
+        return 1
+      fi
       echo "  worker resume failed; falling back to fresh run..."
       worker_classification_log="$run_dir/worker-attempt-${n}-try-${worker_try}-resume-fallback.log"
       worker_result_file="$run_dir/implementer-attempt-${n}-try-${worker_try}-resume-fallback-runner-result.json"
+      l1_clear_runner_result "$worker_result_file"
       worker_rc=0
       rm -f "$run_dir/last-message.json"
       prepare_worker_context_base || return 1
@@ -2510,28 +2619,43 @@ run_worker_phase() {
       printf -- '--- worker resume-fallback try %s (attempt %s) ---\n' "$worker_try" "$n" \
         >>"$run_dir/worker-codex.log" || true
       cat "$worker_classification_log" >>"$run_dir/worker-codex.log" 2>/dev/null || true
+      if l1_provider_window_observed implementer implement "$n" "$worker_result_file"; then
+        attempt_failure="provider-deferred"; attempt_ctx="$worker_result_file"
+        return 1
+      fi
     fi
 
-    # Classify infra-vs-not. quota -> NOT infra (let the normal/breaker path own
-    # it). timeout(rc 124)/empty-output(rc!=0, empty file) -> infra: retry the
-    # worker only. invalid-output (output exists, rc 0) -> NOT infra; that is a
+    # Classify infra-vs-not. Provider windows were handled above from this
+    # invocation's own evidence. timeout(rc 124)/empty-output(rc!=0, empty file)
+    # -> infra: retry the worker only. A started resume that failed (87) is infra
+    # too: its fresh relaunch is the next try and pays the worker-infrastructure
+    # allowance. invalid-output (output exists, rc 0) -> NOT infra; that is a
     # potential worker-no-packet handled by packet validation below.
-    worker_fc="$(singular_planner_failure_class "$worker_classification_log" "$worker_rc" \
-      "$run_dir/last-message.json" "$worker_result_file")"
-    # "empty-output" only counts as infra when the runner itself failed (rc!=0);
-    # a rc-0 run that emitted an empty file is a clean run with no packet (prose),
-    # which is worker-no-packet, owned by the packet-validation path — NOT infra.
-    [[ "$worker_fc" == "empty-output" && "$worker_rc" -eq 0 ]] && worker_fc="invalid-output"
+    if [[ "$worker_rc" -eq 87 && -n "$worker_resume_id" && "$worker_resume_failed" == "no" ]]; then
+      worker_resume_failed="yes"
+      singular_append_event "context.resume_failed" "implementer resume started and failed; fresh relaunch is an infrastructure retry" \
+        "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"implementer\",\"attempt\":$n,\"sessionId\":\"$worker_resume_id\",\"resumeOutcome\":\"started-and-failed\",\"consumesInfrastructureBudget\":true}" || true
+      worker_strategy="fresh"; worker_strategy_reason="resume-failed"
+      worker_fc="resume-failed"
+    else
+      worker_fc="$(singular_planner_failure_class "$worker_classification_log" "$worker_rc" \
+        "$run_dir/last-message.json" "$worker_result_file")"
+      # "empty-output" only counts as infra when the runner itself failed (rc!=0);
+      # a rc-0 run that emitted an empty file is a clean run with no packet (prose),
+      # which is worker-no-packet, owned by the packet-validation path — NOT infra.
+      [[ "$worker_fc" == "empty-output" && "$worker_rc" -eq 0 ]] && worker_fc="invalid-output"
+    fi
     case "$worker_fc" in
-      timeout|empty-output) : ;;          # infra: loop to re-run the worker
-      *) break ;;                         # quota / codex-exit-with-output / clean: stop retrying
+      timeout|empty-output|resume-failed) : ;;  # infra: loop to re-run the worker
+      *) break ;;                               # codex-exit-with-output / clean: stop retrying
     esac
   done
   singular_append_event "l1.worker_completed" "l2 worker completed" \
     "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\"}"
   # Persisted worker infra failure (still timeout/empty after the retry budget):
   # surface worker-infra so the fast-path decider parks it; retryCount untouched.
-  if [[ "$worker_fc" == "timeout" || "$worker_fc" == "empty-output" ]]; then
+  if [[ "$worker_fc" == "timeout" || "$worker_fc" == "empty-output" \
+      || "$worker_fc" == "resume-failed" ]]; then
     singular_append_event "worker.infra_exhausted" \
       "worker infrastructure retry budget exhausted" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"budgetDomain\":\"worker-infrastructure\",\"retriesUsed\":$worker_infra_max,\"maxExtraRetries\":$worker_infra_max,\"consumesProductRepairBudget\":false}" \
@@ -3364,6 +3488,10 @@ PY
     return 1
   fi
   for ((audit_try=0; audit_try<=audit_infra_max; audit_try++)); do
+    if l1_provider_window_preflight auditor "$audit_runner" audit "$n"; then
+      attempt_failure="provider-deferred"; attempt_ctx="$SINGULAR_PLANNER_BACKOFF_FILE"
+      return 1
+    fi
     if [[ "$audit_try" -gt 0 ]]; then
       singular_append_event "audit.infra_retry" "auditor infra failure; re-running auditor only" \
         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"try\":$audit_try,\"reason\":\"$infra_reason\",\"budgetDomain\":\"auditor-infrastructure\",\"maxExtraRetries\":$audit_infra_max,\"consumesProductRepairBudget\":false}"
@@ -3401,6 +3529,7 @@ PY
       echo "  running auditor via $audit_runner_basename (read-only)..."
       audit_result_file="$run_dir/auditor-attempt-${n}-try-${audit_try}-runner-result.json"
     fi
+    l1_clear_runner_result "$audit_result_file"
     audit_rc=0
     rm -f "$audit_record"
     printf -- '--- auditor try %s (attempt %s) ---\n' "$audit_try" "$n" >>"$auditor_log" || true
@@ -3456,16 +3585,38 @@ PY
     l1_status auditing active "Classifying the auditor response for attempt $n" true \
       "Validate the audit verdict" "" "audit-controller"
 
-    # Resume-refused/failure (86): fall back to FRESH within the SAME try (don't
-    # consume an infra retry on a resume miss). Pure optimization miss.
+    # This invocation's own validated provider evidence outranks its exit code
+    # (including 86/87) and whatever record it did or did not write.
+    if l1_provider_window_observed auditor audit "$n" "$audit_result_file"; then
+      attempt_failure="provider-deferred"; attempt_ctx="$audit_result_file"
+      return 1
+    fi
+
+    # Resume-refused (86, no provider work started): fall back to FRESH within
+    # the SAME try (don't consume an infra retry on a resume miss). Pure
+    # optimization miss. A started resume that failed (87) is not free: it is
+    # an auditor-infrastructure failure, and the fresh relaunch is the next try.
+    if [[ "$audit_rc" -eq 87 && -n "$reviewer_resume_id" && "$reviewer_resume_failed" == "no" ]]; then
+      reviewer_resume_failed="yes"
+      singular_append_event "context.resume_failed" "reviewer resume started and failed; fresh relaunch is an infrastructure retry" \
+        "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"reviewer\",\"attempt\":$n,\"sessionId\":\"$reviewer_resume_id\",\"resumeOutcome\":\"started-and-failed\",\"consumesInfrastructureBudget\":true}" || true
+      reviewer_strategy="fresh"; reviewer_strategy_reason="resume-failed"
+      infra_reason="resume-failed"
+      continue
+    fi
     if [[ "$audit_rc" -eq 86 && -n "$reviewer_resume_id" && "$reviewer_resume_failed" == "no" ]]; then
       reviewer_resume_failed="yes"
       singular_append_event "context.resume_failed" "reviewer resume failed; re-running fresh" \
-        "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"reviewer\",\"attempt\":$n,\"sessionId\":\"$reviewer_resume_id\"}" || true
+        "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"reviewer\",\"attempt\":$n,\"sessionId\":\"$reviewer_resume_id\",\"resumeOutcome\":\"refused\",\"consumesInfrastructureBudget\":false}" || true
       reviewer_strategy="fresh"; reviewer_strategy_reason="resume-failed"
+      if l1_provider_window_preflight auditor "$audit_runner" audit "$n"; then
+        attempt_failure="provider-deferred"; attempt_ctx="$SINGULAR_PLANNER_BACKOFF_FILE"
+        return 1
+      fi
       echo "  auditor resume failed; falling back to fresh run..."
       audit_result_file="$run_dir/auditor-attempt-${n}-try-${audit_try}-resume-fallback-runner-result.json"
       audit_context_receipt="$run_dir/context-invocation-review-target-attempt-${n}-try-${audit_try}-fallback.json"
+      l1_clear_runner_result "$audit_result_file"
       audit_rc=0
       rm -f "$audit_record"
       rm -f "$audit_context_receipt"
@@ -3516,12 +3667,17 @@ PY
       fi
       l1_status auditing active "Classifying the auditor response for attempt $n" true \
         "Validate the audit verdict" "" "audit-controller"
+      if l1_provider_window_observed auditor audit "$n" "$audit_result_file"; then
+        attempt_failure="provider-deferred"; attempt_ctx="$audit_result_file"
+        return 1
+      fi
     fi
     audit_fc="$(singular_planner_failure_class "$auditor_log" "$audit_rc" \
       "$audit_record" "$audit_result_file")"
-    # Structured provider results take precedence. Neither provider-window class
-    # is retried here; the cycle-level validated-provider-evidence path owns any
-    # backoff. Without the provider-overloaded arm a 529 fell through to the
+    # Structured provider results take precedence. Evidence bound to this
+    # auditor invocation already ended the phase as provider-deferred above; a
+    # window class that reaches here is not bound to the auditor role and is
+    # never retried. Without the provider-overloaded arm a 529 fell through to the
     # `! -f "$audit_record"` branch below and was mislabelled `no-record`.
     if [[ "$audit_fc" == "quota" || "$audit_fc" == "provider-overloaded" ]]; then
       infra_reason="$audit_fc"
@@ -4158,6 +4314,18 @@ for ((attempt=0; attempt<product_passes_remaining; attempt++)); do
     break
   fi
 
+  # A provider window is neither a product signal nor an infrastructure one. It
+  # consumes no product repair, no infrastructure allowance and no decider
+  # round-trip, and it is not "no progress": the pending phase is recorded and
+  # the drive ends non-accepting.
+  if [[ "$attempt_failure" == "provider-deferred" ]]; then
+    terminal_action="provider-deferred"
+    terminal_authority="policy"
+    terminal_rationale="provider window closed for the selected provider; the pending phase was deferred without launching it and without a product or infrastructure charge. Resume after the window reopens."
+    archive_attempt "$n" "$attempt_failure" "$terminal_action" "$terminal_authority"
+    break
+  fi
+
   # Product retries normally require a changed candidate. A first validated
   # needs-fix audit with normalized findings is different: those fresh findings
   # change the next worker's input even when the audited candidate was already
@@ -4332,18 +4500,41 @@ for ((attempt=0; attempt<product_passes_remaining; attempt++)); do
     decider_authority="policy"
     echo "  failure: $attempt_failure -> fast-path: $action"
   else
-    # Failure -> consult the autonomous decider.
-    echo "  failure: $attempt_failure -> consulting decider..."
-    decider_rc=0
-    dec_out="$(SINGULAR_EXPECTED_CAMPAIGN_BINDING="$l1_campaign_binding" \
-      "$SCRIPT_DIR/decide.sh" --task "$task_id" --failure-class "$attempt_failure" \
-      --branch "$worker_branch" --run "$run_id" --context-file "${attempt_ctx:-/dev/null}" \
-      --worktree "$worktree" 2>/dev/null)" || decider_rc=$?
-    [[ "$decider_rc" -ne 2 ]] \
-      || l1_campaign_mismatch_exit "campaign policy changed before decider admission"
-    action="$(printf '%s\n' "$dec_out" | sed -n 's/^action=//p' | tail -1)"
-    [[ -n "$action" ]] || action="escalate-parked"
-    echo "  decider: $action"
+    # The decider is a provider launch too, possibly on its own role runner
+    # (decide.sh resolves it the same way). A closed window defers the decision
+    # instead of letting a refused decider fall back to escalate-parked.
+    decider_runner="$(singular_role_runner decider "$SINGULAR_RUNNER_BIN" 2>/dev/null || true)"
+    decider_result_file="$run_dir/decider-runner-result.json"
+    if [[ -n "$decider_runner" ]] \
+        && l1_provider_window_preflight decider "$decider_runner" decide "$n"; then
+      action="provider-deferred"
+    else
+      # Failure -> consult the autonomous decider.
+      echo "  failure: $attempt_failure -> consulting decider..."
+      l1_clear_runner_result "$decider_result_file"
+      decider_rc=0
+      dec_out="$(SINGULAR_EXPECTED_CAMPAIGN_BINDING="$l1_campaign_binding" \
+        "$SCRIPT_DIR/decide.sh" --task "$task_id" --failure-class "$attempt_failure" \
+        --branch "$worker_branch" --run "$run_id" --context-file "${attempt_ctx:-/dev/null}" \
+        --worktree "$worktree" 2>/dev/null)" || decider_rc=$?
+      [[ "$decider_rc" -ne 2 ]] \
+        || l1_campaign_mismatch_exit "campaign policy changed before decider admission"
+      action="$(printf '%s\n' "$dec_out" | sed -n 's/^action=//p' | tail -1)"
+      [[ -n "$action" ]] || action="escalate-parked"
+      if l1_provider_window_observed decider decide "$n" "$decider_result_file"; then
+        action="provider-deferred"
+      fi
+      echo "  decider: $action"
+    fi
+    if [[ "$action" == "provider-deferred" ]]; then
+      # No recovery action was selected, so nothing is charged; the failure
+      # that needed the decision stays the recorded last failure.
+      terminal_action="provider-deferred"
+      terminal_authority="policy"
+      terminal_rationale="provider window closed for the decider's provider after $attempt_failure; the decision was deferred without a product or infrastructure charge. Resume after the window reopens."
+      archive_attempt "$n" "$attempt_failure" "$terminal_action" "$terminal_authority"
+      break
+    fi
   fi
 
   if ! l1_campaign_publication_begin \
@@ -4474,6 +4665,9 @@ if [[ "$accepted" != "yes" ]]; then
   if [[ "$terminal_action" == "awaiting-evidence" ]]; then
     l1_status terminal failed "Product audit accepted; publication awaits evidence infrastructure" true \
       "Repair evidence infrastructure and resume the accepted head" "$terminal_action"
+  elif [[ "$terminal_action" == "provider-deferred" ]]; then
+    l1_status terminal failed "Provider window closed; the pending phase was deferred" true \
+      "Resume after the provider window reopens" "$terminal_action"
   else
     l1_status terminal failed "Task ended without acceptance: $terminal_action" true \
       "Inspect the decision and referenced failure evidence" "$terminal_action"
@@ -4484,12 +4678,19 @@ if [[ "$accepted" != "yes" ]]; then
     split-task|fork) singular_lease_set_status "$task_id" "blocked" 2>/dev/null || true; singular_task_set_status "$task_file" "blocked" || true ;;
     *)         singular_lease_set_status "$task_id" "blocked" 2>/dev/null || true; singular_task_set_status "$task_file" "blocked" || true ;;
   esac
+  if [[ "$terminal_action" == "provider-deferred" && -n "$l1_provider_deferral_json" ]]; then
+    singular_lease_record_provider_deferral "$task_id" "$l1_provider_deferral_json" 2>/dev/null || true
+  fi
   "$SCRIPT_DIR/record-decision.sh" --task "$task_id" --decision "$terminal_action" \
     --rationale "$terminal_rationale" --run "$run_id" --branch "$worker_branch" --authority "$terminal_authority" || true
   if [[ "$terminal_action" == "awaiting-evidence" ]]; then
     singular_append_event "l1.task_awaiting_evidence" \
       "product audit accepted; publication blocked on external evidence infrastructure" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"action\":\"awaiting-evidence\",\"lastFailure\":\"$attempt_failure\",\"headSha\":\"$head_sha\",\"auditVerdict\":\"accepted\",\"productAccepted\":true,\"published\":false,\"consumesProductRepairBudget\":false}"
+  elif [[ "$terminal_action" == "provider-deferred" ]]; then
+    singular_append_event "l1.task_provider_deferred" \
+      "l1 task deferred on a closed provider window; no product or infrastructure charge" \
+      "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"action\":\"provider-deferred\",\"lastFailure\":\"$attempt_failure\",\"deferral\":${l1_provider_deferral_json:-null},\"consumesProductRepairBudget\":false}"
   else
     singular_append_event "l1.task_terminal" "l1 task ended without acceptance" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"action\":\"$terminal_action\",\"lastFailure\":\"$attempt_failure\"}"
@@ -4502,6 +4703,8 @@ if [[ "$accepted" != "yes" ]]; then
   echo ""
   if [[ "$terminal_action" == "awaiting-evidence" ]]; then
     echo "AWAITING EVIDENCE: $task_id — product audit accepted $head_sha; publication is blocked externally."
+  elif [[ "$terminal_action" == "provider-deferred" ]]; then
+    echo "PROVIDER DEFERRED: $task_id — provider window closed; pending phase recorded, no product repair charged."
   else
     echo "NOT ACCEPTED ($terminal_action): $task_id — recorded and parked; loop continues elsewhere."
   fi
