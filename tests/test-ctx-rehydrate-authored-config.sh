@@ -172,8 +172,16 @@ b="$(cfg_call 1 manifest "$config_abs" implement)"
 [[ "$a" == "$b" ]] || fail "case6: config manifest non-deterministic."
 
 # --- Case 7: missing / unreadable config file -> fail-soft, nothing ---------
+# lib.sh refuses a missing *selected* JSON config at source time (pinned by
+# test-config-loader), so the vanished file is pointed at after sourcing: this
+# case is the entry point's own fail-soft, e.g. a config removed mid-run.
+cfg_call_vanished() {
+  local suffix="$1" cfgfile="$2"; shift 2
+  SINGULAR_CTX_MANIFEST=1 CFG="$cfgfile" \
+    bash -c 'source "'"$LIB"'"; SINGULAR_JSON_CONFIG_FILE="$CFG"; singular_ctx_rehydrate_authored_config_'"$suffix"' "$@"' _ "$@"
+}
 for suffix in render manifest; do
-  out="$(cfg_call 1 "$suffix" "$tmp/no-such-config.json" implement)" \
+  out="$(cfg_call_vanished "$suffix" "$tmp/no-such-config.json" implement)" \
     || fail "case7: $suffix exited non-zero on missing config file"
   nonblank "$out" && fail "case7: $suffix emitted output on missing config. got:[$out]"
 done
