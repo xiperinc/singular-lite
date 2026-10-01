@@ -268,11 +268,13 @@ pass "(c) ON: manifest excludes the quarantined artifact, keeps clean artifacts"
 #     l1.artifact_scan_failed and the drive still accepts (non-fatal).
 # ---------------------------------------------------------------------------
 reset_state
-# Shim engine dir: symlink every real ctx-*.sh EXCEPT ctx-artifact-quarantine.sh
+# Shim engine dir: symlink every real engine file EXCEPT ctx-artifact-quarantine.sh
 # so singular_ctx_artifact_quarantine is undefined at hook time (a genuine error).
+# Every file, not only ctx-*.sh: the driver resolves python helpers and runner
+# adapters through SINGULAR_ENGINE_DIR too.
 ctxdir="$workroot/ctx-noquar"
 rm -rf "$ctxdir"; mkdir -p "$ctxdir"
-for f in "$SCRIPT_DIR"/ctx-*.sh; do
+for f in "$SCRIPT_DIR"/*; do
   [[ "$(basename "$f")" == "ctx-artifact-quarantine.sh" ]] && continue
   ln -s "$f" "$ctxdir/$(basename "$f")"
 done
