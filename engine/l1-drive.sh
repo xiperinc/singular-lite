@@ -44,6 +44,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) dry_run="yes"; shift ;;
     --reset) reset="yes"; shift ;;
+    # Diagnostic only since 0.23.4: never publishes an accepted packet.
     --no-audit) require_audit="0"; shift ;;
     --task) task_id="$2"; shift 2 ;;
     TASK-*) task_id="$1"; shift ;;
@@ -1108,6 +1109,87 @@ PY
     "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"headSha\":\"$head\",\"admittedBaseSha\":\"$packet_base_ref\",\"retainedWorktree\":\"$retained\",\"reason\":\"$reason\"}" || true
 }
 
+# ---- The acceptance predicate (0.23.4, protocol 1.1) -------------------------
+# PublishAccepted(K) <=> G(K) and A(K) and D(K) and E(K). Every path that
+# publishes an accepted packet -- the ordinary accept path, the retained
+# accepted-checkpoint recovery and the stranded-packet auto-heal -- calls this
+# immediately before it publishes, and refuses publication when it fails:
+#   G  host verification passed for this exact head and tree (bound request);
+#   A  a host-bound accepted audit, strictly schema-valid, fully classified,
+#      with no blocking finding open;
+#   D  the review ledger durably holds this run/attempt/head round as accepted;
+#   E  the evidence manifest binds this exact verdict and host report.
+# Budgets are not inputs. Waivers and --no-audit cannot satisfy A. The
+# structural schema checks are lib.sh's; the predicate is
+# acceptance_validator.py. On refusal it records l1.acceptance_refused, leaves
+# l1_acceptance_refusal="<conjunct>:<reason>" and returns 1.
+# args: publication-path run run-dir head [attempt]
+l1_acceptance_refusal=""
+l1_note_acceptance_refused() {
+  local path="$1" check_run="$2" check_head="$3"
+  singular_append_event "l1.acceptance_refused" \
+    "acceptance predicate refused accepted-packet publication" \
+    "{\"taskId\":\"$task_id\",\"runId\":\"$check_run\",\"driverRunId\":\"$run_id\",\"headSha\":\"$check_head\",\"path\":\"$path\",\"conjunct\":\"${l1_acceptance_refusal%%:*}\",\"reason\":\"${l1_acceptance_refusal#*:}\",\"waiver\":\"${waiver:-no}\",\"published\":false}" \
+    || true
+  echo "l1-drive: acceptance refused for $task_id ($path): $l1_acceptance_refusal" >&2
+}
+l1_validate_acceptance() {
+  local path="$1" check_run="$2" check_run_dir="$3" check_head="$4" check_attempt="${5:-}"
+  local check_audit check_schema="" check_audit_schema="" check_manifest check_json check_out=""
+  local -a check_attempt_args=()
+  check_audit="$(singular_audit_record_path "$check_run")"
+  check_manifest="$check_run_dir/evidence-manifest.json"
+  l1_acceptance_refusal=""
+  [[ -f "$check_audit" ]] \
+    && check_schema="$(singular_json_field "$check_audit" schema 2>/dev/null || true)"
+  case "$check_schema" in
+    singular.orchestration.audit-verdict.v1)
+      check_audit_schema="$SINGULAR_SCHEMA_DIR/audit-verdict.v1.schema.json" ;;
+    singular.orchestration.audit-verdict.v0|pmgo.orchestration.audit-verdict.v0)
+      check_audit_schema="$SINGULAR_SCHEMA_DIR/audit-verdict.v0.schema.json" ;;
+  esac
+  if [[ ! -f "$check_audit" ]]; then
+    l1_acceptance_refusal="A:audit-missing"
+  # Strict regardless of SINGULAR_AUDIT_VERDICT_VALIDATE: a legacy verdict
+  # that only passed in warn mode never participates in acceptance.
+  elif [[ -z "$check_audit_schema" ]] \
+      || ! SINGULAR_AUDIT_SCHEMA="$check_audit_schema" \
+        singular_validate_audit_verdict "$check_audit" "$task_id" "$check_run" \
+        >/dev/null 2>&1; then
+    l1_acceptance_refusal="A:audit-schema-invalid"
+  elif [[ ! -f "$check_manifest" ]]; then
+    l1_acceptance_refusal="E:evidence-manifest-missing"
+  elif ! check_json="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1], encoding="utf-8")), separators=(",", ":")))' "$check_manifest" 2>/dev/null)" \
+      || ! singular_json_schema_check "$check_json" \
+        "$SINGULAR_SCHEMA_DIR/evidence-manifest.v0.schema.json" "evidence manifest" \
+        >/dev/null 2>&1; then
+    l1_acceptance_refusal="E:evidence-manifest-schema-invalid"
+  else
+    [[ -n "$check_attempt" ]] && check_attempt_args=(--attempt "$check_attempt")
+    if check_out="$(python3 "$SCRIPT_DIR/acceptance_validator.py" \
+        --task "$task_id" --run "$check_run" --branch "$worker_branch" \
+        --head "$check_head" --campaign "$l1_campaign_binding" \
+        --run-dir "$check_run_dir" --repo-root "$SINGULAR_ROOT" \
+        --state-dir "$SINGULAR_STATE_DIR" --logical-change "$review_logical_change" \
+        --task-contract "$task_file" \
+        ${check_attempt_args[@]+"${check_attempt_args[@]}"} \
+        2>"$check_run_dir/acceptance-check.err")"; then
+      printf '%s\n' "$check_out" >"$check_run_dir/acceptance-check.json"
+      return 0
+    fi
+    printf '%s\n' "$check_out" >"$check_run_dir/acceptance-check.json"
+    l1_acceptance_refusal="$(python3 -c 'import json,sys
+try:
+    value = json.loads(sys.argv[1])
+    print(value["conjunct"] + ":" + value["reason"])
+except Exception:
+    print("validator:validator-failed")' "$check_out" 2>/dev/null)"
+    [[ -n "$l1_acceptance_refusal" ]] || l1_acceptance_refusal="validator:validator-failed"
+  fi
+  l1_note_acceptance_refused "$path" "$check_run" "$check_head"
+  return 1
+}
+
 # Resume publication for an immutable head whose product audit was already
 # accepted but whose final evidence materialization exhausted its transient
 # infrastructure budget.  This recovery runs before --reset/orphan cleanup so
@@ -1488,6 +1570,14 @@ PY
     exit 3
   fi
 
+  # Recovery revalidates the original certificate rather than creating one: the
+  # checkpoint's fresh audit stays authoritative only while G, A, D and E still
+  # hold for its exact identity. A refusal preserves the checkpoint unpublished.
+  l1_validate_acceptance retained-checkpoint \
+      "$accepted_run" "$accepted_run_dir" "$accepted_head" \
+    || l1_evidence_resume_refuse \
+      "acceptance-predicate-${l1_acceptance_refusal%%:*}-${l1_acceptance_refusal#*:}"
+
   if ! l1_campaign_publication_begin \
       "$checkpoint_binding" pre-resumed-state-mutation; then
     l1_campaign_mismatch_exit \
@@ -1640,6 +1730,11 @@ PY
     l1_campaign_mismatch_exit \
       "stranded accepted packet belongs to a different or unbound campaign"
   fi
+  # accept-existing-packet re-verifies deterministically and then replaces the
+  # audit record with a host-authored one. That is not a fresh independent
+  # audit, so the predicate is checked on the original certificate first.
+  l1_validate_acceptance stranded-packet "$prev_run" "$SINGULAR_RUNS_DIR/$prev_run" \
+    "$(singular_json_field "$cand" headSha 2>/dev/null || true)" || return 1
   if "$SCRIPT_DIR/accept-existing-packet.sh" "$cand"; then
     if ! l1_campaign_publication_begin \
         "$cand_binding" pre-resumed-packet-publication; then
@@ -3801,6 +3896,15 @@ print(json.dumps({"taskId": sys.argv[1], "runId": sys.argv[2], "attempt": int(sy
     return 1
   fi
 
+  # Ordering (0.23.4, open question Q2). A host product failure never reaches
+  # this point: the host gate's failed-product returns needs-fix before any
+  # auditor runs. model_verification_status is bind()'s value, which equals the
+  # host's passing classification, or normalize()'s. normalize() used to
+  # replace a model-reported failed-product with the host's `passed` BEFORE
+  # this check, so the check never saw it and an `accepted` verdict went on to
+  # publish. normalize() now refuses that rewrite (the auditor repair retry
+  # handles it, audit-infra when exhausted), and the acceptance predicate
+  # refuses any verdict whose preserved original reported failed-product.
   if [[ "${model_verification_status:-}" == "failed-product" ]]; then
     attempt_failure="audit-needs-fix"; attempt_ctx="$audit_record"; return 1
   fi
@@ -3818,6 +3922,9 @@ print(json.dumps({"taskId": sys.argv[1], "runId": sys.argv[2], "attempt": int(sy
     attempt_failure="audit-infra"; attempt_ctx="$audit_record"; return 1
   fi
 
+  # With --no-audit the attempt may end here regardless of the verdict, but
+  # only as a diagnostic: the acceptance predicate after the loop refuses to
+  # publish any accepted packet when require_audit != 1.
   if [[ "$require_audit" == "1" && "$verdict" != "accepted" ]]; then
     attempt_failure="audit-$verdict"; attempt_ctx="$audit_record"; return 1
   fi
@@ -4430,6 +4537,9 @@ for ((attempt=0; attempt<product_passes_remaining; attempt++)); do
       l1_campaign_publication_end
       continue ;;
     accept-waiver)
+      # The legacy surface stays configurable, but accepted="yes" here is only
+      # a request: the acceptance predicate after the loop decides, and a
+      # waiver can satisfy neither G nor A (0.23.4).
       if singular_unbound_waivers_enabled; then
         accepted="yes"; waiver="yes"
         archive_attempt "$n" "$attempt_failure" "accept-waiver" "$decider_authority"
@@ -4451,6 +4561,38 @@ for ((attempt=0; attempt<product_passes_remaining; attempt++)); do
       break ;;
   esac
 done
+
+# ---- Acceptance predicate (0.23.4) -------------------------------------------
+# The loop only says this attempt ended in an accept transition; publication
+# additionally requires G and A and D and E for the exact candidate. Two inputs
+# can never satisfy it:
+#   --no-audit (require_audit != 1) yields a diagnostic, non-integrable result:
+#     the packet is never marked accepted, so import/integrate refuse it;
+#   an enabled legacy accept-waiver (legacyCompatibility.unboundWaivers) still
+#     has to pass the predicate, and a needs-fix audit cannot -- a waiver may
+#     authorize work, never substitute for the gate or the audit.
+# A refusal is a recorded non-accepting outcome through the terminal path below.
+if [[ "$accepted" == "yes" ]]; then
+  if [[ "$require_audit" != "1" ]]; then
+    l1_acceptance_refusal="A:audit-disabled"
+    l1_note_acceptance_refused ordinary "$run_id" "$head_sha"
+  else
+    l1_validate_acceptance ordinary "$run_id" "$run_dir" "$head_sha" "$n" || true
+  fi
+  if [[ -n "$l1_acceptance_refusal" ]]; then
+    accepted="no"
+    terminal_action="escalate-parked"
+    terminal_authority="policy"
+    attempt_failure="${attempt_failure:-acceptance-refused}"
+    if [[ "$l1_acceptance_refusal" == "A:audit-disabled" ]]; then
+      terminal_rationale="--no-audit run is diagnostic only: head $head_sha was not published as accepted and is not integrable"
+    elif [[ "$waiver" == "yes" ]]; then
+      terminal_rationale="legacy accept-waiver cannot substitute for the host gate or an accepted audit ($l1_acceptance_refusal); record an exact-artifact human approval or repair the product failure"
+    else
+      terminal_rationale="acceptance predicate refused publication of head $head_sha ($l1_acceptance_refusal); see runs/$run_id/acceptance-check.json"
+    fi
+  fi
+fi
 
 # ---- Terminal (non-accept) handling — never blocks on a human ----
 if [[ "$accepted" != "yes" ]]; then
