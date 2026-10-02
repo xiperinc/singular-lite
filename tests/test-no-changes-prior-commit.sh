@@ -273,7 +273,7 @@ ls "$root"/.singular-state/runs/*/auditor-codex.log >/dev/null 2>&1 \
 
 reset_fixture() {
   rm -rf "$root/.singular-state/runs" "$root/.singular-state/leases" \
-    "$root/.singular-state/inbox" "$root/.worktrees"
+    "$root/.singular-state/inbox" "$root/.singular-state/review-policy" "$root/.worktrees"
   : >"$root/.singular-state/events.ndjson"
   rm -f "$workroot/audit-count"
   git -C "$root" worktree prune 2>/dev/null || true
