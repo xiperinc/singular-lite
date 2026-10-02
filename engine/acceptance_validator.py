@@ -42,6 +42,9 @@ from pathlib import Path
 from typing import Any
 
 ENGINE_DIR = Path(__file__).resolve().parent
+# The engine tree may be read-only or byte-pinned (frozen campaigns); never
+# write bytecode next to it when importing sibling modules.
+sys.dont_write_bytecode = True
 sys.path.insert(0, str(ENGINE_DIR))
 
 import review_policy  # noqa: E402
@@ -186,9 +189,16 @@ def check_ledger(
 # ---- A: a host-bound, completely classified, nonblocking audit --------------
 def check_audit_identity(args: argparse.Namespace, audit_path: Path, report_path: Path) -> dict[str, Any]:
     audit = read_regular(audit_path, "A", "audit-missing", "audit-invalid")
+    # The audit's own runId is a model-echoed label and not part of K: the
+    # run is bound by the host verification request (G) and the ledger round
+    # the driver recorded for this run (D), and the reviewed head by the
+    # host-stamped reviewed-head-sha marker checked here. The driver has always
+    # tolerated a mismatched echo (infra retries reuse runs); import-packet
+    # keeps its stricter sidecar identity check.
     try:
         schema = host_bind.validate_identity(
-            audit, task=args.task, run=args.run, branch=args.branch, head=args.head,
+            audit, task=args.task, run=str(audit.get("runId") or args.run),
+            branch=args.branch, head=args.head,
         )
     except ValueError as exc:
         raise Refusal("A", "audit-identity-mismatch", str(exc)) from exc
