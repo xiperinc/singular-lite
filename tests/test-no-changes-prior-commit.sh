@@ -125,9 +125,10 @@ fi
 [[ -n "$audit_status" ]] || audit_status="passed"
 if [[ -n "$out" ]]; then
   AUDIT_OUT="$out" AUDIT_STATUS="$audit_status" AUDIT_VERDICT="$audit_verdict" \
-    AUDIT_FINDINGS="$audit_findings" python3 - <<'PY'
+    AUDIT_FINDINGS="$audit_findings" AUDIT_PROMPT="$prompt" python3 - <<'PY'
 import json
 import os
+import re
 
 finding = os.environ["AUDIT_FINDINGS"]
 record = {
@@ -149,6 +150,17 @@ record = {
     "requiredFixes": [finding] if finding else [],
     "rationale": "tests need tightening" if finding else "accepted",
 }
+# A follow-up review reports exactly the prior IDs the host prompt requires.
+try:
+    prompt_text = open(os.environ["AUDIT_PROMPT"], encoding="utf-8").read()
+except OSError:
+    prompt_text = ""
+required = re.search(r"MUST report every one of these IDs: (.+?)\.\n", prompt_text)
+if required:
+    state = "resolved" if record["verdict"] == "accepted" else "still-open"
+    record["findingsStatus"] = {
+        ident.strip(): state for ident in required.group(1).split(",") if ident.strip()
+    }
 with open(os.environ["AUDIT_OUT"], "w", encoding="utf-8") as handle:
     json.dump(record, handle)
     handle.write("\n")

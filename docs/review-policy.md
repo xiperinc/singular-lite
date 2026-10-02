@@ -66,9 +66,11 @@ Allowed rounds = `maxReviewRounds` + the sum of `additionalRounds` on active
 (unconsumed) exceptions whose `taskId` is null or equals the current task.
 `check` refuses when `used >= allowed` (exit 4).
 
-The L1 driver also bounds product repair retries to
-`min(productRepairMax, maxReviewRounds - 1)` (floor 0) so a repair cannot be
-spent on a review the policy will refuse. Exhaustion is terminal:
+The L1 driver does not clamp product repairs to `maxReviewRounds - 1`; the
+repair ceiling is `min(risk-tier repairs, SINGULAR_MAX_RETRIES)`. Instead it
+runs a read-only `check` before every product pass (the initial pass and each
+repair, before the repair is charged or a decider is consulted), so no worker
+is started for a candidate that could never be reviewed. Exhaustion is terminal:
 `escalate-parked` with `terminal_authority=policy`, failure class
 `review-rounds-exhausted`. It does not consume product repair budget and does
 not call the decider.
