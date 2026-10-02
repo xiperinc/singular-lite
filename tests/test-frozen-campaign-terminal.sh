@@ -100,10 +100,12 @@ cleanup() {
   if [[ "${FROZEN_KEEP_TMP:-0}" == "1" ]]; then
     echo "frozen terminal fixture retained: $scratch" >&2
   else
-    if [[ -n "$FROZEN_OWNED_TEST_ENGINE" \
-        && "$FROZEN_OWNED_TEST_ENGINE" == "$scratch/"* ]]; then
-      chmod -R u+w "$FROZEN_OWNED_TEST_ENGINE" 2>/dev/null || cleanup_failed=1
-    fi
+    # Bindings are verified above, so restoring owner write is now safe. Every
+    # case's test-engine copy is made read-only (chmod -R a-w), not just the
+    # last one FROZEN_OWNED_TEST_ENGINE names, and the engine writes frozen
+    # campaign runtimes read-only by design. Restore owner write across the
+    # whole scratch tree (chmod -R does not follow symlinks out of it).
+    chmod -R u+w "$scratch" 2>/dev/null || cleanup_failed=1
     rm -rf "$scratch" || cleanup_failed=1
   fi
   if [[ "$exit_status" -eq 0 && "$cleanup_failed" -ne 0 ]]; then
