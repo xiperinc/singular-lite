@@ -24,8 +24,8 @@ or `python3 engine/review_policy.py <verb>`.
 | --- | --- | --- |
 | `version` | `1` | Policy schema version. |
 | `maxReviewRounds` | `2` | Completed schema-valid verdicts allowed per candidate before exhaustion: the initial review plus one follow-up. High-risk tasks are capped by this too (their two-repair ceiling becomes reachable only when a project sets `3`). |
-| `blockingSeverities` | `["P0","P1"]` | Severities that keep a `needs-fix` verdict blocking. |
-| `requireClassification` | `true` | Missing `classifiedFindings` fail-safe: findings stay blocking. |
+| `blockingSeverities` | `["P0","P1"]` | Severities that block acceptance. P0 and P1 are a floor: a value may add `P2`/`P3` but a set without P0 or P1 is refused (exit 2). |
+| `requireClassification` | `true` | Missing `classifiedFindings` fail-safe: findings stay blocking. `false` only lets a verdict with no classification keep its own label; it never upgrades `needs-fix`. |
 
 ### Precedence
 
@@ -35,7 +35,7 @@ error (exit 2) and are never silently defaulted.
 | Env | JSON | Notes |
 | --- | --- | --- |
 | `SINGULAR_REVIEW_MAX_ROUNDS` | `maxReviewRounds` | Integer `>= 1`. |
-| `SINGULAR_REVIEW_BLOCKING_SEVERITIES` | `blockingSeverities` | Comma list from `P0,P1,P2,P3`. |
+| `SINGULAR_REVIEW_BLOCKING_SEVERITIES` | `blockingSeverities` | Comma list from `P0,P1,P2,P3`; must include `P0,P1`. |
 | `SINGULAR_REVIEW_REQUIRE_CLASSIFICATION` | `requireClassification` | `0` or `1`. |
 
 `lib.sh` also projects the JSON object to `SINGULAR_REVIEW_POLICY_JSON` so a
@@ -56,15 +56,47 @@ exception whose `taskId` is null or equals the current task.
 ## Rounds and budget
 
 A **round** is one completed schema-valid verdict for a candidate of the
-logical change. The first is `initial`; later ones are `followup`. Transport
-failures and invalid verdicts never reach `record`, so they never count.
-An `accepted` verdict closes that candidate; a later dispatch of the same id
-starts a fresh budget. Unaccepted rounds (including historical `backfill`)
-still count until acceptance.
+logical change. The first is `initial`; later ones are `followup`.
 
-Allowed rounds = `maxReviewRounds` + the sum of `additionalRounds` on active
-(unconsumed) exceptions whose `taskId` is null or equals the current task.
-`check` refuses when `used >= allowed` (exit 4).
+Each review is one **operation**. The L1 driver calls `reserve` before the
+auditor launches: under the ledger write lock it admits the review (or refuses,
+exit 4) and records a reserved operation bound to
+logicalChange/task/run/attempt/head. A reserved operation holds its slot, so two
+concurrent reservations can never both take the last one. Auditor transport
+retries stay inside that one operation; `record --operation` completes it
+exactly once. A replay with the same verdict content (raw or as applied) is a
+no-op returning the stored result; different content is a conflict (exit 5).
+An operation that ends without a verdict is `release`d; a new reservation by
+the same task also supersedes that task's unfinished one. `record` without
+`--operation` admits and completes in one locked step and refuses (exit 4,
+nothing written, verdict file untouched) at the ceiling. The ledger is
+committed before `--apply` rewrites the verdict.
+
+Rounds belong to a numbered **series** (default 1). An `accepted` round
+**closes** the logical change: `check`/`reserve`/`record` then refuse (exit 4,
+`closed: true`) instead of minting a fresh budget for a successor task, new
+run, or renamed node. Re-recording the same accepted operation stays
+idempotent. A genuinely new review series needs
+`reopen --authority --reason --evidence` (evidence hashed; one authority opens
+at most one series). The driver uses this for an authorized repair recovery of
+an accepted candidate (`recoveryAuthorization`, which requires a fresh audit),
+with the recovery authority as evidence. Accepted-evidence recovery publishes
+without a new audit and never needs it.
+
+Allowed rounds = `maxReviewRounds` + the sum of `additionalRounds` on
+exceptions granted in the current series whose `taskId` is null or equals the
+current task. Rounds used in a series never decrease, so a consumed exception
+cannot be consumed again. `check` (read-only) refuses when
+`used + pending >= allowed` (exit 4), where pending counts other tasks'
+reserved operations.
+
+**Migration.** Rows written before series existed have no `series` member and
+keep the old rule: a legacy `accepted` row is a series boundary (later rounds
+start a fresh budget, as before), so existing ledgers neither become exhausted
+nor closed. Legacy non-accepted rows after the last legacy acceptance count
+toward series 1; a legacy exception applies only if granted after that
+acceptance. `backfill` rows are legacy rows. A malformed ledger is an error
+(exit 3), never a reset.
 
 The L1 driver also bounds product repair retries to
 `min(productRepairMax, maxReviewRounds - 1)` (floor 0) so a repair cannot be
@@ -78,13 +110,32 @@ not call the decider.
 `classifiedFindings[]` items: required `id`, `severity` (`P0`..`P3`),
 `summary`; optional `trigger`, `impact`, `requirement`, `location`.
 
-| Original verdict | Classification | Effective verdict |
-| --- | --- | --- |
-| not `needs-fix` | unchanged | original; findings are informational |
-| `needs-fix` with classified items | P0/P1 missing non-blank `trigger`+`impact`+`requirement` are downgraded to P2 (`unsupported-blocking-claim`, never silent) | `accepted` if nothing remains in `blockingSeverities` (remaining items go to the backlog); otherwise `needs-fix` |
-| `needs-fix` with empty/absent `classifiedFindings` | fail-safe: every `findings[]`/`requiredFixes[]` string is `unclassified` and blocking | `needs-fix`; `unclassifiedCount` and reason `classification-missing` |
+Classification is fail-closed and applies to **every** verdict label:
 
-P2/P3 never block under the default `blockingSeverities`.
+- Severity is immutable. A P0/P1 missing non-blank `trigger`, `impact` or
+  `requirement` stays P0/P1 and blocking (`unsupported`, reason
+  `unsupported-blocking-claim`); `downgraded` is always empty.
+- Coverage is exact. Every non-blank `findings[]`/`requiredFixes[]` string must
+  equal a classified item's `summary`, or start with its `id` as a whole token,
+  optionally followed by `(Pn)`, then `:`, a spaced dash, or the end
+  (`F1: ...`, `F1 (P2): ...`). Uncovered strings become blocking
+  `unclassified-N` items (`classification-incomplete`). A `(Pn)` tag that
+  disagrees with the item's severity is a conflict.
+- Malformed entries (`classification-malformed`) and ids repeated with
+  differing content (`classification-conflict`) are unresolved and block.
+
+| Original verdict | Effective verdict |
+| --- | --- |
+| `needs-fix`, completely classified, only non-blocking items | `accepted`; items go to the backlog |
+| `needs-fix`, anything blocking, unresolved, or uncovered | `needs-fix` |
+| `accepted`, anything blocking, unresolved, or uncovered | `needs-fix` (`.pre-policy.json` keeps the label) |
+| `accepted`, no findings, or every finding covered by non-blocking items | `accepted` |
+| `needs-fix`/`accepted` (v1) with findings but no `classifiedFindings` | `needs-fix`, reason `classification-missing` |
+| `blocked`, `needs-human`, other | unchanged; never `accepted` |
+| legacy `audit-verdict.v0` without `classifiedFindings` (its schema cannot carry one) | the auditor's label; never upgraded |
+
+`record --host-verification failed-product` keeps an `accepted` label from
+closing the change (effective `needs-fix`).
 
 ## Exceptions
 
@@ -95,6 +146,7 @@ Grant refuses when:
 - an active (unconsumed) exception already exists for that logical change
 - `additionalRounds > maxReviewRounds`
 - reason or evidence is missing
+- the logical change is closed (use `reopen`)
 
 Evidence paths are hashed at grant time. A second grant before the extra
 rounds are spent is refused. Historical rounds added with `backfill` count
@@ -108,7 +160,9 @@ toward `used`.
 - Backlog: `$SINGULAR_STATE_DIR/review-policy/backlog.ndjson` (one JSON line
   per non-blocking item).
 
-Statuses: `open`, `accepted`, `exhausted`.
+Statuses: `open`, `accepted` (closed, or a legacy boundary), `exhausted`.
+Operation statuses: `reserved`, `completed`, `infrastructure-exhausted`,
+`abandoned`.
 
 ## CLI
 
@@ -116,17 +170,26 @@ Statuses: `open`, `accepted`, `exhausted`.
 singular review-policy effective
 singular review-policy show [--logical-change ID]
 singular review-policy check --logical-change ID --task TASK
+singular review-policy reserve --logical-change ID --task TASK --run RUN \
+  --attempt N --head SHA [--campaign BINDING] [--lane native]
 singular review-policy record --logical-change ID --task TASK --run RUN \
   --attempt N --verdict PATH --head SHA [--campaign BINDING] [--lane native] \
-  [--reviewer-runner NAME] [--reviewer-model M] [--reviewer-effort E] [--apply]
+  [--reviewer-runner NAME] [--reviewer-model M] [--reviewer-effort E] \
+  [--operation OP] [--host-verification STATUS] [--apply]
+singular review-policy release --logical-change ID --operation OP --reason TEXT \
+  [--status infrastructure-exhausted|abandoned]
+singular review-policy reopen --logical-change ID --reason TEXT \
+  --evidence PATH... --authority NAME [--task TASK] [--if-closed]
 singular review-policy grant --logical-change ID --rounds N --reason TEXT \
   --evidence PATH... [--task TASK] --authority NAME
 singular review-policy backfill --file PATH
 singular review-policy backlog [--logical-change ID]
 ```
 
-Exit codes: `0` ok, `2` usage/invalid config, `3` ledger/IO error, `4`
-exhausted (`check` only). JSON on stdout. Never prints secrets.
+Exit codes: `0` ok, `2` usage/invalid config, `3` ledger/IO error or
+malformed ledger, `4` admission refused (exhausted or closed; `check`,
+`reserve`, `record`; the refusal JSON is on stdout), `5` operation conflict.
+JSON on stdout. Never prints secrets.
 
 `--apply` writes `<verdict>.pre-policy.json` if anything changes and sets
 `verdict` to the effective verdict. The top-level `reviewPolicy` stamp is

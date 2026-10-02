@@ -363,7 +363,8 @@ assert_eq "$dec0" "fresh disabled" "affinity-0 decision is fresh disabled"
 # A full drive under affinity=0 must put NO --resume-session in any argv.
 : > "$workroot/worker-argv.log"; : > "$workroot/auditor-argv.log"
 git -C "$drv_root" checkout -q target
-rm -rf "$drv_root/.singular-state/runs" "$drv_root/.singular-state/leases" 2>/dev/null || true
+rm -rf "$drv_root/.singular-state/runs" "$drv_root/.singular-state/leases" \
+  "$drv_root/.singular-state/review-policy" 2>/dev/null || true
 # Reset task status back to ready for a second drive.
 python3 - "$drv_root/docs/orchestration/tasks/TASK-0001.md" <<'PY'
 import sys
@@ -391,7 +392,8 @@ SH
 chmod +x "$workroot/bin/date"
 
 git -C "$drv_root" checkout -q target
-rm -rf "$drv_root/.singular-state/runs" "$drv_root/.singular-state/leases" 2>/dev/null || true
+rm -rf "$drv_root/.singular-state/runs" "$drv_root/.singular-state/leases" \
+  "$drv_root/.singular-state/review-policy" 2>/dev/null || true
 python3 - "$drv_root/docs/orchestration/tasks/TASK-0001.md" <<'PY'
 import sys
 p = sys.argv[1]; t = open(p).read().replace("Status: accepted", "Status: ready")
@@ -409,7 +411,7 @@ warmup_out="$(run_drive PATH="$workroot/bin:$PATH" 2>&1)" \
   || fail "warmup drive must record both resumable role sessions"
 
 git -C "$drv_root" checkout -q target
-rm -rf "$drv_root/.singular-state/leases" 2>/dev/null || true
+rm -rf "$drv_root/.singular-state/leases" "$drv_root/.singular-state/review-policy" 2>/dev/null || true
 python3 - "$drv_root/docs/orchestration/tasks/TASK-0001.md" <<'PY'
 import sys
 p = sys.argv[1]; t = open(p).read().replace("Status: accepted", "Status: ready")

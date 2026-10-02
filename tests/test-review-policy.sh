@@ -68,10 +68,22 @@ out="$(rp effective)"
 assert_eq "$("$PYTHON_BIN" -c 'import json,sys; d=json.loads(sys.stdin.read()); print(d["maxReviewRounds"], d["requireClassification"], ",".join(d["blockingSeverities"]), d["sources"]["maxReviewRounds"])' <<<"$out")" \
   "2 True P0,P1 default" "defaults"
 
-printf '%s\n' '{"schemaVersion":"v2","reviewPolicy":{"version":1,"maxReviewRounds":5,"blockingSeverities":["P0"],"requireClassification":false}}' >"$CONFIG"
+# P0/P1 are a floor: config may add P2/P3 (stricter), never remove P0/P1.
+printf '%s\n' '{"schemaVersion":"v2","reviewPolicy":{"version":1,"maxReviewRounds":5,"blockingSeverities":["P0","P1","P2"],"requireClassification":false}}' >"$CONFIG"
 out="$(rp effective)"
 assert_eq "$("$PYTHON_BIN" -c 'import json,sys; d=json.loads(sys.stdin.read()); print(d["maxReviewRounds"], d["requireClassification"], ",".join(d["blockingSeverities"]), d["sources"]["maxReviewRounds"])' <<<"$out")" \
-  "5 False P0 config" "config JSON"
+  "5 False P0,P1,P2 config" "config JSON"
+
+printf '%s\n' '{"schemaVersion":"v2","reviewPolicy":{"version":1,"blockingSeverities":["P0"]}}' >"$CONFIG"
+rc=0
+rp effective >/dev/null 2>"$tmp/floor-json.err" || rc=$?
+assert_eq "$rc" "2" "config without P1 in blockingSeverities is refused"
+assert_contains "$(cat "$tmp/floor-json.err")" "P0, P1" "floor refusal names P0/P1"
+printf '%s\n' '{"schemaVersion":"v2","targetBranch":"target"}' >"$CONFIG"
+rc=0
+SINGULAR_REVIEW_BLOCKING_SEVERITIES=P1,P2 rp effective >/dev/null 2>"$tmp/floor-env.err" || rc=$?
+assert_eq "$rc" "2" "env without P0 in blocking severities is refused"
+printf '%s\n' '{"schemaVersion":"v2","reviewPolicy":{"version":1,"maxReviewRounds":5,"blockingSeverities":["P0","P1"],"requireClassification":false}}' >"$CONFIG"
 
 out="$(SINGULAR_REVIEW_MAX_ROUNDS=4 SINGULAR_REVIEW_BLOCKING_SEVERITIES=P0,P1,P2 SINGULAR_REVIEW_REQUIRE_CLASSIFICATION=1 rp effective)"
 assert_eq "$("$PYTHON_BIN" -c 'import json,sys; d=json.loads(sys.stdin.read()); print(d["maxReviewRounds"], d["requireClassification"], ",".join(d["blockingSeverities"]), d["sources"]["maxReviewRounds"], d["sources"]["requireClassification"])' <<<"$out")" \
@@ -126,14 +138,15 @@ out="$(rp record --logical-change LC-P1 --task TASK-0001 --run RUN-p1 \
 assert_eq "$("$PYTHON_BIN" -c 'import json,sys; d=json.loads(sys.stdin.read()); print(d["effectiveVerdict"], ",".join(d["blocking"]), len(d["downgraded"]))' <<<"$out")" \
   "needs-fix f-p1 0" "supported P1 stays blocking"
 
-# P1 missing trigger → downgraded to P2 → accepted
+# P1 missing trigger → severity is immutable: stays P1, blocking, not accepted
+# (0.23.4 fail-closed classification; this used to downgrade to P2/accepted).
 FINDINGS_JSON='["unsupported blocker"]' \
 CLASSIFIED_JSON='[{"id":"f-weak","severity":"P1","summary":"unsupported blocker","impact":"maybe","requirement":"fix it"}]' \
   write_verdict "$tmp/p1-weak.json" needs-fix
 out="$(rp record --logical-change LC-WEAK --task TASK-0001 --run RUN-weak \
   --attempt 1 --verdict "$tmp/p1-weak.json" --head ghi --lane native)"
-assert_eq "$("$PYTHON_BIN" -c 'import json,sys; d=json.loads(sys.stdin.read()); print(d["effectiveVerdict"], d["applied"], ",".join(d["downgraded"]), d["reason"])' <<<"$out")" \
-  "accepted True f-weak unsupported-blocking-claim" "unsupported P1 downgraded"
+assert_eq "$("$PYTHON_BIN" -c 'import json,sys; d=json.loads(sys.stdin.read()); print(d["effectiveVerdict"], d["applied"], ",".join(d["blocking"]), ",".join(d["unsupported"]), len(d["downgraded"]), d["reason"])' <<<"$out")" \
+  "needs-fix False f-weak f-weak 0 unsupported-blocking-claim" "unsupported P1 stays blocking"
 
 # classification missing → needs-fix with unclassifiedCount
 FINDINGS_JSON='["raw finding A","raw finding B"]' \
