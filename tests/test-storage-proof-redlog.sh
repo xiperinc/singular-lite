@@ -219,8 +219,13 @@ assert_prompt_byte_identical_to_generic_reference() {
   run_id="$(basename "$(dirname "$prompt")")"
   task_json="$(singular_task_json "$SINGULAR_TASKS_DIR/$task_id.md")"
   ref="$SINGULAR_STATE_DIR/reference-l2-prompt.md"
+  # The driver binds the packet base to the admitted commit, not the branch
+  # name (ff29c88), so the reference renders the resolved target commit.
+  local admitted_base
+  admitted_base="$(git -C "$SINGULAR_ROOT" rev-parse --verify "target^{commit}")" \
+    || fail "$label: target must resolve to a commit"
   render_prechange_prompt "$SINGULAR_ORCH_DIR/prompts/l2-test-first-developer.md" \
-    "$ref" "$task_json" "$run_id" "target"
+    "$ref" "$task_json" "$run_id" "$admitted_base"
   # The delivery rescue intentionally appends the complete task document to
   # every worker prompt. Keep the old generic base byte-for-byte and require
   # that exact document, rather than treating the new obligation as drift.
