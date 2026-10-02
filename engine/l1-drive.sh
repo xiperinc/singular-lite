@@ -2382,6 +2382,19 @@ l1_provider_window_observed() {
   return 0
 }
 
+# End a reserved review operation that will produce no verdict (provider
+# deferral inside the audit phase), so its slot is not held by an operation that
+# can never complete. Never fails the caller.
+l1_release_review_operation() {
+  local reason="$1"
+  [[ -n "${review_operation_id:-}" ]] || return 0
+  python3 "$SCRIPT_DIR/review_policy.py" release \
+    --logical-change "$review_logical_change" --operation "$review_operation_id" \
+    --reason "$reason" \
+    >"$run_dir/review-policy-release-attempt-${n:-0}.json" \
+    2>"$run_dir/review-policy-release-attempt-${n:-0}.err" || true
+}
+
 # Clear a result path before the launch that will write it, so a sidecar left by
 # an earlier invocation can never be read as this invocation's evidence.
 l1_clear_runner_result() {
@@ -3972,6 +3985,7 @@ PY
   fi
   for ((audit_try=0; audit_try<=audit_infra_max; audit_try++)); do
     if l1_provider_window_preflight auditor "$audit_runner" audit "$n"; then
+      l1_release_review_operation "provider window closed during the audit phase"
       attempt_failure="provider-deferred"; attempt_ctx="$SINGULAR_PLANNER_BACKOFF_FILE"
       return 1
     fi
@@ -4071,6 +4085,7 @@ PY
     # This invocation's own validated provider evidence outranks its exit code
     # (including 86/87) and whatever record it did or did not write.
     if l1_provider_window_observed auditor audit "$n" "$audit_result_file"; then
+      l1_release_review_operation "provider window closed during the audit phase"
       attempt_failure="provider-deferred"; attempt_ctx="$audit_result_file"
       return 1
     fi
@@ -4093,6 +4108,7 @@ PY
         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"reviewer\",\"attempt\":$n,\"sessionId\":\"$reviewer_resume_id\",\"resumeOutcome\":\"refused\",\"consumesInfrastructureBudget\":false}" || true
       reviewer_strategy="fresh"; reviewer_strategy_reason="resume-failed"
       if l1_provider_window_preflight auditor "$audit_runner" audit "$n"; then
+        l1_release_review_operation "provider window closed during the audit phase"
         attempt_failure="provider-deferred"; attempt_ctx="$SINGULAR_PLANNER_BACKOFF_FILE"
         return 1
       fi
@@ -4151,6 +4167,7 @@ PY
       l1_status auditing active "Classifying the auditor response for attempt $n" true \
         "Validate the audit verdict" "" "audit-controller"
       if l1_provider_window_observed auditor audit "$n" "$audit_result_file"; then
+        l1_release_review_operation "provider window closed during the audit phase"
         attempt_failure="provider-deferred"; attempt_ctx="$audit_result_file"
         return 1
       fi
