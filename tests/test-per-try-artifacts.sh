@@ -77,7 +77,24 @@ decoy_canary="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
 [[ "$decoy_canary" != "$archive_nonce" && "$decoy_canary" != *"$archive_nonce"* ]] \
   || fail "decoy canary must be independent from archive nonce"
 sibling_writer_path="$CALLER_STATE_DIR/archive-hermeticity-sibling-$$.log"
-trap 'rm -f "$sibling_writer_path"; rm -rf "$tmp"' EXIT
+# The worker phase runs in this shell with its output captured to a file under
+# $tmp; an unbound driver global kills the shell there (set -u) and the file
+# would vanish with $tmp. Surface it on any non-zero exit, on the test's own
+# stderr (fd 9): the trap inherits the dying function's redirection.
+exec 9>&2
+on_exit() {
+  local status=$? out
+  rm -f "$sibling_writer_path"
+  if [[ "$status" -ne 0 ]]; then
+    for out in "$tmp"/worker-phase-*.out; do
+      [[ -f "$out" ]] || continue
+      echo "--- $(basename "$out") (tail) ---" >&9
+      tail -20 "$out" >&9
+    done
+  fi
+  rm -rf "$tmp"
+}
+trap on_exit EXIT
 caller_protected_before="$(protected_inventory)"
 run_dir="$tmp/run"
 mkdir -p "$run_dir"
@@ -86,6 +103,10 @@ printf 'prompt\n' >"$run_dir/l2-active-prompt.md"
 # Extract only the worker phase so this remains a focused unit test rather than
 # provisioning a real worktree and provider session.
 eval "$(awk '/^run_worker_phase\(\) \{/{copy=1} copy{print} copy && /^}$/{exit}' "$ENGINE_HOME/engine/l1-drive.sh")"
+# The worker phase launches every provider argv through the host-owned context
+# boundary (831e1ae). Use the real helpers: with no context configuration the
+# boundary is feature-off and must invoke the runner argv unchanged.
+source "$ENGINE_HOME/engine/ctx-rehydrate-event.sh"
 
 runner="$tmp/runner.sh"
 cat >"$runner" <<'SH'
@@ -146,6 +167,16 @@ attempt_failure=""
 attempt_ctx=""
 worker_strategy=""
 worker_strategy_reason=""
+# Driver globals (l1-drive.sh): no authorized continuation, no prior attempt's
+# context bundle, no campaign binding, and no context configuration selected.
+authorized_continuation=()
+continuation_invocation_started="no"
+latest_worker_context_bundle=""
+l1_campaign_binding=""
+SINGULAR_ROOT="$tmp/root"
+SINGULAR_TASKS_DIR="$SINGULAR_ROOT/docs/orchestration/tasks"
+task_file="$SINGULAR_TASKS_DIR/$task_id.md"
+unset SINGULAR_CONTEXT_CONFIG_FILE SINGULAR_JSON_CONFIG_FILE
 SINGULAR_RUNNER_CONTRACT_ARGS=()
 
 l1_status() { :; }
