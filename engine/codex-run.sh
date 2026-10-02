@@ -294,7 +294,9 @@ fi
 # Model selection lives in the runner. If the host asks us to resume a session
 # whose recorded model/effort no longer match what THIS runner derives now,
 # refuse (exit 86) so the host goes fresh instead of feeding a model-shifted
-# session. This keeps model knowledge entirely on the runner side.
+# session. This keeps model knowledge entirely on the runner side. 86 means
+# exactly "refused before any provider work started", which is what makes the
+# host's fresh fallback free; a resume that started and failed exits 87 below.
 # The same gate compares the retained ENVELOPE BINDING too. A warning telling
 # the model to ignore revoked history is not a control: when the current
 # authorization/model/provider/policy/capability identity differs from the one
@@ -736,16 +738,21 @@ with open(tmp, "w", encoding="utf-8") as handle:
 os.replace(tmp, path)
 PY
 fi
-# ---- Resume-failure signalling (exit 86) ------------------------------------
-# A resumed run that exits nonzero with empty output is indistinguishable, to the
-# host, from a real model failure unless we flag it. Surface 86 so the host falls
-# back to fresh within the same attempt rather than burning a retry.
+# ---- Resume-failure signalling (exit 87) ------------------------------------
+# A resumed run that exits nonzero with empty output is a STARTED provider
+# invocation that failed, which is not the same fact as the refusal above
+# (exit 86, where no provider work began). The two used to share 86, so the host
+# relaunched fresh for free on either -- concealing a real started invocation,
+# and a provider limit along with it. 87 is the started-and-failed signal: the
+# host may still go fresh, but it pays the worker-infrastructure allowance to do
+# so. The normalized runner result written on exit still carries any provider
+# limit, and that evidence outranks either code.
 if [[ -n "$resume_session_id" && "$exit_code" -ne 0 ]]; then
   out_empty="yes"
   if [[ -n "$output_last_message" && -s "$output_last_message" ]]; then out_empty="no"; fi
   if [[ "$out_empty" == "yes" ]]; then
-    echo "codex-run: resume produced no usable output (rc=$exit_code); signalling resume-failure" >&2
-    exit 86
+    echo "codex-run: resume produced no usable output (rc=$exit_code); signalling resume-failure (87)" >&2
+    exit 87
   fi
 fi
 

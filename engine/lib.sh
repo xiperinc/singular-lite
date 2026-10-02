@@ -4759,6 +4759,29 @@ print(value)
 PY
 }
 
+# The provider-window class one invocation's OWN runner result proves, or rc 1.
+# args: result_file [expected_role]
+#
+# This is the invocation-boundary question "did THIS launch hit a provider
+# window?", so it reads exactly one result file — the one the caller named for
+# this launch and cleared before it — and never a cumulative log, a transcript
+# or model output. Both classes go through the bound provider-error validation;
+# expected_role, when given, must match the role the runner recorded, so an
+# implementer result cannot stand in for an auditor's.
+singular_runner_provider_window_class() {
+  local result_file="${1:-}" expected_role="${2:-}" class evidence
+  [[ -n "$result_file" && -f "$result_file" ]] || return 1
+  for class in quota provider-overloaded; do
+    evidence="$(singular_runner_quota_evidence_json "$result_file" "$class" 2>/dev/null)" || continue
+    if [[ -n "$expected_role" && "$evidence" != *"\"role\":\"$expected_role\""* ]]; then
+      return 1
+    fi
+    printf '%s\n' "$class"
+    return 0
+  done
+  return 1
+}
+
 singular_planner_failure_class() {
   local log_file="$1" exit_code="${2:-0}" output_file="${3:-}" result_file="${4:-}"
   local structured=""
@@ -4834,18 +4857,37 @@ singular_selected_provider_identity() {
 }
 
 singular_planner_backoff_active_json() {
+  singular_backoff_record_active_json "$(singular_selected_runner_path)" ""
+}
+
+# Is the provider window still closed for the runner a specific ROLE would
+# launch now? The planner backoff record is the one shared provider-window
+# state; this reads it keyed to that role's runner instead of the default
+# SINGULAR_RUNNER, because roleRunners can route the implementer, auditor and
+# decider to different providers. Only the two provider-window classes defer an
+# invocation: a generic planner backoff (invalid output, planner exit) answers
+# "should the loop plan right now" and says nothing about a worker or auditor.
+# Prints the active record; returns 1 when the role may launch.
+singular_provider_window_active_json() {
+  singular_backoff_record_active_json "${1:-}" "quota provider-overloaded"
+}
+
+# args: runner_path [space-separated failure classes; empty = any]
+singular_backoff_record_active_json() {
+  local runner="${1:-}" classes="${2:-}"
   [[ -f "$SINGULAR_PLANNER_BACKOFF_FILE" ]] || return 1
   # Provider identity is trusted only for a canonically resolved shipped
   # adapter; a basename-colliding custom runner remains unknown and therefore
   # keeps the conservative global-backoff behavior.
   local selected_provider
-  selected_provider="$(singular_selected_provider_identity 2>/dev/null || true)"
-  python3 - "$SINGULAR_PLANNER_BACKOFF_FILE" "$selected_provider" "$SINGULAR_ADAPTER_PROVIDERS_JSON" <<'PY'
+  selected_provider="$(singular_runner_provider_identity "$runner" 2>/dev/null || true)"
+  python3 - "$SINGULAR_PLANNER_BACKOFF_FILE" "$selected_provider" "$SINGULAR_ADAPTER_PROVIDERS_JSON" \
+    "$classes" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
 
-path, selected_provider, adapters_raw = sys.argv[1:4]
+path, selected_provider, adapters_raw, classes_raw = sys.argv[1:5]
 try:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -4855,6 +4897,9 @@ except Exception:
     sys.exit(1)
 now = datetime.now(timezone.utc)
 if until <= now:
+    sys.exit(1)
+classes = set(classes_raw.split())
+if classes and data.get("failureClass") not in classes:
     sys.exit(1)
 # Provider-less v0 records and unknown/custom current runners remain global
 # backoffs for compatibility. A known built-in provider switch is the only case
@@ -6319,6 +6364,40 @@ with open(tmp, "w", encoding="utf-8") as f:
     f.write("\n")
 os.replace(tmp, path)
 print(data["retryCount"])
+PY
+}
+
+# Record which phase a provider window deferred, beside the lease's budget
+# state. args: task_id deferral_json. The record names the pending phase,
+# role, provider and window so the deferral is attributable after the run; it
+# never touches retryCount or productPassStarted (a provider window is not a
+# product pass), and unpark carries it forward like any other unknown key.
+singular_lease_record_provider_deferral() {
+  local task_id="$1" deferral_json="$2"
+  local lease
+  lease="$(singular_lease_path "$task_id")"
+  [[ -f "$lease" ]] || return 1
+  python3 - "$lease" "$deferral_json" <<'PY'
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+path, raw = sys.argv[1:3]
+deferral = json.loads(raw)
+if not isinstance(deferral, dict):
+    raise SystemExit(1)
+with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+deferral["recordedAt"] = now
+data["providerDeferral"] = deferral
+data["updatedAt"] = now
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
 PY
 }
 

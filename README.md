@@ -862,8 +862,9 @@ Role-keyed runtime session resume (`codex exec resume`, `claude -r`) behind orde
 fail-closed staleness gates, for three roles:
 
 - **Implementer/reviewer** (within one drive): defaulting ON
-  (`SINGULAR_SESSION_AFFINITY=1`); any gate failure or runner refusal degrades
-  silently to a fresh run within the same attempt.
+  (`SINGULAR_SESSION_AFFINITY=1`); any gate failure or runner refusal (exit 86)
+  degrades silently to a fresh run within the same attempt. A resume that
+  started and failed (exit 87) relaunches fresh as an infrastructure retry.
 - **Planner** (across planning runs, per DAG node): behind
   `SINGULAR_PLANNER_SESSION` — persisted per-node session meta, node-lineage and
   template-sha gates, session leases against concurrent resume, rc-86 fresh
