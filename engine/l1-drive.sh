@@ -3943,18 +3943,7 @@ PY
   # audit (recoveryAuthorization.freshAuditRequired). Its recovery authority is
   # the explicit authority that opens a new review series once acceptance has
   # closed the logical change; a replayed authority opens nothing.
-  if [[ "${#authorized_repair[@]}" -eq 7 ]]; then
-    local review_reopen_evidence
-    review_reopen_evidence="$(singular_lease_field "$task_id" \
-      recoveryAuthorization.authorityPath 2>/dev/null || true)"
-    python3 "$SCRIPT_DIR/review_policy.py" reopen \
-      --logical-change "$review_logical_change" --task "$task_id" \
-      --authority "recovery-authorization:${authorized_repair[0]}" \
-      --reason "authorized repair recovery requires a fresh audit" \
-      --evidence "${review_reopen_evidence:-/nonexistent}" --if-closed \
-      >"$run_dir/review-policy-reopen-attempt-${n}.json" \
-      2>"$run_dir/review-policy-reopen-attempt-${n}.err" || true
-  fi
+  l1_review_reopen_for_authorized_repair "$n"
   # Atomic admission: the reserved operation holds the review slot for every
   # auditor transport retry below and is completed exactly once by `record`.
   python3 "$SCRIPT_DIR/review_policy.py" reserve \
@@ -4701,11 +4690,31 @@ PY
 # This never reserves or records a round (run_audit_phase still checks again
 # immediately before the auditor). Sets attempt_failure/attempt_ctx and
 # returns 4 when exhausted, 1 when capacity cannot be established.
+# An authorized repair recovery of an accepted candidate requires a fresh audit
+# (recoveryAuthorization.freshAuditRequired). Its recovery authority opens a new
+# review series once acceptance has closed the logical change. Idempotent: the
+# same authority opens at most one series, so the capacity admission before
+# product work and the reservation before the auditor may both call it.
+l1_review_reopen_for_authorized_repair() {
+  local n="${1:-0}" review_reopen_evidence
+  [[ "${#authorized_repair[@]}" -eq 7 ]] || return 0
+  review_reopen_evidence="$(singular_lease_field "$task_id" \
+    recoveryAuthorization.authorityPath 2>/dev/null || true)"
+  python3 "$SCRIPT_DIR/review_policy.py" reopen \
+    --logical-change "$review_logical_change" --task "$task_id" \
+    --authority "recovery-authorization:${authorized_repair[0]}" \
+    --reason "authorized repair recovery requires a fresh audit" \
+    --evidence "${review_reopen_evidence:-/nonexistent}" --if-closed \
+    >"$run_dir/review-policy-reopen-attempt-${n}.json" \
+    2>"$run_dir/review-policy-reopen-attempt-${n}.err" || true
+}
+
 l1_review_capacity_admit() {
   local stage="$1" n="${2:-0}"
   local check_file="$run_dir/review-capacity-${stage}-${n}.json"
   local check_err="$run_dir/review-capacity-${stage}-${n}.err"
   local rc=0
+  l1_review_reopen_for_authorized_repair "$n"
   python3 "$SCRIPT_DIR/review_policy.py" check \
     --logical-change "$review_logical_change" --task "$task_id" \
     >"$check_file" 2>"$check_err" || rc=$?
