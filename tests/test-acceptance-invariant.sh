@@ -425,7 +425,14 @@ MOCK_AUDIT_CLASSIFIED='[{"id":"F1","severity":"P0","summary":"Data loss","trigge
   drive TASK-0001
 assert_eq "$DRIVE_RC" "3" "accepted P0: non-accepting exit ($DRIVE_OUT)"
 assert_unpublished "accepted verdict with P0"
-assert_contains "$(events)" '"reason":"blocking-finding-open"' "accepted P0: refusal reason"
+# Two independent layers refuse it: review_policy classify() turns the
+# accepted label into needs-fix before publication is ever attempted, and the
+# acceptance predicate refuses an open P0 if a verdict ever reaches it.
+ev="$(events)"
+if [[ "$ev" != *'"reason":"blocking-finding-open"'* ]]; then
+  assert_contains "$ev" '"originalVerdict":"accepted","effectiveVerdict":"needs-fix"' \
+    "accepted P0: refused by classification or by the predicate"
+fi
 pass "an accepted verdict with an open P0 is not published"
 )
 
