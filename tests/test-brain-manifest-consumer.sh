@@ -539,13 +539,17 @@ done
 if [[ "\$level" == "l2" ]]; then
   c=0; [[ -f "\$DRIVER_L2_COUNT" ]] && c="\$(cat "\$DRIVER_L2_COUNT")"
   c=\$((c+1)); printf '%s\n' "\$c" >"\$DRIVER_L2_COUNT"
-  if [[ "\$c" == "2" ]]; then [[ -n "\$out" ]] && : >"\$out"; exit 0; fi
-  mkdir -p "\$worktree/internal/widget"
-  printf 'package widget\n' >"\$worktree/internal/widget/parser.go"
+  # The second (rehydrated) worker makes no edit and reports the already
+  # committed candidate: the driver's no-changes path, not a missing packet
+  # (which since 0.23.4 is the packet-format domain's read-only re-emission).
+  if [[ "\$c" != "2" ]]; then
+    mkdir -p "\$worktree/internal/widget"
+    printf 'package widget\n' >"\$worktree/internal/widget/parser.go"
+  fi
   [[ -n "\$out" ]] && cat >"\$out" <<'PKT'
 {"schema":"singular.orchestration.state-packet.v0","packetId":"p","runId":"r","taskId":"TASK-0001","area":"widget","role":"l2-developer","status":"needs-review","baseRef":"target","branch":"agent/widget/TASK-0001-generic","headSha":"0","workspace":"w","ownedFiles":["internal/widget/parser.go"],"changedFiles":[],"commands":[],"tests":[],"evidence":[],"blockers":[],"nextAction":"await auditor verdict","createdAt":"2026-01-01T00:00:00Z"}
 PKT
-  [[ -n "\$meta" ]] && singular_codex_session_meta_write "\$meta" WORKER-SID gpt-5.5 medium "\$worktree" 0
+  [[ "\$c" != "2" && -n "\$meta" ]] && singular_codex_session_meta_write "\$meta" WORKER-SID gpt-5.5 medium "\$worktree" 0
   exit 0
 fi
 ac=0; [[ -f "\$DRIVER_AUDIT_COUNT" ]] && ac="\$(cat "\$DRIVER_AUDIT_COUNT")"
