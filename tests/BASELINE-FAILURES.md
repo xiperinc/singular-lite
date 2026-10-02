@@ -1,155 +1,55 @@
 # Baseline test failures
 
-Tests on `codex/brain-integration` that do **not** pass cleanly, recorded so the
-0.23.3 release gate is enforceable rather than advisory. Entries 1-5 are
-deterministic; entry 6 is a flake and carries its own gate rule.
+Tests that do **not** pass cleanly on this tree, recorded so the release gate is
+enforceable rather than advisory.
 
-**Gate definition for 0.23.3.** "Tests pass" means:
+**Gate definition.** "Tests pass" means:
 
 1. No test outside this file fails, and
-2. No test inside this file fails *differently* than recorded here — a changed
-   error line, a new `FAIL:` assertion, or a changed exit code is a regression
-   even though the test was already failing.
+2. No test inside this file fails *differently* than recorded here.
 
-Entry 5 is a special case: its assertions pass and it self-reports `PASS:`. The
-gate reads that line, not its exit code.
+## 0.23.4: no known deterministic failures
 
-Each entry was reproduced against baseline commit **`d5d5b37`** in a detached
-`git worktree`, so no working-tree change is in scope.
+The 0.23.3 file recorded six entries; the full suite on 0.23.3 actually had
+fourteen tests that also failed on 0.23.2, plus three host-environmental
+failures. All of them are fixed in 0.23.4. Each fix names its cause in its
+commit message; in short:
 
----
+| Test | Cause | Fix |
+| --- | --- | --- |
+| accept-existing-packet | engine never wrote `secret-scan-result.json` before `evidence-manifest.sh` (since ff29c88) | engine |
+| detached-dispatch, continuity-core | stale exported JSON-config provenance across fixture rebuilds; old-engine copy lacked python helpers | test |
+| candidate-recovery | `/dev/null` selected as JSON config | test |
+| capability-runtime | explicit config selected for a repo that has none | test |
+| ctx-rehydrate-authored-config | missing config selected before sourcing lib.sh | test |
+| ctx-artifact-scan-hook | shim engine dir held only `ctx-*.sh` | test |
+| orphan-continuation | out-of-scope untracked partial vs ff29c88 admission (guard kept) | test |
+| dispatch-auto-accept | expected an un-audited stranded packet to auto-heal; now refused by the acceptance predicate | test |
+| ctx-paired-audit | fixture predated the evidence broker | test |
+| per-try-artifacts | extracted worker phase missing driver globals; error hidden by the exit trap | test |
+| session-affinity | warmup and retry share a run id; preserved-candidate path collided | test |
+| singular-brand | routing moved from `do_GET` to `_do_GET` | test |
+| storage-proof-redlog | reference prompt named the branch, prompt now names the base SHA | test |
+| frozen-campaign-terminal | teardown could not unlink earlier cases' read-only engine copies | test |
+| exit-attribution | fixture run id `RUN-2` matched live `RUN-2026…` runs via `pgrep -f` | test |
+| setup | host had too little free disk for installer variants | environment |
 
-## 1. `test-detached-dispatch`
+## Flaky: `test-l1-parallel`
 
-- **Baseline verified against:** `d5d5b37`
-- **Exit code:** 2
-- **First error line:**
-  ```
-  singular: selected JSON configuration is missing: <TMPDIR>/repo/singular.config.json
-  ```
-- **Classification:** environment / fixture. Not an assertion failure — the run
-  produces no `FAIL:` line and no `ok:` line; it exits on the first engine call.
-- **Mechanism (diagnosed 2026-09-18, while building the item ③ test; not
-  fixed):** the JSON-config selector guard at `engine/lib.sh:210` refuses when
-  `SINGULAR_JSON_CONFIG_SOURCE` is `selector` and the selected file does not
-  exist. `lib.sh` *exports* the resolved config location every time it is
-  sourced. A test that builds more than one fixture repo therefore re-sources
-  `lib.sh` with `SINGULAR_ROOT` changed while `SINGULAR_JSON_CONFIG_FILE` still
-  points at the PREVIOUS repo; the incoming value no longer matches the newly
-  computed default, so the source flips from `default` to `selector`, and the
-  stale path does not exist. The tests never create `singular.config.json`, so
-  the first fixture is fine and every later one dies.
-  Reproduced independently: the item ③ test hit exactly this on its second
-  fixture and was fixed by unsetting `SINGULAR_JSON_CONFIG_FILE`,
-  `SINGULAR_JSON_CONFIG_SOURCE`, `SINGULAR_JSON_CONFIG_DEFAULT_ROOT` and
-  `SINGULAR_JSON_CONFIG_DEFAULT_FILE` before re-sourcing. The same one-line
-  change is the likely fix for entries 1 and 4 — a **0.23.4 item**, not fixed
-  here, because it is a test-harness defect and out of 0.23.3's scope.
+- **Observed at `edb39bb`:** 2 failures in 4 runs, with two different messages
+  (`fanout imports both planned nodes: want '2' got '1'`;
+  `one free slot imports exactly one planned task: want '1' got '0'`). It
+  passed in the 0.23.3 full-suite run.
+- **Gate rule:** retry up to 3 times; one pass is a pass. Three consecutive
+  failures is a regression and must be investigated.
+- **Open:** the planner fanout slot-accounting race is not yet diagnosed.
 
-## 2. `test-orphan-continuation`
+## Host requirements for a full-suite run
 
-- **Baseline verified against:** `d5d5b37`
-- **Exit code:** 1
-- **First error line:**
-  ```
-  FAIL: native continuation did not invoke exactly one worker
-  ```
-- **Classification:** **assertion failure.** The only genuine product-behaviour
-  failure in this file. No configuration error precedes it.
-
-## 3. `test-candidate-recovery`
-
-- **Baseline verified against:** `d5d5b37`
-- **Exit code:** 1
-- **First error line:**
-  ```
-  singular: selected JSON configuration is missing: /dev/null
-  ```
-  followed immediately by:
-  ```
-  FAIL: host recovery entrypoint refused valid repair authority
-  ```
-- **Classification:** environment / fixture, with a **downstream assertion
-  failure**. Distinct trigger from entries 1 and 4: this test deliberately sets
-  `SINGULAR_JSON_CONFIG_FILE=/dev/null` (`tests/test-candidate-recovery.sh:167`,
-  and again at `:509`). `/dev/null` is not a regular file, so it fails the
-  `[[ -f ]]` test in the same `engine/lib.sh:210` guard and the entrypoint exits
-  2 — which the test then reports as a refused repair authority.
-- **Not verified:** whether the assertion would pass if the configuration
-  resolved. Treat the `FAIL:` line as unexplained until that is established.
-
-## 4. `test-continuity-core`
-
-- **Baseline verified against:** `d5d5b37`
-- **Exit code:** 2
-- **First error line:** (preceded by one passing step, `ok: preflight`)
-  ```
-  singular: selected JSON configuration is missing: <TMPDIR>/repo/singular.config.json
-  ```
-- **Classification:** environment / fixture. Same shape and, per the mechanism
-  diagnosed under entry 1, the same likely cause: a second fixture re-sources
-  `lib.sh` with a stale exported config path. Entry 4 gets one `ok:` line first
-  (`ok: preflight`), consistent with the first fixture succeeding and the second
-  failing. 0.23.4 item; not fixed here.
-
-## 5. `test-frozen-campaign-terminal`
-
-- **Baseline verified against:** `d5d5b37` (~30 min run; 15 `ok:`, 0 `FAIL:`,
-  `PASS:` line present, exit 1 from the teardown)
-- **Exit code:** 1
-- **Assertions:** **all pass** — 15 `ok:` lines, zero `FAIL:` lines, and the
-  test prints its own success line:
-  ```
-  PASS: frozen campaign terminal lifecycle
-  ```
-- **First error line:** (teardown only, after the `PASS:` line)
-  ```
-  rm: <TMPDIR>/singular-frozen-terminal.<X>/.../vendor/singular-brain/engine/cli.mjs: Permission denied
-  ```
-- **Classification:** **teardown only.** The EXIT trap runs
-  `rm -rf "$scratch" || cleanup_failed=1`
-  (`tests/test-frozen-campaign-terminal.sh:107`) and the script exits non-zero on
-  that flag. The scratch tree contains a frozen campaign runtime, which is
-  written read-only by design: directories are `dr-xr-xr-x` and files
-  `-r--r--r--` (observed under `.singular-state/runtime/*/`), so entries cannot
-  be unlinked. Known A14/A15 behaviour.
-- **Gate rule:** read the `PASS:` line, not the exit code. A missing `PASS:`
-  line, any `FAIL:` line, or fewer than 15 `ok:` lines is a regression.
-- **Cleanup note:** a failed teardown leaves a read-only scratch tree under
-  `$TMPDIR/singular-frozen-terminal.*`. Remove it with `chmod -R u+w` first, and
-  only when no run is in flight — the glob will match a live run's directory.
-
-## 6. `test-l1-parallel` — FLAKY, not deterministically red
-
-- **Baseline verified against:** `edb39bb` (the item ②a commit)
-- **Observed:** 2 failures in 4 consecutive runs at that commit, with **two
-  different** messages:
-  ```
-  FAIL: fanout imports both planned nodes: want '2' got '1'
-  FAIL: one free slot imports exactly one planned task: want '1' got '0'
-  ```
-- **Classification:** nondeterministic. The test exercises planner fanout and
-  concurrent slot accounting, so it is timing-sensitive. Two distinct
-  assertions failing across runs of the same commit rules out a deterministic
-  defect in the code under test.
-- **Gate rule:** unlike entries 1-5 this one cannot be matched against a fixed
-  error line. Retry up to **3 times**; one pass is a pass. **Three consecutive
-  failures is a regression** and must be investigated.
-- **Not fixed here.** Recorded as a 0.23.4 item: diagnose the race in planner
-  fanout slot accounting. Fixing it inline would have been out of scope for
-  0.23.3 and the non-goal on landing-rate work.
-
----
-
-## Notes
-
-- Entries 1, 3 and 4 all reach the `engine/lib.sh:210` selector guard, but **not
-  by one route**: entry 3 is an explicit `/dev/null` idiom inside the test,
-  while entries 1 and 4 are a stale exported config path leaking across fixture
-  rebuilds (mechanism under entry 1). Entries 1 and 4 probably share one fix;
-  entry 3 does not.
-- Entry 2 is the only genuine product-behaviour failure recorded here.
-- **Coverage gap.** Entries 1 and 2 are the two tests most likely to catch a
-  regression in the reaper and retained-worktree work (plan items 2 and 3).
-  Changes in that area cannot rely on them and must carry their own pinned
-  tests, with the uncovered regressions stated explicitly in the change report.
+- At least 15 GiB free. `test-frozen-campaign-terminal` alone peaks at about
+  10 GiB of scratch and must not run concurrently with another copy of itself.
+- macOS `mktemp -d` ignores `TMPDIR`; scratch lands in the per-user temp
+  directory. Remove read-only leftovers with `chmod -R u+w` first, and only
+  when no run is in flight.
+- Run ids in fixtures must be host-unique when the reaper's process
+  observation can be reached (`pgrep -f <runId>`).
