@@ -7,6 +7,60 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.23.3] — 2026-10-02 — Lifecycle liveness and an honest ledger
+
+Repairs for the stalls the 2026-09-14 field campaign hit, each of which ended
+with an operator finishing state by hand. `schemaVersion` stays **v2**.
+Acceptance criteria are unchanged, and the landing rate was deliberately not
+optimised in this release; that waits for the clock work, which needs the
+telemetry below.
+
+- **Durable lease state survives compatibility writes (`15c68a4`).**
+  `singular_lease_write` rebuilt the record from a fixed allowlist and dropped
+  `operatorReentries`, `campaignBinding`, `nextAction` and `failureReason` on
+  every write, which also disabled the 0.22.0 history guard that depends on
+  `operatorReentries`. Unknown keys are now carried forward.
+- **Reserve-before-bind deadlock (`edb39bb`).** A STOP-frozen or crashed
+  driver's `launched` dispatch record is closed independently of the
+  successor's lease instead of being counted as a running worker forever.
+- **Per-generation dispatch exits (`81c0cc9`).** The exit file was per task, so
+  a predecessor's exit sat on the successor's path and the reaper pinned the
+  record as running. Exits are generation-qualified (the legacy path is still
+  read).
+- **Driver admitted to its own reservation's retained worktree (`aaa0129`).**
+  The retained-worktree guard refused the `planned` lease the scheduler had just
+  handed the driver; it now compares reservation owner and generation.
+- **Interrupted continuation claims are repairable (`40479da`).** A crash
+  between the lease and dispatch-record commits left a consumed one-shot
+  authority with no attempt; a re-claim by the same execution run repairs it
+  without granting an extra invocation.
+- **Ownership proved before acceptance is published (`0f28ec2`).** A
+  stale-generation driver could stamp `accepted` on a successor's lease and
+  queue its packet before the owner check ran; the owner check now precedes
+  publication.
+- **Reservation refusals counted; honest call ledger (`11edc40`).** Refusals of
+  the same normalized condition accumulate and feed the breaker (park at 3);
+  the call ledger records operation ids, host wall time, provider durations and
+  missing-vs-zero usage.
+- **Process-group fence (`376f4b3`).** Bind-failure cleanup killed only the
+  detached child, so provider grandchildren survived and kept writing. Cleanup
+  now kills the tree and classifies the outcome, with an engine-executable exit
+  for the fence state.
+
+**Verification.** Full suite on the release tree (`7515dd0`), batched, on this
+host: 236 pass / 17 fail of 253. Fourteen failures fail identically on 0.23.2
+(`7ef2c52`): accept-existing-packet, candidate-recovery, capability-runtime,
+continuity-core, ctx-artifact-scan-hook, ctx-paired-audit,
+ctx-rehydrate-authored-config, detached-dispatch, dispatch-auto-accept,
+orphan-continuation, per-try-artifacts, session-affinity, singular-brand and
+storage-proof-redlog. Two are host-environmental: test-setup failed only under
+low disk and passes in isolation; test-exit-attribution's fixture run id `RUN-2`
+matches any live `RUN-2026…` run through the reaper's `pgrep -f` probe, and the
+test passes with host-unique ids. test-frozen-campaign-terminal, run alone, passes
+all 15 assertions and prints its `PASS:` line, then exits 1 from its known
+teardown (baseline entry 5). All seventeen are fixed in 0.23.4.
+`tests/BASELINE-FAILURES.md` listed only six of the pre-existing failures.
+
 ## [0.23.2] — 2026-09-16 — Correction to the 0.23.1 drift fix
 
 - The 0.23.1 exclusion of `SINGULAR_INTEGRATION_RECEIPT_FILE` from the
