@@ -70,6 +70,15 @@ while [[ $i -lt ${#args[@]} ]]; do
   fi
   i=$((i + 1))
 done
+prompt_file=""
+i=0
+while [[ $i -lt ${#args[@]} ]]; do
+  [[ "${args[$i]}" == "--prompt-file" ]] && prompt_file="${args[$((i + 1))]}"
+  i=$((i + 1))
+done
+if [[ -n "$prompt_file" ]]; then
+  cat "$prompt_file" > "$STUB_PROMPT_FILE"
+fi
 if [[ -n "$out" ]]; then
   printf '{"verdict":"%s","findings":%s}\n' \
     "${STUB_VERDICT:-accepted}" "${STUB_FINDINGS:-[]}" > "$out"
@@ -79,6 +88,39 @@ STUBEOF
 chmod +x "$STUB"
 export SINGULAR_RUNNER="$STUB"
 export STUB_ARGV_FILE="$tmp/stub-argv.txt"
+export STUB_PROMPT_FILE="$tmp/stub-prompt.txt"
+
+# The recorder launches the auditor through the host evidence broker
+# (engine/evidence_delivery.py run --required packet.json --required
+# audit-verification.json), which refuses unless the run dir holds an evidence
+# manifest binding a host-verified packet and verification report for this
+# task/run. Publish that accepted-run evidence, as l1-drive.sh does before
+# acceptance; shapes mirror tests/test_evidence_delivery.py.
+publish_accepted_evidence() {
+  local run_dir="$1" run_id="$2" task_id="$3"
+  python3 - "$run_dir" "$run_id" "$task_id" <<'PY'
+import hashlib, json, sys
+from pathlib import Path
+run_dir, run_id, task_id = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+identity = {"taskId": task_id, "runId": run_id, "headSha": "a" * 40}
+packet = dict(identity, schema="singular.orchestration.state-packet.v0")
+report = dict(identity, schema="singular.orchestration.gate-report.v0",
+              outcome="passed", command="true",
+              commandSha256=hashlib.sha256(b"true").hexdigest(),
+              sourceIntegrity={"status": "verified"})
+artifacts = []
+for name, value in (("packet.json", packet), ("audit-verification.json", report)):
+    data = json.dumps(value).encode()
+    (run_dir / name).write_bytes(data)
+    artifacts.append({"ref": name, "bytes": len(data),
+                      "sha256": hashlib.sha256(data).hexdigest()})
+manifest = dict(identity, schema="singular.orchestration.evidence-manifest.v0",
+                budget={"retrievalLimitBytes": 65536, "excerptLimitBytes": 2048,
+                        "limitBytes": 262144},
+                artifacts=artifacts)
+(run_dir / "evidence-manifest.json").write_text(json.dumps(manifest))
+PY
+}
 
 count_pa_events() {
   [[ -f "$SINGULAR_EVENTS_FILE" ]] || { echo 0; return 0; }
@@ -128,12 +170,16 @@ after_ev="$(shasum "$SINGULAR_EVENTS_FILE" | awk '{print $1}')"
 export SINGULAR_PAIRED_AUDIT_PCT=100
 : > "$SINGULAR_EVENTS_FILE"
 : > "$STUB_ARGV_FILE"
+publish_accepted_evidence "$RUN_DIR" "RUN-1" "TASK-0005" \
+  || fail "agreement: could not publish accepted-run evidence"
 # Sentinel sibling artifacts the recorder must NOT create/move/mutate.
 printf 'PACKET-ORIG' > "$RUN_DIR/state-packet.json"
 printf 'AUDIT-ORIG'  > "$RUN_DIR/audit-record.json"
 printf 'LEASE-ORIG'  > "$tmp/lease.json"
 printf 'INBOX-ORIG'  > "$tmp/inbox.txt"
 sib_before="$(cat "$RUN_DIR/state-packet.json" "$RUN_DIR/audit-record.json" \
+  "$RUN_DIR/packet.json" "$RUN_DIR/audit-verification.json" \
+  "$RUN_DIR/evidence-manifest.json" \
   "$tmp/lease.json" "$tmp/inbox.txt" | shasum | awk '{print $1}')"
 export STUB_VERDICT="accepted"
 export STUB_FINDINGS="[]"
@@ -151,11 +197,22 @@ grep -q -- '--resume-session' "$STUB_ARGV_FILE" \
   && fail "freshness: auditor invoked with --resume-session (not fresh)"
 grep -q -- '--resume' "$STUB_ARGV_FILE" \
   && fail "freshness: auditor invoked with a resume flag (not fresh)"
-grep -q 'prompts/auditor.md' "$STUB_ARGV_FILE" \
-  || fail "freshness: base auditor prompt not passed to the runner"
+# The broker hands the runner an immutable snapshot (delivery-prompt-<sha>.md)
+# composed from the base prompt plus the host-delivered evidence, so assert the
+# delivered CONTENT starts with the base auditor prompt's exact bytes.
+python3 - "$tmp/orch/prompts/auditor.md" "$STUB_PROMPT_FILE" <<'PY' \
+  || fail "freshness: base auditor prompt not delivered to the runner"
+import sys
+base = open(sys.argv[1], "rb").read()
+delivered = open(sys.argv[2], "rb").read()
+assert base and delivered.startswith(base), delivered[:200]
+assert b"Complete host-delivered review evidence" in delivered, delivered[:400]
+PY
 
 # Sibling artifacts untouched (no outcome change).
 sib_after="$(cat "$RUN_DIR/state-packet.json" "$RUN_DIR/audit-record.json" \
+  "$RUN_DIR/packet.json" "$RUN_DIR/audit-verification.json" \
+  "$RUN_DIR/evidence-manifest.json" \
   "$tmp/lease.json" "$tmp/inbox.txt" | shasum | awk '{print $1}')"
 [[ "$sib_before" == "$sib_after" ]] \
   || fail "agreement: recorder mutated a packet/lease/inbox/primary-audit path"
@@ -187,18 +244,25 @@ disagree_case() {
   local label="$1" verdict="$2" findings="$3"
   local run_dir="$tmp/run/$label"
   mkdir -p "$run_dir"
+  publish_accepted_evidence "$run_dir" "RUN-$label" "TASK-$label" \
+    || fail "disagreement[$label]: could not publish accepted-run evidence"
   : > "$SINGULAR_EVENTS_FILE"
+  : > "$STUB_ARGV_FILE"
   export STUB_VERDICT="$verdict"
   export STUB_FINDINGS="$findings"
   singular_ctx_paired_audit_record "RUN-$label" "TASK-$label" "$run_dir" "$tmp/worktree" \
     || fail "disagreement[$label]: recorder crashed"
+  # The disagreement must come from the auditor's answer, not from a refused
+  # launch (which also records verdict "unknown" = disagreement).
+  [[ -s "$STUB_ARGV_FILE" ]] || fail "disagreement[$label]: auditor was not invoked"
   [[ "$(count_pa_events)" -eq 1 ]] \
     || fail "disagreement[$label]: expected one event, got $(count_pa_events)"
   [[ -f "$run_dir/paired-audit.json" ]] || fail "disagreement[$label]: no record"
   python3 - "$run_dir/paired-audit.json" "$SINGULAR_EVENTS_FILE" <<'PY' \
     || fail "disagreement[$label]: not flagged as disagreement in both"
-import json, sys
+import json, os, sys
 rec = json.load(open(sys.argv[1]))
+assert rec.get("verdict") == os.environ["STUB_VERDICT"], rec
 assert rec.get("disagreement") is True, rec
 assert rec.get("agreement") is False, rec
 evs = [json.loads(l) for l in open(sys.argv[2]) if l.strip()]
