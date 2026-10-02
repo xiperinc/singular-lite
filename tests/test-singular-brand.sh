@@ -112,8 +112,18 @@ assert roots.get("config") == {"singleton": "singular.config.json"}
 
 handler = next(node for node in tree.body
                if isinstance(node, ast.ClassDef) and node.name == "Handler")
-do_get = next(node for node in handler.body
-              if isinstance(node, ast.FunctionDef) and node.name == "do_GET")
+methods = {node.name: node for node in handler.body
+           if isinstance(node, ast.FunctionDef)}
+# do_GET pins one configuration generation and delegates routing to _do_GET.
+assert any(
+    isinstance(node, ast.Call)
+    and isinstance(node.func, ast.Attribute)
+    and node.func.attr == "_do_GET"
+    and isinstance(node.func.value, ast.Name)
+    and node.func.value.id == "self"
+    for node in ast.walk(methods["do_GET"])
+)
+do_get = methods["_do_GET"]
 assert any(
     isinstance(node, ast.Call)
     and isinstance(node.func, ast.Attribute)
