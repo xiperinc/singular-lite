@@ -7,6 +7,94 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.23.4] — 2026-10-02 — Acceptance is a predicate
+
+Closes the acceptance holes and accounting defects found by the 2026-09-16
+loop-economics consultation (action-plan items 7–11), and turns the suite green.
+`schemaVersion` stays **v2**. Several changes alter behaviour an operator can
+see; they are marked **Behaviour**.
+
+### Acceptance
+
+- **One acceptance predicate for every publication (item 9; `f274758`).**
+  `engine/acceptance_validator.py` rechecks, for the exact candidate: the
+  host gate passed for this head, tree and attempt (G); a fresh, host-bound,
+  completely classified, non-blocking audit (A); the durable review-ledger round
+  (D); and a valid evidence manifest (E). It runs on the ordinary accept path,
+  on retained accepted-checkpoint recovery, and on the stranded-packet
+  auto-heal. Budgets play no part. A refusal emits `l1.acceptance_refused` and
+  writes `runs/<run>/acceptance-check.json`.
+- **Behaviour: `--no-audit` never produces an accepted packet.** Before this
+  release it published even a needs-fix verdict. It now yields a diagnostic,
+  non-integrable result.
+- **Behaviour: a legacy `accept-waiver` cannot substitute for an accepted audit**
+  (`legacyCompatibility.unboundWaivers` is unchanged but routed through the
+  predicate).
+- **Behaviour: a stranded packet with no fresh accepted audit is not
+  auto-healed.** `accept-existing-packet.sh` writes a host-authored verdict, which
+  never counts as the audit.
+- **`normalize()` never overwrites a model-reported `failed-product` with the
+  host's `passed` (`4902cfe`).** Only a clean echo mismatch is rewritten.
+
+### Review policy (items 7 and 8)
+
+- **Fail-closed classification (`9f9c87e`).** `review_policy.py record --apply`
+  rewrites the verdict the driver gates on, so these were acceptance holes:
+  an unsupported P0/P1 was demoted to P2; an `accepted` label skipped
+  inspection; one classified nit hid an unclassified finding. Severity is now
+  immutable, every verdict label is inspected, classification must cover every
+  finding exactly, and P0/P1 is a floor for `blockingSeverities`. A completely
+  classified P2/P3-only needs-fix is still accepted with backlog.
+- **Authoritative review ledger (`dad9fd5`).** `reserve` atomically admits one
+  review operation; `record` completes it idempotently (same content no-op,
+  different content conflict, exit 5) and refuses over the ceiling under the
+  lock; an accepted round **closes** the logical change instead of silently
+  resetting its budget, and `reopen --authority --reason --evidence` starts a new
+  series. Grants bind to their series. Legacy rows keep their old semantics.
+
+### Loop economics (items 10 and 11)
+
+- **Provider window at every invocation boundary (`732cd37`).** A validated
+  quota, overload or entitlement limit on the current invocation's own runner
+  result ends the phase as `provider-deferred` before packet validation, with no
+  product-repair or infrastructure charge. Every worker, resume fallback,
+  auditor and decider launch checks the window for the provider that role would
+  use. **Behaviour:** a deferral parks the lease (with `providerDeferral`);
+  resume with `singular unpark`.
+- **Exit 86 split (`2c0beda`).** `codex-run.sh` 86 now means only "resume refused
+  before provider work"; a resume that started and failed exits **87** and
+  consumes the infrastructure allowance.
+- **findingsStatus contract (`61545cb`).** One prompt fragment in every auditor
+  renderer; the host validates the map against the host-supplied prior findings.
+  `reviewPolicy` is no longer listed as a model-permitted field.
+- **Review capacity before product work; packet-format domain (`108dbb8`).** The
+  static `maxReviewRounds - 1` repair clamp is gone; the driver admits a review
+  slot before every product pass. A worker that mis-emits its packet gets one
+  read-only re-emission for the unchanged, fingerprinted candidate, shared
+  across `worker-no-packet` and representational `packet-invalid`, charged to
+  neither product repair nor review. Also fixes a silently skipped retained-branch
+  base refresh (missing `.singular-state/tmp`).
+- **Integration seam (`7cfcd7f`).** A provider deferral inside the audit phase
+  releases its reserved review operation.
+
+### Fixes and tests
+
+- **`accept-existing-packet` could not accept any non-empty delta since
+  ff29c88** (`d7f34d9`): it never wrote the structured secret-scan result the
+  evidence manifest requires.
+- Seventeen failing tests repaired; see `tests/BASELINE-FAILURES.md`, which now
+  records no known deterministic failures. New tests:
+  `test-review-policy-fail-closed`, `test-review-ledger-admission`,
+  `test-acceptance-invariant`, `test-provider-window-preflight`,
+  `test-audit-findings-status`, `test-packet-format-budget`,
+  `test-risk-review-coupling`.
+
+**Known limits.** Task-sized clocks (item 12) still wait for telemetry. A
+provider deferral parks rather than re-admitting automatically when the window
+reopens, and one shared backoff record serves all providers.
+`import-packet.sh` / `integrate.sh` still accept legacy waiver packets for pre-v2
+consumers. The `test-l1-parallel` fanout race is undiagnosed.
+
 ## [0.23.3] — 2026-10-02 — Lifecycle liveness and an honest ledger
 
 Repairs for the stalls the 2026-09-14 field campaign hit, each of which ended
