@@ -95,6 +95,7 @@ FIXTURE_RUNNER=""
 FIXTURE_MODE=""
 CASE_MAX_RETRIES="1"
 REVIEW_MAX_ROUNDS="3"
+CASE_AUDIT_INFRA_MAX="0"
 SEED_HEAD=""
 CAMPAIGN_BINDING=""
 ENGINE_FINGERPRINT=""
@@ -206,7 +207,29 @@ lease = json.load(open(sys.argv[1], encoding="utf-8"))
 with open(sys.argv[2], "w", encoding="utf-8") as handle:
     handle.write(str(lease.get("retryCount")) + "\n")
 PY
-    if [[ "$call" == "1" ]]; then
+    if [[ " red-red-green block-red-green block-block block-block-grant " \
+        == *" ${FIRST_AUDIT_MODE:?} "* ]]; then
+      # Review/repair coupling sequences (protocol 5.3): every pass writes a
+      # distinct candidate; GATE_RED makes the worker gate a product failure.
+      marker="green"
+      case "$FIRST_AUDIT_MODE:$call" in
+        red-red-green:1|red-red-green:2|block-red-green:2) marker="GATE_RED" ;;
+      esac
+      printf 'package widget\n// %s candidate from pass %s\n' "$marker" "$call" \
+        >"$worktree/internal/widget/parser.go"
+    elif [[ " reemit-success alternating reemit-mutates reemit-evidence no-output-durable " \
+        == *" ${FIRST_AUDIT_MODE:?} "* ]]; then
+      # Packet-format domain (protocol 6): the candidate stays frozen unless
+      # the mode deliberately has the re-emission (call 2) touch it.
+      case "$FIRST_AUDIT_MODE:$call" in
+        reemit-mutates:2)
+          printf 'package widget\n// edited during packet re-emission\n' \
+            >"$worktree/internal/widget/parser.go" ;;
+        reemit-evidence:2)
+          mkdir -p "$worktree/.singular-evidence"
+          printf 'fabricated green\n' >"$worktree/.singular-evidence/green.log" ;;
+      esac
+    elif [[ "$call" == "1" ]]; then
       [[ "$(<"$FIRST_AUDIT_COUNTERS/worker-retry-1")" == "0" ]] || exit 96
       grep -q 'seeded committed candidate' "$worktree/internal/widget/parser.go" || exit 97
     elif [[ "${FIRST_AUDIT_MODE:?}" == "no-output" ]]; then
@@ -225,8 +248,18 @@ PY
           >"$worktree/internal/widget/parser.go"
       fi
     fi
-    if [[ "${FIRST_AUDIT_MODE:?}" == "no-output" ]]; then
+    if [[ "${FIRST_AUDIT_MODE:?}" == "no-output" || "$FIRST_AUDIT_MODE" == "no-output-durable" \
+        || ( "$call" == "1" && " reemit-success reemit-mutates reemit-evidence " \
+          == *" $FIRST_AUDIT_MODE "* ) \
+        || ( "$FIRST_AUDIT_MODE:$call" == "alternating:2" ) ]]; then
       rm -f "$output"
+      write_result
+      exit 0
+    fi
+    if [[ "$FIRST_AUDIT_MODE" == "alternating" ]]; then
+      # Representational packet-invalid: parseable, but missing required fields.
+      printf '%s\n' '{"schema":"singular.orchestration.state-packet.v0","nextAction":"await auditor verdict"}' \
+        >"$output"
       write_result
       exit 0
     fi
@@ -264,6 +297,7 @@ PY
     ;;
   auditor)
     call="$(bump auditor)"
+    [[ -z "$prompt" ]] || cp "$prompt" "$FIRST_AUDIT_COUNTERS/auditor-prompt-$call.md"
     host_report="$(dirname "$output")/audit-verification.json"
     [[ -f "$host_report" ]] || exit 101
     status="$($FIRST_AUDIT_PYTHON - "$host_report" <<'PY'
@@ -276,7 +310,7 @@ PY
 )"
     [[ "$status" == "passed" || "$status" == "not-rerun-evidence-verified" ]] || exit 102
     FIRST_AUDIT_OUTPUT="$output" FIRST_AUDIT_STATUS="$status" \
-      FIRST_AUDIT_AUDITOR_CALL="$call" \
+      FIRST_AUDIT_AUDITOR_CALL="$call" FIRST_AUDIT_PROMPT="$prompt" \
       "$FIRST_AUDIT_PYTHON" - <<'PY'
 import json
 import os
@@ -287,7 +321,20 @@ canonical = "FINDING_ALPHA: replace the seeded implementation"
 verdict = "needs-fix"
 findings = [canonical]
 required_fixes = [canonical]
-if mode in {"accept", "required-fixes"} and call > 1:
+coupling_blocks = None
+if mode == "format-correction":
+    verdict = "accepted"
+    findings = []
+    required_fixes = []
+elif mode in {"red-red-green", "reemit-success"}:
+    verdict = "accepted"
+    findings = []
+    required_fixes = []
+elif mode == "block-red-green":
+    coupling_blocks = call == 1
+elif mode in {"block-block", "block-block-grant"}:
+    coupling_blocks = True
+elif mode in {"accept", "required-fixes"} and call > 1:
     verdict = "accepted"
     findings = []
     required_fixes = []
@@ -353,12 +400,59 @@ record = {
     "requiredFixes": required_fixes,
     "rationale": "fresh accepted audit" if verdict == "accepted" else "fresh audit feedback",
 }
+if coupling_blocks is not None:
+    if coupling_blocks:
+        name = ["ALPHA", "BETA", "GAMMA", "DELTA"][call - 1]
+        text = f"FINDING_{name}: pass {call} still violates the contract"
+        verdict = "needs-fix"
+        findings = [text]
+        required_fixes = [text]
+        classified = [{
+            "id": f"p1-{call}", "severity": "P1", "summary": text,
+            "trigger": "the reviewed candidate", "impact": "acceptance criteria unmet",
+            "requirement": "correct the candidate",
+        }]
+    else:
+        verdict = "accepted"
+        findings = []
+        required_fixes = []
+        classified = []
+    record["verdict"] = verdict
+    record["findings"] = findings
+    record["requiredFixes"] = required_fixes
+    record["rationale"] = "fresh accepted audit" if verdict == "accepted" else "fresh audit feedback"
 if classified:
     record["classifiedFindings"] = classified
+# Follow-up reviews report exactly the prior IDs the host prompt requires.
+import re
+prompt_text = ""
+try:
+    prompt_text = open(os.environ.get("FIRST_AUDIT_PROMPT", ""), encoding="utf-8").read()
+except OSError:
+    pass
+required_ids = re.search(r"MUST report every one of these IDs: (.+?)\.\n", prompt_text)
+if required_ids:
+    state = "resolved" if verdict == "accepted" else "still-open"
+    record["findingsStatus"] = {
+        ident.strip(): state for ident in required_ids.group(1).split(",") if ident.strip()
+    }
+if mode == "format-correction" and call == 1:
+    # Schema-valid, host-invalid: a first review that invents prior IDs.
+    record["findingsStatus"] = {"F1": "resolved"}
 with open(os.environ["FIRST_AUDIT_OUTPUT"], "w", encoding="utf-8") as handle:
     json.dump(record, handle)
     handle.write("\n")
 PY
+    write_result
+    ;;
+  decider)
+    # Same-class repeats reach the model decider; the fixture always retries
+    # so the host's own budget and review-capacity guards decide.
+    failure_class="$(basename "$prompt" .md)"
+    failure_class="${failure_class#decider-prompt-}"
+    printf '{"schema":"singular.orchestration.decider-verdict.v0","failureClass":"%s","action":"retry","rationale":"fixture decider retries","nextOwner":"l1"}\n' \
+      "$failure_class" >"$output"
+    bump decider >/dev/null
     write_result
     ;;
   *) exit 103 ;;
@@ -395,7 +489,7 @@ run_engine() {
       SINGULAR_REQUIRE_AUDIT=1 \
       SINGULAR_AUDIT_VERIFY=0 \
       SINGULAR_WORKER_INFRA_MAX=0 \
-      SINGULAR_AUDIT_INFRA_MAX=0 \
+      SINGULAR_AUDIT_INFRA_MAX="${CASE_AUDIT_INFRA_MAX:-0}" \
       SINGULAR_MAX_RETRIES="$CASE_MAX_RETRIES" \
       SINGULAR_DECIDER_FAST=1 \
       SINGULAR_REVIEW_MAX_ROUNDS="${REVIEW_MAX_ROUNDS:-3}" \
@@ -406,6 +500,8 @@ run_engine() {
 make_fixture() {
   local name="$1" mode="$2" max_retries="$3" risk_tier="$4"
   REVIEW_MAX_ROUNDS="${5:-3}"
+  # Frozen into the campaign at start, so it is a fixture property.
+  CASE_AUDIT_INFRA_MAX="${6:-0}"
   FIXTURE_ROOT="$scratch/$name/repo"
   FIXTURE_COUNTERS="$scratch/$name/counters"
   FIXTURE_RUNNER="$scratch/$name/runner.sh"
@@ -461,6 +557,12 @@ set -euo pipefail
 [[ "${SINGULAR_TEST_TASK_ID:-}" == "TASK-0001" ]]
 [[ "${SINGULAR_TEST_TASK_CONTRACT:-}" == \
   "${SINGULAR_TEST_TASKS_DIR:-}/TASK-0001.md" ]]
+if grep -q GATE_RED internal/widget/parser.go 2>/dev/null; then
+  printf '%s\n' '{"schema":"singular.orchestration.gate-observation.v0","failures":[{"signature":"widget-contract"}]}' \
+    >"${SINGULAR_GATE_REPORT_FILE:?}"
+  echo "AssertionError: widget contract violated" >&2
+  exit 1
+fi
 printf '%s\n' '{"schema":"singular.orchestration.gate-observation.v0","failures":[]}' \
   >"${SINGULAR_GATE_REPORT_FILE:?}"
 GATE
@@ -843,25 +945,40 @@ test_no_output_stays_fail_closed() {
   local name=no-output
   make_fixture "$name" no-output 1 normal
   reconcile "$name" dispatch
-  # A first packet-format failure on an unchanged candidate gets exactly one
-  # re-emit (charged to the product budget); the repeat parks fail-closed with
-  # no audit spend.
-  assert_eq "$(calls worker)" "2" "$name worker calls"
+  # Packet-format domain (protocol 6): a first no-packet worker on a frozen
+  # candidate gets exactly one read-only packet re-emission (the second worker
+  # call), charged to the packet-format allowance -- not to product repair and
+  # not to a review round. When it also emits nothing, the task parks with no
+  # audit. Before 0.23.4 this was a second product pass (attempt count 2,
+  # retryCount 1).
+  assert_eq "$(calls worker)" "2" "$name worker calls (initial + one re-emission)"
   assert_eq "$(calls auditor)" "0" "$name auditor calls"
+  grep -q '## Packet Re-emission (authoritative' "$FIXTURE_COUNTERS/worker-prompt-2.md" \
+    || fail "$name second invocation was not a packet re-emission"
   local events
   events="$(cat "$FIXTURE_ROOT/.singular-state/events.ndjson")"
   assert_contains "$events" '"type":"l1.packet_format_retry_eligible"' \
     "$name first format failure re-emits once"
-  assert_contains "$events" '"type":"l1.unchanged_candidate_parked"' \
-    "$name unchanged no-output guard"
+  assert_contains "$events" '"type":"packet_format.reemit_failed"' "$name re-emission failed"
+  assert_contains "$events" '"type":"l1.packet_format_parked"' "$name packet-format terminal"
   assert_contains "$events" '"failureClass":"worker-no-packet"' \
     "$name output failure classification"
   assert_not_contains "$events" '"type":"worker.infra_retry"' \
     "$name no-output is not infrastructure"
-  assert_attempt_count 2
+  assert_not_contains "$events" '"type":"l1.product_repair_budget_consumed"' \
+    "$name no product repair charge"
+  "$PYTHON_BIN" - "$FIXTURE_ROOT/.singular-state/leases/TASK-0001.json" <<'PY' \
+    || fail "$name durable packet-format allowance"
+import json, sys
+lease = json.load(open(sys.argv[1], encoding="utf-8"))
+ops = lease["packetFormatAllowance"]["operations"]
+assert len(ops) == 1 and ops[0]["used"] == 1, ops
+assert ops[0]["failureClass"] == "worker-no-packet", ops
+PY
+  assert_attempt_count 1
   finish_and_prove_no_redispatch "$name" 2 0
-  assert_terminal_contract blocked worker-no-packet escalate-parked 1
-  echo "ok: frozen rc-zero no-output remains fail-closed without audit or repair spend"
+  assert_terminal_contract blocked worker-no-packet escalate-parked 0
+  echo "ok: frozen rc-zero no-output gets one packet re-emission, then parks without audit or repair spend"
 }
 
 test_p2_only_accepted_without_repair() {
@@ -947,16 +1064,227 @@ JSON
     backfill --file "$scratch/$name/backfill.json" >/dev/null \
     || fail "$name backfill failed"
   reconcile "$name" dispatch
-  assert_eq "$(calls worker)" "1" "$name worker calls"
+  # Review capacity is admitted before product work (protocol 5.3): with no
+  # future review slot the worker is never started. This pinned one worker
+  # call before 0.23.4.
+  assert_eq "$(calls worker)" "0" "$name worker not called"
   assert_eq "$(calls auditor)" "0" "$name auditor not called"
   events="$(cat "$FIXTURE_ROOT/.singular-state/events.ndjson")"
   assert_contains "$events" '"type":"review.rounds_exhausted"' "$name exhausted event"
+  assert_contains "$events" '"stage":"pre-worker"' "$name refused before the worker"
   assert_not_contains "$events" '"type":"l1.product_repair_budget_consumed"' \
     "$name did not spend product repair"
-  assert_attempt_count 1
-  finish_and_prove_no_redispatch "$name" 1 0
+  assert_attempt_count 0
+  finish_and_prove_no_redispatch "$name" 0 0
   assert_terminal_contract blocked review-rounds-exhausted escalate-parked 0
-  echo "ok: pre-filled review rounds exhaust before auditor launch"
+  echo "ok: pre-filled review rounds exhaust before any worker launch"
+}
+
+test_findings_status_format_correction() {
+  local name=format-correction events
+  make_fixture "$name" format-correction 1 normal 2 1
+  reconcile "$name" dispatch
+  # An invented findingsStatus on a first review is an auditor-format failure:
+  # one fresh auditor correction, no worker rerun, no product or review charge.
+  assert_eq "$(calls worker)" "1" "$name worker calls"
+  assert_eq "$(calls auditor)" "2" "$name auditor calls (one fresh correction)"
+  events="$(cat "$FIXTURE_ROOT/.singular-state/events.ndjson")"
+  assert_contains "$events" '"type":"l1.audit_format_invalid"' "$name format failure"
+  assert_contains "$events" '"budgetDomain":"auditor-infrastructure"' "$name audit-infra domain"
+  assert_contains "$events" '"type":"l1.audit_repair_retry"' "$name repair prompt used"
+  assert_contains "$events" '"type":"l1.task_accepted"' "$name accepted after correction"
+  assert_eq "$(event_count review.policy_applied)" "1" "$name one semantic review round"
+  assert_not_contains "$events" '"type":"l1.product_repair_budget_consumed"' \
+    "$name no product repair"
+  grep -q 'findingsStatus must be omitted' "$FIXTURE_COUNTERS/auditor-prompt-2.md" \
+    || fail "$name correction prompt lacks the host diagnostic"
+  grep -q 'When the host supplied no prior findings, OMIT findingsStatus.' \
+    "$FIXTURE_COUNTERS/auditor-prompt-1.md" \
+    || fail "$name initial auditor prompt lacks the findingsStatus fragment"
+  assert_attempt_count 1
+  finish_and_prove_no_redispatch "$name" 1 2
+  assert_terminal_contract completed "" accepted 0
+  echo "ok: invented findingsStatus spends one fresh auditor correction, never a worker pass"
+}
+
+# ---- Review/repair coupling (protocol 5.3; run by test-risk-review-coupling.sh)
+# R_max = min(risk-tier repairs, explicit lowering cap) with no static clamp to
+# maxReviewRounds - 1; product work is admitted only while a future review
+# slot exists. Default two review rounds; SINGULAR_MAX_RETRIES=2 leaves the
+# risk tier as the binding ceiling (normal 1, high 2).
+coupling_case() {
+  local name="$1" mode="$2" tier="$3"
+  make_fixture "$name" "$mode" 2 "$tier" 2
+  if [[ "$mode" == "block-block-grant" ]]; then
+    printf 'fixture operator grants one extra review\n' >"$scratch/$name/grant-evidence.txt"
+    SINGULAR_REVIEW_MAX_ROUNDS=2 \
+      "$PYTHON_BIN" "$ENGINE_HOME/engine/review_policy.py" \
+      --config "$FIXTURE_ROOT/singular.config.json" \
+      --state-dir "$FIXTURE_ROOT/.singular-state" \
+      grant --logical-change TASK-0001 --rounds 1 --reason "fixture third review" \
+      --evidence "$scratch/$name/grant-evidence.txt" --authority fixture-operator >/dev/null \
+      || fail "$name review grant failed"
+  fi
+  reconcile "$name" dispatch
+}
+
+test_coupling_red_red_green() {
+  local events
+  # Normal: stops after the first repair; no audit was ever reached.
+  coupling_case seq1-normal red-red-green normal
+  assert_eq "$(calls worker)" "2" "seq1-normal worker calls"
+  assert_eq "$(calls auditor)" "0" "seq1-normal auditor calls"
+  events="$(cat "$FIXTURE_ROOT/.singular-state/events.ndjson")"
+  assert_contains "$events" '"type":"l1.product_repair_budget_exhausted"' "seq1-normal repair ceiling"
+  finish_and_prove_no_redispatch seq1-normal 2 0
+  assert_terminal_contract blocked gate-red escalate-parked 1
+  # High: the second repair is no longer clamped away; only one audit runs.
+  coupling_case seq1-high red-red-green high
+  assert_eq "$(calls worker)" "3" "seq1-high worker calls"
+  assert_eq "$(calls auditor)" "1" "seq1-high auditor calls"
+  events="$(cat "$FIXTURE_ROOT/.singular-state/events.ndjson")"
+  assert_contains "$events" '"productRepairMax":2' "seq1-high unclamped ceiling"
+  assert_contains "$events" '"type":"l1.task_accepted"' "seq1-high accepted"
+  assert_eq "$(event_count review.policy_applied)" "1" "seq1-high one review round"
+  assert_attempt_count 3
+  finish_and_prove_no_redispatch seq1-high 3 1
+  assert_terminal_contract completed "" accepted 2
+  echo "ok: red -> red -> green: normal stops after one repair, high uses two and one audit"
+}
+
+test_coupling_block_red_green() {
+  local events
+  coupling_case seq2-normal block-red-green normal
+  assert_eq "$(calls worker)" "2" "seq2-normal worker calls"
+  assert_eq "$(calls auditor)" "1" "seq2-normal auditor calls"
+  finish_and_prove_no_redispatch seq2-normal 2 1
+  assert_terminal_contract blocked gate-red escalate-parked 1
+  coupling_case seq2-high block-red-green high
+  assert_eq "$(calls worker)" "3" "seq2-high worker calls"
+  assert_eq "$(calls auditor)" "2" "seq2-high auditor calls"
+  events="$(cat "$FIXTURE_ROOT/.singular-state/events.ndjson")"
+  assert_contains "$events" '"type":"l1.task_accepted"' "seq2-high accepted"
+  assert_eq "$(event_count review.policy_applied)" "2" "seq2-high two review rounds"
+  grep -q '"findingsStatus"' "$FIXTURE_ROOT/.singular-state/runs/"*/audit.json \
+    || fail "seq2-high follow-up audit did not carry the required status map"
+  finish_and_prove_no_redispatch seq2-high 3 2
+  assert_terminal_contract completed "" accepted 2
+  echo "ok: block -> red -> green: normal stops after one repair, high uses two and two audits"
+}
+
+test_coupling_block_block() {
+  local events
+  coupling_case seq3-normal block-block normal
+  assert_eq "$(calls worker)" "2" "seq3-normal worker calls"
+  assert_eq "$(calls auditor)" "2" "seq3-normal auditor calls"
+  events="$(cat "$FIXTURE_ROOT/.singular-state/events.ndjson")"
+  assert_contains "$events" '"type":"l1.product_repair_budget_exhausted"' "seq3-normal repair ceiling"
+  finish_and_prove_no_redispatch seq3-normal 2 2
+  assert_terminal_contract blocked audit-needs-fix escalate-parked 1
+  # High still parks: repair budget remains, but no third review slot exists,
+  # so the second repair is neither charged nor started.
+  coupling_case seq3-high block-block high
+  assert_eq "$(calls worker)" "2" "seq3-high worker calls"
+  assert_eq "$(calls auditor)" "2" "seq3-high auditor calls"
+  events="$(cat "$FIXTURE_ROOT/.singular-state/events.ndjson")"
+  assert_contains "$events" '"stage":"pre-repair"' "seq3-high refused before the repair"
+  assert_eq "$(event_count l1.product_repair_budget_consumed)" "1" "seq3-high repair charges"
+  assert_eq "$(calls decider)" "0" "seq3-high no decider round-trip"
+  assert_attempt_count 2
+  finish_and_prove_no_redispatch seq3-high 2 2
+  assert_terminal_contract blocked review-rounds-exhausted escalate-parked 1
+  # A granted third review admits the repair, but never expands the product
+  # ceiling: the third block parks on the risk-tier repair budget.
+  coupling_case seq3-grant block-block-grant high
+  assert_eq "$(calls worker)" "3" "seq3-grant worker calls"
+  assert_eq "$(calls auditor)" "3" "seq3-grant auditor calls"
+  events="$(cat "$FIXTURE_ROOT/.singular-state/events.ndjson")"
+  assert_contains "$events" '"type":"l1.product_repair_budget_exhausted"' "seq3-grant repair ceiling"
+  assert_eq "$(event_count l1.product_repair_budget_consumed)" "2" "seq3-grant repair charges"
+  finish_and_prove_no_redispatch seq3-grant 3 3
+  assert_terminal_contract blocked audit-needs-fix escalate-parked 2
+  echo "ok: block -> block parks in both tiers; a review grant does not expand repairs"
+}
+
+# ---- Packet-format domain (protocol 6; run by test-packet-format-budget.sh) -
+packet_format_lease_ops() {
+  "$PYTHON_BIN" - "$FIXTURE_ROOT/.singular-state/leases/TASK-0001.json" <<'PY'
+import json, sys
+lease = json.load(open(sys.argv[1], encoding="utf-8"))
+print(len(lease.get("packetFormatAllowance", {}).get("operations", [])))
+PY
+}
+
+test_packet_format_reemit_success() {
+  local name=reemit-success events
+  make_fixture "$name" reemit-success 1 normal
+  reconcile "$name" dispatch
+  assert_eq "$(calls worker)" "2" "$name worker calls (initial + re-emission)"
+  assert_eq "$(calls auditor)" "1" "$name normal gate and audit after re-emission"
+  events="$(cat "$FIXTURE_ROOT/.singular-state/events.ndjson")"
+  assert_contains "$events" '"type":"packet_format.reemitted"' "$name re-emitted"
+  assert_contains "$events" '"type":"l1.task_accepted"' "$name accepted"
+  assert_not_contains "$events" '"type":"l1.product_repair_budget_consumed"' "$name no repair"
+  assert_eq "$(packet_format_lease_ops)" "1" "$name one durable allowance operation"
+  assert_attempt_count 1
+  finish_and_prove_no_redispatch "$name" 2 1
+  assert_terminal_contract completed "" accepted 0
+  echo "ok: one read-only re-emission recovers a frozen candidate without product or review spend"
+}
+
+test_packet_format_alternating() {
+  local name=alternating events
+  make_fixture "$name" alternating 2 high
+  reconcile "$name" dispatch
+  # packet-invalid then worker-no-packet share ONE allowance: no third call,
+  # even with product budget left.
+  assert_eq "$(calls worker)" "2" "$name worker calls"
+  assert_eq "$(calls auditor)" "0" "$name auditor calls"
+  events="$(cat "$FIXTURE_ROOT/.singular-state/events.ndjson")"
+  assert_contains "$events" '"failureClass":"packet-invalid"' "$name first class"
+  assert_contains "$events" '"type":"l1.packet_format_parked"' "$name parked"
+  assert_eq "$(event_count l1.packet_format_retry_eligible)" "1" "$name one re-emission"
+  assert_eq "$(event_count decider.fast_path)" "0" "$name no decider round"
+  assert_attempt_count 1
+  finish_and_prove_no_redispatch "$name" 2 0
+  assert_terminal_contract blocked worker-no-packet escalate-parked 0
+  echo "ok: alternating packet-invalid / worker-no-packet cannot buy a second re-emission"
+}
+
+test_packet_format_mutation() {
+  local name mode events
+  for mode in reemit-mutates reemit-evidence; do
+    name="$mode"
+    make_fixture "$name" "$mode" 1 normal
+    reconcile "$name" dispatch
+    assert_eq "$(calls worker)" "2" "$name worker calls"
+    assert_eq "$(calls auditor)" "0" "$name no audit of a mutated candidate"
+    events="$(cat "$FIXTURE_ROOT/.singular-state/events.ndjson")"
+    assert_contains "$events" '"type":"packet_format.candidate_mutated"' "$name fail closed"
+    assert_not_contains "$events" '"type":"l1.product_repair_budget_consumed"' "$name no repair"
+    finish_and_prove_no_redispatch "$name" 2 0
+    assert_terminal_contract blocked packet-reemit-mutated escalate-parked 0
+  done
+  echo "ok: a re-emission that edits code or fabricates evidence fails closed"
+}
+
+test_packet_format_durable() {
+  local name=no-output-durable events
+  make_fixture "$name" no-output-durable 1 normal
+  reconcile "$name" dispatch
+  assert_eq "$(calls worker)" "2" "$name first dispatch worker calls"
+  # A new process, a new run directory and an operator unpark do not reset a
+  # consumed allowance: the same frozen candidate gets no second re-emission.
+  run_engine "$BASH_BIN" "$ENGINE_HOME/engine/ops.sh" unpark TASK-0001 --reason fixture \
+    >"$scratch/$name/unpark.log" 2>&1 || { cat "$scratch/$name/unpark.log" >&2; fail "$name unpark"; }
+  reconcile "$name" redispatch
+  assert_eq "$(calls worker)" "3" "$name second dispatch: worker only, no re-emission"
+  assert_eq "$(calls auditor)" "0" "$name auditor calls"
+  events="$(cat "$FIXTURE_ROOT/.singular-state/events.ndjson")"
+  assert_contains "$events" '"type":"packet_format.allowance_exhausted"' "$name allowance remembered"
+  assert_eq "$(event_count l1.packet_format_retry_eligible)" "1" "$name one re-emission in total"
+  assert_eq "$(packet_format_lease_ops)" "1" "$name allowance survived unpark"
+  echo "ok: the packet-format allowance survives a new process, run directory and unpark"
 }
 
 echo "NOTE: deterministic fixture provider; this test is not live unattended-provider evidence"
@@ -972,6 +1300,27 @@ case "${FIRST_AUDIT_CASE:-all}" in
   p2-only) test_p2_only_accepted_without_repair ;;
   p1-then-accept) test_p1_then_accept ;;
   rounds-exhausted) test_rounds_exhausted_without_auditor ;;
+  format-correction) test_findings_status_format_correction ;;
+  coupling-red-red-green) test_coupling_red_red_green ;;
+  coupling-block-red-green) test_coupling_block_red_green ;;
+  coupling-block-block) test_coupling_block_block ;;
+  packet-format-reemit) test_packet_format_reemit_success ;;
+  packet-format-alternating) test_packet_format_alternating ;;
+  packet-format-mutation) test_packet_format_mutation ;;
+  packet-format-durable) test_packet_format_durable ;;
+  packet-format-budget)
+    # Owned by tests/test-packet-format-budget.sh; not part of "all".
+    test_packet_format_reemit_success
+    test_packet_format_alternating
+    test_packet_format_mutation
+    test_packet_format_durable
+    ;;
+  risk-review-coupling)
+    # Owned by tests/test-risk-review-coupling.sh; not part of "all".
+    test_coupling_red_red_green
+    test_coupling_block_red_green
+    test_coupling_block_block
+    ;;
   all)
     test_feedback_identity_contract
     test_corrected_after_fresh_audit
@@ -984,6 +1333,7 @@ case "${FIRST_AUDIT_CASE:-all}" in
     test_p2_only_accepted_without_repair
     test_p1_then_accept
     test_rounds_exhausted_without_auditor
+    test_findings_status_format_correction
     ;;
   *) fail "unknown FIRST_AUDIT_CASE=${FIRST_AUDIT_CASE}" ;;
 esac

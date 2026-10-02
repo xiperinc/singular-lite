@@ -447,6 +447,9 @@ elif [[ "${#authorized_repair[@]}" -ne 7 && -z "$accepted_checkpoint_mode" ]]; t
     # an event; a real conflict still refuses below.
     if ! git -C "$SINGULAR_ROOT" merge-base --is-ancestor "$packet_base_ref" \
         "$retained_branch_head" >/dev/null 2>&1; then
+      # The stderr capture lives under state/tmp, which a fresh state tree may
+      # not have yet; a failed redirection would skip the refresh entirely.
+      mkdir -p "$SINGULAR_STATE_DIR/tmp" 2>/dev/null || true
       refreshed_head="$(singular_refresh_retained_branch "$SINGULAR_ROOT" "$worker_branch" \
         "$packet_base_ref" "$SINGULAR_WORKTREES_DIR/$task_id" 2>"$SINGULAR_STATE_DIR/tmp/base-refresh-$task_id.err" || true)"
       if [[ -n "$refreshed_head" ]]; then
@@ -577,13 +580,14 @@ review_logical_change="$(tf dagNode 2>/dev/null || true)"
 review_logical_change="${review_logical_change#\"}"
 review_logical_change="${review_logical_change%\"}"
 [[ -n "$review_logical_change" && "$review_logical_change" != "null" ]] || review_logical_change="$task_id"
-review_bound=$((review_max_rounds - 1))
-[[ "$review_bound" -lt 0 ]] && review_bound=0
-if [[ "$max_retries" -gt "$review_bound" ]]; then
-  max_retries="$review_bound"
-fi
+# R_max = min(risk-tier repairs, explicit lowering cap); it is no longer
+# clamped to maxReviewRounds - 1. A correction pass and a completed audit
+# round are different things: a high-risk task may spend its second repair on
+# a red gate before any audit. Review capacity is instead admitted before every
+# product pass (l1_review_capacity_admit), so a pass that could never be
+# reviewed is not started.
 singular_append_event "l1.review_policy_bound" \
-  "review policy bounded product repair retries" \
+  "review capacity is admitted before product work; repair ceiling is risk-derived" \
   "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"logicalChange\":\"$review_logical_change\",\"maxReviewRounds\":$review_max_rounds,\"productRepairMax\":$product_repair_max}" \
   || true
 bounded_infra_budget() {
@@ -791,11 +795,16 @@ PY
 
 # ---- Auditor prompt assembly ----
 audit_prompt="$run_dir/auditor-prompt.md"
+SINGULAR_AUDIT_FINDINGS_STATUS_CONTRACT="$(singular_audit_findings_status_contract)" \
 python3 - "$SINGULAR_ORCH_DIR/prompts/auditor.md" "$audit_prompt" "$task_json" "$run_id" \
   "$run_dir" "$SCRIPT_DIR" "$audit_write_contract" <<'PY'
 import json
+import os
 import sys
 template_path, out_path, task_raw, run_id, run_dir, script_dir, audit_contract = sys.argv[1:8]
+findings_status_contract = os.environ.get("SINGULAR_AUDIT_FINDINGS_STATUS_CONTRACT", "").strip()
+if not findings_status_contract:
+    raise SystemExit("findingsStatus output contract is unavailable")
 t = json.loads(task_raw)
 with open(template_path, "r", encoding="utf-8") as f:
     tmpl = f.read().replace("[TASK-ID]", t["taskId"])
@@ -820,9 +829,12 @@ block merge. P1 is a correctness or contract break that must block merge.
 P2 is a non-blocking defect. P3 is a nit, style note, or suggestion. P0/P1
 items MUST also carry non-blank trigger, impact, and requirement. findings[]
 and requiredFixes[] strings MUST correspond to classified items. The host
-records P2/P3 as non-blocking backlog; do not emit reviewPolicy (host-owned).
-No additional top-level fields are permitted except optional findingsStatus
-and classifiedFindings. Emit ONLY that JSON object."""
+records P2/P3 as non-blocking backlog. No additional top-level fields are
+permitted except optional findingsStatus and classifiedFindings.
+
+{findings_status_contract}
+
+Emit ONLY that JSON object."""
 else:
     verdict_contract = f"""Your FINAL message MUST be a single JSON object matching
 `schemas/orchestration/audit-verdict.v0.schema.json`: schema
@@ -2378,6 +2390,336 @@ l1_clear_runner_result() {
   rm -f "$result_file" "${result_file%.json}.provider-error.json" 2>/dev/null || true
 }
 
+# ---- Packet-format domain (loop-economics protocol section 6) ---------------
+# A worker that finished but mis-emitted its final packet has produced a
+# frozen candidate, not a product failure. Recovery is: the existing bounded
+# syntactic repair, then AT MOST ONE read-only packet re-emission for that
+# exact candidate, then normal packet validation, gate and audit. It charges
+# neither product repair nor a review round. The allowance is ONE per frozen
+# candidate, shared by worker-no-packet and representational packet-invalid
+# (alternating error names cannot buy a second try), and is durable on the
+# lease (singular_lease_write and unpark carry unknown keys forward), so a new
+# process, run directory or `singular unpark` cannot reset it.
+#
+# packet_format_state (reset per attempt) tells the retry loop what happened:
+#   ""                  no packet-format failure this attempt
+#   reemitted           the one re-emission produced a valid packet
+#   exhausted           allowance already spent for this candidate, or the
+#                       re-emission still produced no valid packet
+#   candidate-mutated   the re-emission changed the frozen candidate
+#   fingerprint-failed  the candidate could not be fingerprinted (fail closed)
+#   one-shot            an authorized one-shot continuation; no extra call
+packet_format_state=""
+
+# Fingerprint of everything a packet re-emission must not change: index
+# entries (modes + blobs), the working-tree diff, untracked content and
+# symlink targets, the committed head, and the worker's evidence directory.
+l1_packet_format_fingerprint() {
+  local candidate_worktree="$1" base head
+  head="$(git -C "$candidate_worktree" rev-parse HEAD 2>/dev/null)" || return 1
+  base="$(l1_candidate_signature "$candidate_worktree")" || return 1
+  [[ -n "$head" && -n "$base" ]] || return 1
+  python3 - "$candidate_worktree" "$base" "$head" <<'PY'
+import hashlib
+import os
+import subprocess
+import sys
+
+root, base, head = sys.argv[1:4]
+digest = hashlib.sha256()
+digest.update(f"candidate:{base}\nhead:{head}\n".encode())
+untracked = subprocess.run(
+    ["git", "-C", root, "ls-files", "--others", "--exclude-standard", "-z"],
+    check=True, capture_output=True,
+).stdout.split(b"\0")
+for raw in sorted(item for item in untracked if item):
+    path = os.path.join(root, os.fsdecode(raw))
+    if os.path.islink(path):
+        digest.update(b"untracked-link:" + raw + b"->" + os.fsencode(os.readlink(path)) + b"\n")
+evidence = os.path.join(root, ".singular-evidence")
+for current, dirs, files in os.walk(evidence, followlinks=False):
+    dirs.sort()
+    for name in sorted(dirs + files):
+        path = os.path.join(current, name)
+        rel = os.path.relpath(path, root)
+        info = os.lstat(path)
+        digest.update(f"evidence:{rel}:{info.st_mode:o}:".encode())
+        if os.path.islink(path):
+            digest.update(os.fsencode(os.readlink(path)))
+        elif os.path.isfile(path):
+            with open(path, "rb") as handle:
+                digest.update(hashlib.sha256(handle.read()).hexdigest().encode())
+        digest.update(b"\n")
+print(digest.hexdigest())
+PY
+}
+
+# Allowance identity of a frozen candidate: what the worker produced, not
+# where it sits in history. It hashes the on-disk state of the task's owned
+# paths (committed or not) and the evidence directory, so a base refresh that
+# merges control-state commits from the target after `singular unpark` (new
+# head, new index) is still the SAME candidate and cannot buy a second
+# re-emission. Mutation detection uses the stricter full fingerprint above.
+l1_packet_format_candidate_key() {
+  local candidate_worktree="$1"
+  shift
+  [[ -d "$candidate_worktree" && "$#" -gt 0 ]] || return 1
+  python3 - "$candidate_worktree" "$@" <<'PY'
+import hashlib
+import os
+import sys
+
+root = os.path.realpath(sys.argv[1])
+digest = hashlib.sha256()
+
+def visit(rel):
+    path = os.path.join(root, rel)
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        digest.update(f"absent:{rel}\n".encode())
+        return
+    digest.update(f"entry:{rel}:{info.st_mode:o}:".encode())
+    if os.path.islink(path):
+        digest.update(os.fsencode(os.readlink(path)))
+    elif os.path.isfile(path):
+        with open(path, "rb") as handle:
+            digest.update(hashlib.sha256(handle.read()).hexdigest().encode())
+    elif os.path.isdir(path):
+        digest.update(b"\n")
+        for name in sorted(os.listdir(path)):
+            if rel == "" and name == ".git":
+                continue
+            visit(os.path.join(rel, name) if rel else name)
+        return
+    digest.update(b"\n")
+
+for owned in sorted(set(item.strip().strip("/") for item in sys.argv[2:] if item.strip())):
+    if owned.startswith("..") or os.path.isabs(owned):
+        raise SystemExit(1)
+    visit(owned)
+visit(".singular-evidence")
+print(digest.hexdigest())
+PY
+}
+
+# Durably claim the one packet-format re-emission for a frozen candidate,
+# keyed by l1_packet_format_candidate_key. Exit 0 = claimed (debited BEFORE the invocation), 4 = already spent,
+# other = the lease could not be read or written (fail closed).
+l1_packet_format_allowance_claim() {
+  local fingerprint="$1" failure_class="$2" n="$3"
+  local lease
+  lease="$(singular_lease_path "$task_id")"
+  [[ -f "$lease" ]] || return 1
+  python3 - "$lease" "$fingerprint" "$failure_class" "$run_id" "$n" <<'PY'
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+path, fingerprint, failure_class, run_id, attempt = sys.argv[1:6]
+with open(path, encoding="utf-8") as handle:
+    lease = json.load(handle)
+allowance = lease.get("packetFormatAllowance")
+if not isinstance(allowance, dict):
+    allowance = {}
+operations = allowance.get("operations")
+if not isinstance(operations, list):
+    operations = []
+maximum = 1
+operation_id = "packet-format:" + fingerprint
+for operation in operations:
+    if isinstance(operation, dict) and operation.get("operationId") == operation_id:
+        used = operation.get("used")
+        if not isinstance(used, int) or isinstance(used, bool) or used >= maximum:
+            raise SystemExit(4)
+now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+operations.append({
+    "operationId": operation_id,
+    "candidateKey": fingerprint,
+    "used": 1,
+    "failureClass": failure_class,
+    "runId": run_id,
+    "attempt": int(attempt),
+    "consumedAt": now,
+})
+allowance.update({"budgetDomain": "packet-format", "maxPerCandidate": maximum,
+                  "operations": operations})
+lease["packetFormatAllowance"] = allowance
+lease["updatedAt"] = now
+temporary = path + ".packet-format.tmp"
+with open(temporary, "w", encoding="utf-8") as handle:
+    json.dump(lease, handle, indent=2)
+    handle.write("\n")
+os.replace(temporary, path)
+PY
+}
+
+# After a representational packet failure (attempt_failure already set by the
+# caller), run the one read-only re-emission when the allowance permits.
+# Returns 0 only when a valid packet now exists for the unchanged candidate;
+# otherwise sets packet_format_state (and attempt_failure/attempt_ctx when the
+# re-emission itself changed them) and returns 1.
+l1_packet_format_recover() {
+  local n="$1" failure_class="$2" packet_log="$3"
+  local fingerprint fingerprint_after candidate_key claim_rc=0
+  if [[ "${#authorized_continuation[@]}" -eq 10 ]]; then
+    # One-shot continuation authority permits exactly one invocation.
+    packet_format_state="one-shot"
+    return 1
+  fi
+  fingerprint="$(l1_packet_format_fingerprint "$worktree" 2>/dev/null || true)"
+  candidate_key="$(l1_packet_format_candidate_key "$worktree" "${owned_files[@]}" 2>/dev/null || true)"
+  if [[ ! "$fingerprint" =~ ^[0-9a-f]{64}$ || ! "$candidate_key" =~ ^[0-9a-f]{64}$ ]]; then
+    packet_format_state="fingerprint-failed"
+    return 1
+  fi
+  l1_packet_format_allowance_claim "$candidate_key" "$failure_class" "$n" \
+    >/dev/null 2>&1 || claim_rc=$?
+  if [[ "$claim_rc" -ne 0 ]]; then
+    packet_format_state="exhausted"
+    [[ "$claim_rc" -eq 4 ]] || packet_format_state="fingerprint-failed"
+    singular_append_event "packet_format.allowance_exhausted" \
+      "packet-format re-emission refused for this frozen candidate" \
+      "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"failureClass\":\"$failure_class\",\"candidateFingerprint\":\"$fingerprint\",\"candidateKey\":\"$candidate_key\",\"budgetDomain\":\"packet-format\",\"recordFailed\":$([[ "$claim_rc" -eq 4 ]] && printf false || printf true),\"consumesProductRepairBudget\":false}" \
+      || true
+    return 1
+  fi
+  singular_append_event "l1.packet_format_retry_eligible" \
+    "frozen candidate gets one read-only packet re-emission" \
+    "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"failureClass\":\"$failure_class\",\"candidateFingerprint\":\"$fingerprint\",\"candidateKey\":\"$candidate_key\",\"budgetDomain\":\"packet-format\",\"maxPerCandidate\":1,\"consumesProductRepairBudget\":false,\"consumesReviewRound\":false}" \
+    || true
+
+  local reemit_prompt="$run_dir/packet-reemit-prompt-attempt-${n}.md"
+  local reemit_log="$run_dir/worker-attempt-${n}-packet-reemit.log"
+  local reemit_result="$run_dir/implementer-attempt-${n}-packet-reemit-runner-result.json"
+  local reemit_receipt="$run_dir/context-invocation-implementer-attempt-${n}-packet-reemit.json"
+  local reemit_bundle="$run_dir/context-implementer-attempt-${n}-packet-reemit.bundle.json"
+  local previous_output="$run_dir/last-message.attempt-${n}.invalid.json"
+  local reemit_rc=0 reemit_status reemit_denial
+  if [[ -f "$run_dir/last-message.json" ]]; then
+    cp "$run_dir/last-message.json" "$previous_output" 2>/dev/null || true
+  else
+    : >"$previous_output"
+  fi
+  python3 - "$l2_prompt" "$reemit_prompt" "$packet_log" "$previous_output" <<'PY' || {
+import json
+import sys
+
+base_path, out_path, error_path, previous_path = sys.argv[1:5]
+
+def bounded(path, limit):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            value = handle.read(limit + 1)
+    except OSError:
+        return ""
+    return value[:limit] + "\n[truncated by host]" if len(value) > limit else value
+
+with open(base_path, encoding="utf-8") as handle:
+    base = handle.read()
+repair_input = json.dumps({
+    "packetValidationError": bounded(error_path, 4096) or "no final message was found",
+    "previousFinalMessage": bounded(previous_path, 32768),
+}, ensure_ascii=False, indent=2)
+section = f"""
+
+---
+
+## Packet Re-emission (authoritative; overrides the implementation instructions)
+
+The implementation pass is over. Its final message did not contain a valid
+state packet, so the host is asking ONLY for that packet. The candidate in this
+worktree is frozen:
+
+- Do NOT edit, create, delete, rename or chmod any file, including evidence.
+- Do NOT run tests, builds, formatters, git, or any command that writes.
+- Do NOT invent commands, test outcomes or evidence that the existing
+  worktree and `.singular-evidence/` do not already show.
+
+The host fingerprints the worktree and evidence before and after this
+invocation; any change discards this response and parks the task.
+
+<packet-reemission-input>
+{repair_input}
+</packet-reemission-input>
+
+Emit ONLY the single state-packet JSON object described in the Execution
+Contract above, describing the work already present.
+"""
+with open(out_path, "w", encoding="utf-8") as handle:
+    handle.write(base + section)
+PY
+    packet_format_state="exhausted"
+    return 1
+  }
+  echo "  packet-format re-emission for frozen candidate (attempt $n)..."
+  rm -f "$run_dir/last-message.json" "$reemit_receipt"
+  singular_runner_contract_prepare \
+    "$l2_runner" implementer "${SINGULAR_IMPLEMENTER_CAPABILITY_PROFILE:-implementer-core}" \
+    "$reemit_result"
+  SINGULAR_RUNNER_ROLE=implementer \
+  SINGULAR_RUNNER_CAPABILITY_PROFILE="${SINGULAR_IMPLEMENTER_CAPABILITY_PROFILE:-implementer-core}" \
+  SINGULAR_RUNNER_RESULT_FILE="$reemit_result" \
+  SINGULAR_TEST_TASK_CONTRACT="$task_file" \
+  SINGULAR_TEST_TASK_ID="$task_id" \
+  SINGULAR_TEST_TASKS_DIR="$SINGULAR_TASKS_DIR" \
+    singular_context_invocation_run implementer implement-retry \
+      "$(singular_context_worktree_path "$task_file" "$worktree")" "$reemit_bundle" \
+      "${latest_worker_context_bundle:-}" \
+      "$run_id:$task_id:implementer:attempt-$n:packet-reemit" \
+      "$reemit_receipt" "$l1_campaign_binding" "$worktree" -- \
+      "$l2_runner" "${SINGULAR_RUNNER_CONTRACT_ARGS[@]}" \
+        --level l2 -C "$worktree" --run-id "$run_id" \
+        --prompt-file "$reemit_prompt" --output-last-message "$run_dir/last-message.json" \
+        --session-meta "$session_meta_implementer" >"$reemit_log" 2>&1 || reemit_rc=$?
+  printf -- '--- worker packet re-emission (attempt %s) ---\n' "$n" \
+    >>"$run_dir/worker-codex.log" || true
+  cat "$reemit_log" >>"$run_dir/worker-codex.log" 2>/dev/null || true
+  reemit_status="$(singular_context_receipt_status "$reemit_receipt" 2>/dev/null || true)"
+  if [[ "$reemit_status" == "denied" ]]; then
+    reemit_denial="$(singular_context_receipt_denial_reason "$reemit_receipt" 2>/dev/null || true)"
+    [[ "$reemit_denial" != "campaign-mismatch" ]] \
+      || l1_campaign_mismatch_exit "campaign policy changed before packet re-emission"
+  fi
+
+  # The candidate must be byte-identical; anything else fails closed.
+  fingerprint_after="$(l1_packet_format_fingerprint "$worktree" 2>/dev/null || true)"
+  if [[ "$fingerprint_after" != "$fingerprint" ]]; then
+    packet_format_state="candidate-mutated"
+    attempt_failure="packet-reemit-mutated"
+    attempt_ctx="$reemit_log"
+    singular_append_event "packet_format.candidate_mutated" \
+      "packet re-emission changed the frozen candidate; response discarded" \
+      "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"failureClass\":\"$failure_class\",\"candidateFingerprint\":\"$fingerprint\",\"candidateKey\":\"$candidate_key\",\"observedFingerprint\":\"${fingerprint_after:-unavailable}\",\"budgetDomain\":\"packet-format\"}" \
+      || true
+    return 1
+  fi
+  local reemit_packet_ec=0
+  singular_l1_prepare_worker_packet "$run_dir/last-message.json" "$run_dir/last-message.json" \
+    "$packet_log" || reemit_packet_ec=$?
+  if [[ "$reemit_packet_ec" -ne 0 ]]; then
+    packet_format_state="exhausted"
+    case "$reemit_packet_ec" in
+      10|11) attempt_failure="worker-no-packet"; attempt_ctx="$reemit_log" ;;
+      *) attempt_failure="packet-invalid"; attempt_ctx="$packet_log" ;;
+    esac
+    singular_append_event "packet_format.reemit_failed" \
+      "packet re-emission did not produce a valid packet; allowance spent" \
+      "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"failureClass\":\"$attempt_failure\",\"runnerExit\":$reemit_rc,\"candidateFingerprint\":\"$fingerprint\",\"candidateKey\":\"$candidate_key\",\"budgetDomain\":\"packet-format\",\"consumesProductRepairBudget\":false}" \
+      || true
+    return 1
+  fi
+  packet_format_state="reemitted"
+  attempt_failure=""
+  attempt_ctx=""
+  singular_append_event "packet_format.reemitted" \
+    "read-only packet re-emission produced a valid packet for the unchanged candidate" \
+    "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"previousFailureClass\":\"$failure_class\",\"candidateFingerprint\":\"$fingerprint\",\"candidateKey\":\"$candidate_key\",\"budgetDomain\":\"packet-format\",\"consumesProductRepairBudget\":false}" \
+    || true
+  return 0
+}
+
 # Worker invocation through scope/gate/commit/packet stamping + validation.
 # Sets head_sha, attempt_failure, attempt_ctx, worker_rc. Returns 0 when a
 # validated packet exists on a committed branch, 1 otherwise.
@@ -2764,13 +3106,17 @@ run_worker_phase() {
   singular_l1_prepare_worker_packet "$run_dir/last-message.json" "$run_dir/last-message.json" "$worker_packet_log" \
     || worker_packet_ec=$?
   if [[ "$worker_packet_ec" -ne 0 ]]; then
+    # Every failure here is representational: no final message (10), no
+    # parseable object after the bounded syntactic repair (11), or a packet
+    # that fails basic shape validation (12). Module-guard, scope and host
+    # stamping failures below are NOT, and never reach the packet-format domain.
     case "$worker_packet_ec" in
       10|11)
         attempt_failure="worker-no-packet"; attempt_ctx="$run_dir/worker-codex.log" ;;
       *)
         attempt_failure="packet-invalid"; attempt_ctx="$worker_packet_log" ;;
     esac
-    return 1
+    l1_packet_format_recover "$n" "$attempt_failure" "$worker_packet_log" || return 1
   fi
 
   if [[ -d "$worktree/.singular-evidence" ]]; then
@@ -2988,9 +3334,11 @@ validate_audit_record() {
 render_audit_repair_prompt() {
   local base_prompt="$1" output_prompt="$2" error_file="$3"
   local invalid_response_file="$4" contract="$5"
+  SINGULAR_AUDIT_FINDINGS_STATUS_CONTRACT="$(singular_audit_findings_status_contract)" \
   python3 - "$base_prompt" "$output_prompt" "$error_file" \
     "$invalid_response_file" "$contract" <<'PY'
 import json
+import os
 import sys
 
 base_path, output_path, error_path, invalid_path, contract = sys.argv[1:6]
@@ -3012,12 +3360,20 @@ if contract == "v1":
 Required top-level members: schema, taskId, runId, branch, verdict,
 evidenceReviewed, verificationResults, commandsRun, findings, requiredFixes,
 and rationale. No other top-level members are allowed except optional
-findingsStatus, classifiedFindings, and reviewPolicy. Each
+findingsStatus and classifiedFindings. Each
 verificationResults[] object requires exactly status, command, evidenceRefs,
 and rationale; optional integer exitCode is also allowed. status must be one
 of passed, failed-product, inconclusive-infrastructure, or
 not-rerun-evidence-verified. command and rationale must be non-empty strings.
 evidenceRefs must be an array of non-empty strings."""
+    # The shared findingsStatus/severity contract, once: a base prompt rendered
+    # by the initial or re-audit renderer already carries it.
+    findings_status_contract = os.environ.get(
+        "SINGULAR_AUDIT_FINDINGS_STATUS_CONTRACT", "").strip()
+    if not findings_status_contract:
+        raise SystemExit("findingsStatus output contract is unavailable")
+    if findings_status_contract not in base:
+        required_contract += "\n\n" + findings_status_contract
 else:
     required_contract = """Return exactly one audit-verdict.v0 JSON object.
 Required top-level members: schema, taskId, runId, branch, verdict,
@@ -3040,7 +3396,8 @@ repair = f"""
 
 Your previous response was rejected before its verdict could influence
 acceptance. Produce a corrected response from a fresh evaluation. Do not repeat
-the invalid shape.
+the invalid shape. A correction is not an appeal: do not drop or demote a
+finding the invalid response reported as P0 or P1.
 
 {required_contract}
 
@@ -3201,14 +3558,21 @@ run_audit_phase() {
   # plain copy (byte-identical to the base audit prompt). Renderer failure ->
   # warning event + fall back to the base audit prompt.
   local prior_head active_audit_prompt="$run_dir/auditor-active-prompt.md"
+  # The host's record of which prior finding IDs this auditor is shown. It is
+  # the only authority for findingsStatus validation below: whether this is a
+  # "first" review is decided by that set, not by the attempt number.
+  local audit_prior_findings="$run_dir/audit-prior-findings-attempt-${n}.json"
+  rm -f "$audit_prior_findings"
   prior_head="$(singular_json_field "$run_dir/reviewer-capsule.json" auditedHeadSha 2>/dev/null || true)"
   export SINGULAR_REVIEW_ROUND_LABEL="Round $n of $review_max_rounds"
   if singular_render_reaudit_prompt "$active_audit_prompt" "$audit_prompt" "$run_dir" "$n" \
-       "$prior_head" "$head_sha" "$worktree" 2>/dev/null; then
+       "$prior_head" "$head_sha" "$worktree" "$audit_prior_findings" 2>/dev/null; then
     :
   else
     singular_append_event "l1.reaudit_prompt_fallback" "re-audit prompt render failed; using base audit prompt" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n}" || true
+    # The base prompt supplies no prior findings.
+    singular_audit_prior_findings_write "$audit_prior_findings" "$n" 2>/dev/null || true
     if cp "$audit_prompt" "$active_audit_prompt" 2>/dev/null; then
       # Same n>=2 gate as the renderer: attempt 1 stays byte-identical to the base.
       [[ "$n" -ge 2 ]] && singular_review_round_policy_append "$active_audit_prompt" 2>/dev/null || true
@@ -3858,6 +4222,24 @@ PY
         cp "$audit_record" "$audit_record.invalid.json" 2>/dev/null || true
         singular_append_event "l1.audit_invalid_verdict" "legacy auditor verdict failed schema validation" \
           "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"detail\":\"$(head -1 "$run_dir/audit-validate.err" 2>/dev/null | tr '"' "'" | head -c 300)\"}"
+      elif [[ "$audit_schema" == "singular.orchestration.audit-verdict.v1" ]] \
+          && ! python3 "$SCRIPT_DIR/audit-verdict-host-bind.py" --validate-audit-format \
+            --verdict "$audit_record" --prior-findings "$audit_prior_findings" \
+            >/dev/null 2>"$run_dir/audit-format.err"; then
+        # findingsStatus against the host-supplied prior findings, and the
+        # P0/P1 support the generic schema checker cannot express. A violation
+        # is an auditor-format failure: it spends the one fresh auditor
+        # correction (auditor-infrastructure domain), never a worker pass.
+        infra_reason="invalid-audit-format"
+        audit_repair_response_file="$run_dir/audit-attempt-${n}-try-${audit_try}.invalid.json"
+        audit_repair_error_file="$run_dir/audit-attempt-${n}-try-${audit_try}.format.err"
+        cp "$audit_record" "$audit_repair_response_file"
+        cp "$run_dir/audit-format.err" "$audit_repair_error_file"
+        cp "$audit_record" "$audit_record.invalid.json" 2>/dev/null || true
+        singular_append_event "l1.audit_format_invalid" \
+          "auditor verdict failed host findingsStatus/severity validation" \
+          "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"try\":$audit_try,\"budgetDomain\":\"auditor-infrastructure\",\"consumesProductRepairBudget\":false,\"detail\":\"$(head -1 "$run_dir/audit-format.err" 2>/dev/null | tr '"\\' "''" | head -c 300)\"}" \
+          || true
       elif [[ "$audit_schema" == "singular.orchestration.audit-verdict.v1" ]]; then
         # Schema validity is not enough: the model must reproduce the
         # host-owned verification aggregate exactly. A model cannot upgrade
@@ -4296,6 +4678,60 @@ print(hashlib.sha256(canonical.encode("utf-8")).hexdigest())
 PY
 }
 
+# Read-only review-capacity admission before product work (protocol 5.3).
+# Product work is authorized only while a future review slot exists; otherwise
+# the pass would end in review-rounds-exhausted after paying for a worker.
+# This never reserves or records a round (run_audit_phase still checks again
+# immediately before the auditor). Sets attempt_failure/attempt_ctx and
+# returns 4 when exhausted, 1 when capacity cannot be established.
+l1_review_capacity_admit() {
+  local stage="$1" n="${2:-0}"
+  local check_file="$run_dir/review-capacity-${stage}-${n}.json"
+  local check_err="$run_dir/review-capacity-${stage}-${n}.err"
+  local rc=0
+  python3 "$SCRIPT_DIR/review_policy.py" check \
+    --logical-change "$review_logical_change" --task "$task_id" \
+    >"$check_file" 2>"$check_err" || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    return 0
+  fi
+  if [[ "$rc" -eq 4 ]]; then
+    local used allowed
+    used="$(singular_json_field "$check_file" used 2>/dev/null || echo 0)"
+    allowed="$(singular_json_field "$check_file" allowedRounds 2>/dev/null || echo 0)"
+    [[ "$used" =~ ^[0-9]+$ ]] || used=0
+    [[ "$allowed" =~ ^[0-9]+$ ]] || allowed=0
+    singular_append_event "review.rounds_exhausted" \
+      "review rounds exhausted; product work not admitted" \
+      "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"stage\":\"$stage\",\"logicalChange\":\"$review_logical_change\",\"used\":$used,\"allowedRounds\":$allowed,\"consumesProductRepairBudget\":false}" \
+      || true
+    attempt_failure="review-rounds-exhausted"
+    attempt_ctx="$check_file"
+    return 4
+  fi
+  attempt_failure="review-capacity-unknown"
+  attempt_ctx="$check_err"
+  [[ -s "$check_err" ]] || attempt_ctx="$check_file"
+  return 1
+}
+
+# Terminal fields for a refused review-capacity admission.
+l1_review_capacity_refused() {
+  local rc="$1"
+  if [[ "$rc" -eq 4 ]]; then
+    local used allowed
+    used="$(singular_json_field "$attempt_ctx" used 2>/dev/null || echo "?")"
+    allowed="$(singular_json_field "$attempt_ctx" allowedRounds 2>/dev/null || echo "?")"
+    terminal_action="escalate-parked"
+    terminal_authority="policy"
+    terminal_rationale="review rounds exhausted for $review_logical_change ($used/$allowed) before product work; no worker was started. Unresolved blockers remain blocked; choose reduce-scope, revert, defer or a recorded review-policy exception"
+  else
+    terminal_action="escalate-infra"
+    terminal_authority="policy"
+    terminal_rationale="review capacity could not be established before product work (review ledger unreadable); refusing an unreviewable product pass. Repair the review ledger, then \`singular unpark $task_id\`."
+  fi
+}
+
 # ---- Decider-driven retry loop ----
 # prev_failure_class/prev_attempt_ctx carry the PRIOR attempt's failure into the
 # next prepare_worker_prompt (the per-iteration reset clears attempt_failure
@@ -4307,6 +4743,26 @@ terminal_authority="decider"
 terminal_rationale=""
 attempt_started_at=""
 
+# No product pass, initial or re-entry, starts without a future review slot.
+review_capacity_rc=0
+l1_review_capacity_admit pre-worker 1 || review_capacity_rc=$?
+if [[ "$review_capacity_rc" -ne 0 ]]; then
+  l1_review_capacity_refused "$review_capacity_rc"
+  product_passes_remaining=0
+  # The owner-bound terminal disposition needs a started attempt. The product
+  # pass marker is deliberately NOT set: no product budget was spent.
+  if ! l1_campaign_publication_begin \
+      "$l1_campaign_binding" pre-review-capacity-refusal; then
+    l1_campaign_mismatch_exit \
+      "campaign identity changed before the review-capacity refusal"
+  fi
+  if ! l1_record_attempt started; then
+    echo "cannot durably bind the review-capacity refusal to its dispatch reservation" >&2
+    exit 1
+  fi
+  l1_campaign_publication_end
+fi
+
 # A started lease means a prior process already crossed the product-work
 # boundary.  Its first pass in this process is therefore a repair, not another
 # free initial pass.  Consume that repair durably before invoking the worker so
@@ -4314,7 +4770,8 @@ attempt_started_at=""
 # precomputed product_passes_remaining intentionally includes this first
 # re-entry repair; later in-process repairs continue to use the ordinary bump
 # below.  A crash after this write may conservatively consume the repair.
-if [[ "$prior_product_lease" == "yes" && "${#authorized_continuation[@]}" -ne 10 ]]; then
+if [[ "$prior_product_lease" == "yes" && "${#authorized_continuation[@]}" -ne 10 \
+    && "$review_capacity_rc" -eq 0 ]]; then
   if ! l1_campaign_publication_begin \
       "$l1_campaign_binding" pre-reentry-budget-mutation; then
     l1_campaign_mismatch_exit \
@@ -4379,6 +4836,7 @@ for ((attempt=0; attempt<product_passes_remaining; attempt++)); do
   n=$((attempt + 1))
   attempt_started_at="$(singular_timestamp)"
   attempt_failure=""; attempt_ctx=""
+  packet_format_state=""
   accepted_audit_pending_evidence="no"
   verdict="unknown"; head_sha=""
   attempt_ok="no"
@@ -4486,21 +4944,37 @@ for ((attempt=0; attempt<product_passes_remaining; attempt++)); do
       && -z "$prev_findings_signature" ]]; then
     first_actionable_audit_feedback="yes"
   fi
+  # Packet-format domain terminal. The worker phase already spent the one
+  # read-only re-emission this frozen candidate is entitled to (or was refused
+  # it). Another implementation pass is not a format repair: park without a
+  # product-repair charge, a review round, or a decider round-trip.
+  if [[ -n "$packet_format_state" && "$packet_format_state" != "reemitted" ]]; then
+    terminal_action="escalate-parked"
+    terminal_authority="policy"
+    case "$packet_format_state" in
+      candidate-mutated)
+        terminal_rationale="packet re-emission changed the frozen candidate on attempt $n; the response was discarded and the candidate is no longer the one that was implemented. Inspect the worktree before unparking." ;;
+      fingerprint-failed)
+        terminal_rationale="packet-format recovery failed closed on attempt $n: the frozen candidate could not be fingerprinted or its allowance could not be recorded durably." ;;
+      one-shot)
+        terminal_rationale="$attempt_failure on an authorized one-shot continuation (attempt $n); that authority permits no extra packet re-emission." ;;
+      *)
+        terminal_rationale="packet-format allowance exhausted on attempt $n ($attempt_failure): this frozen candidate already had its one read-only packet re-emission. No product repair or review round was charged." ;;
+    esac
+    singular_append_event "l1.packet_format_parked" \
+      "packet-format domain parked the task without a product charge" \
+      "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"failureClass\":\"$attempt_failure\",\"packetFormatState\":\"$packet_format_state\",\"budgetDomain\":\"packet-format\",\"productRepairsUsed\":$product_repairs_used,\"productRepairMax\":$max_retries,\"consumesProductRepairBudget\":false}" \
+      || true
+    archive_attempt "$n" "$attempt_failure" "$terminal_action" "$terminal_authority"
+    break
+  fi
+
   case "$attempt_failure" in
     gate-red|worker-no-packet|packet-invalid|no-changes|commit-failed|scope-violation)
-      # A packet-format failure from an otherwise successful worker is not a
-      # product signal: the candidate is unchanged BECAUSE the task asked for
-      # qualification only, and the worker simply mis-emitted its final
-      # message. Give that exactly one more pass (bounded by the product budget
-      # below); park only when the same format failure repeats.
-      if [[ "$candidate_unchanged" == "yes" \
-          && ( "$attempt_failure" == "worker-no-packet" || "$attempt_failure" == "packet-invalid" ) \
-          && "$prev_failure_class" != "$attempt_failure" ]]; then
-        singular_append_event "l1.packet_format_retry_eligible" \
-          "unchanged candidate after a packet-format failure gets one bounded re-emit" \
-          "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"failureClass\":\"$attempt_failure\",\"candidateSignature\":\"$attempt_end_candidate_signature\"}" \
-          || true
-      elif [[ "$candidate_unchanged" == "yes" ]]; then
+      # Representational packet failures never get here: the packet-format
+      # domain above owns them. A remaining packet-invalid is a module-guard
+      # or host-stamping refusal, which an identical candidate cannot cure.
+      if [[ "$candidate_unchanged" == "yes" ]]; then
         terminal_action="escalate-parked"
         terminal_authority="l1"
         terminal_rationale="no product progress: attempt $n left the exact candidate unchanged after $attempt_failure; another implement/audit pass would evaluate identical source."
@@ -4602,6 +5076,19 @@ for ((attempt=0; attempt<product_passes_remaining; attempt++)); do
         archive_attempt "$n" "$attempt_failure" "$terminal_action" "$terminal_authority"
         break
       fi
+      # A correction is product work: admit it only while a future review
+      # slot exists, before paying for a decider or charging the repair.
+      review_capacity_rc=0
+      attempt_failed_class="$attempt_failure"
+      attempt_failed_ctx="$attempt_ctx"
+      l1_review_capacity_admit pre-repair "$((n + 1))" || review_capacity_rc=$?
+      if [[ "$review_capacity_rc" -ne 0 ]]; then
+        l1_review_capacity_refused "$review_capacity_rc"
+        archive_attempt "$n" "$attempt_failed_class" "$terminal_action" "$terminal_authority"
+        break
+      fi
+      attempt_failure="$attempt_failed_class"
+      attempt_ctx="$attempt_failed_ctx"
       ;;
   esac
 

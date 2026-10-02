@@ -206,6 +206,8 @@ singular_planner_failure_class() {
   fi
 }
 singular_l1_prepare_worker_packet() { return 10; }
+# The packet-format domain is pinned by test-packet-format-budget.sh.
+l1_packet_format_recover() { return 1; }
 
 rc=0
 run_worker_phase 3 >"$tmp/worker-phase-3.out" 2>&1 || rc=$?

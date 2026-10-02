@@ -9355,21 +9355,61 @@ singular_review_round_policy_append() {
   } >>"$target"
 }
 
+# The one findingsStatus / severity output contract shared by all three auditor
+# prompt renderers: the initial audit prompt and the validation-feedback repair
+# prompt in l1-drive.sh, and the re-audit prompt below. Each renderer includes
+# it exactly once (a rendering built on a base that already carries it does
+# not repeat it). Kept here, not in the consumer-copied auditor template,
+# because a stale consumer template must not be able to drop the contract.
+singular_audit_findings_status_contract() {
+  cat <<'TXT'
+findingsStatus describes only findings supplied by the host from an earlier
+review. It is a JSON object mapping finding IDs to the exact string
+"resolved" or "still-open".
+
+Correct: "findingsStatus": {"F1": "resolved", "F2": "still-open"}
+Incorrect: "findingsStatus": []
+Incorrect: "findingsStatus": [{"id": "F1", "status": "resolved"}]
+Incorrect: "findingsStatus": {"F1": {"status": "resolved"}}
+
+When the host supplied no prior findings, OMIT findingsStatus.
+Do not invent prior finding IDs.
+
+When prior findings were supplied, report the required prior IDs using the
+object shape above. Missing or unknown IDs do not establish resolution.
+
+P0/P1 findings require nonblank trigger, impact, and requirement.
+Missing support never downgrades a finding or authorizes acceptance.
+
+Use accepted when there are no blocking findings, including reviews with
+only P2/P3 backlog items. Do not emit reviewPolicy; it is host-owned.
+TXT
+}
+
 # Re-audit delta prompt (T-E4). Renders <base_audit_prompt> + re-audit context
 # (prior findings/ledger status + fix diff since the auditor's last review +
 # per-id verification targets + a findingsStatus output-contract addition) into
 # <out_path>. n==1, missing reviewer capsule, or empty prior_head -> plain copy
 # (byte-identical to the base audit prompt).
 #   singular_render_reaudit_prompt <out> <base_audit_prompt> <run_dir> <n> \
-#     <prior_head> <new_head> <worktree>
-# Returns nonzero on rendering error (caller falls back to the base audit prompt).
+#     <prior_head> <new_head> <worktree> [prior_findings_out]
+# prior_findings_out, when given, receives the host's record of exactly which
+# prior finding IDs this prompt supplied (suppliedIds) and which of them must
+# be reported in findingsStatus (requiredIds). That record, never the model's
+# own echo of history, is what the host validates findingsStatus against; a
+# plain copy supplies none, so its record is empty.
+# Returns nonzero on rendering error (caller falls back to the base audit prompt
+# and records an empty prior-finding set itself).
 singular_render_reaudit_prompt() {
   local out_path="$1" base_prompt="$2" run_dir="$3" n="$4" prior_head="$5"
-  local new_head="$6" worktree="$7"
+  local new_head="$6" worktree="$7" prior_findings_out="${8:-}"
   local capsule="$run_dir/reviewer-capsule.json"
   local ledger="$run_dir/findings-status.json"
   if [[ "$n" -lt 2 || ! -f "$capsule" || -z "$prior_head" ]]; then
     cp "$base_prompt" "$out_path"
+    if [[ -n "$prior_findings_out" ]]; then
+      singular_audit_prior_findings_write "$prior_findings_out" "$n" || return 1
+    fi
     # Attempt 1 MUST stay byte-identical to the base audit prompt: that equality is
     # a pre-existing engine contract (test-context-continuity, test-ctx-assumptions-drive)
     # and it is what makes the first-round prompt reproducible from the base render.
@@ -9395,14 +9435,15 @@ singular_render_reaudit_prompt() {
   fi
 
   SINGULAR_REAUDIT_STAT="$stat_out" \
+  SINGULAR_AUDIT_FINDINGS_STATUS_CONTRACT="$(singular_audit_findings_status_contract)" \
   python3 - "$out_path" "$base_prompt" "$ledger" "$n" "$prior_head" "$new_head" \
-    "$ancestry_ok" "$diff_ref" <<'PY'
+    "$ancestry_ok" "$diff_ref" "$prior_findings_out" <<'PY' || return 1
 import json
 import os
 import sys
 
 (out_path, base_prompt, ledger_path, n_raw, prior_head, new_head,
- ancestry_ok, diff_ref) = sys.argv[1:9]
+ ancestry_ok, diff_ref, prior_findings_out) = sys.argv[1:10]
 
 with open(base_prompt, "r", encoding="utf-8") as f:
     base = f.read()
@@ -9454,16 +9495,76 @@ else:
     parts.append("(no open findings to verify)")
 
 parts.append("### Output contract addition")
-parts.append(
-    'In addition to the audit-verdict fields, include an optional field '
-    '"findingsStatus": an object mapping finding id -> "resolved" | "still-open" '
-    "for every verification target above."
-)
+contract = os.environ.get("SINGULAR_AUDIT_FINDINGS_STATUS_CONTRACT", "").strip()
+if not contract:
+    raise SystemExit("findingsStatus output contract is unavailable")
+if contract not in base:
+    parts.append(contract)
+    parts.append("")
+supplied = [str(e.get("id")) for e in findings if str(e.get("id") or "").strip()]
+required = [str(e.get("id")) for e in open_findings if str(e.get("id") or "").strip()]
+if required:
+    parts.append(
+        "The host supplied prior findings for this review. findingsStatus is "
+        "required and MUST report every one of these IDs: "
+        + ", ".join(required) + "."
+    )
+    others = [i for i in supplied if i not in required]
+    if others:
+        parts.append(
+            "These already-resolved prior IDs MAY also be reported: "
+            + ", ".join(others) + ". No other ID is permitted."
+        )
+elif supplied:
+    parts.append(
+        "No supplied prior finding is open. You MAY report only these IDs: "
+        + ", ".join(supplied) + "; otherwise OMIT findingsStatus."
+    )
+else:
+    parts.append("The host supplied no prior findings for this review: OMIT findingsStatus.")
 
 with open(out_path, "w", encoding="utf-8") as f:
     f.write("\n".join(parts) + "\n")
+if prior_findings_out:
+    record = {
+        "schema": "singular.orchestration.audit-prior-findings.v0",
+        "attempt": int(n_raw),
+        "suppliedIds": supplied,
+        "requiredIds": required,
+    }
+    temporary = prior_findings_out + ".tmp"
+    with open(temporary, "w", encoding="utf-8") as f:
+        json.dump(record, f, indent=2)
+        f.write("\n")
+    os.replace(temporary, prior_findings_out)
 PY
   singular_review_round_policy_append "$out_path"
+}
+
+# Record that an auditor prompt supplied NO prior findings (a first review of
+# this host-held finding set, or a re-audit render that fell back to the base
+# prompt). findingsStatus must then be omitted or {}.
+#   singular_audit_prior_findings_write <out> <n>
+singular_audit_prior_findings_write() {
+  local out="$1" n="$2"
+  python3 - "$out" "$n" <<'PY'
+import json
+import os
+import sys
+
+out, n_raw = sys.argv[1:3]
+record = {
+    "schema": "singular.orchestration.audit-prior-findings.v0",
+    "attempt": int(n_raw),
+    "suppliedIds": [],
+    "requiredIds": [],
+}
+temporary = out + ".tmp"
+with open(temporary, "w", encoding="utf-8") as handle:
+    json.dump(record, handle, indent=2)
+    handle.write("\n")
+os.replace(temporary, out)
+PY
 }
 
 # --- Kill switch + circuit breaker ---

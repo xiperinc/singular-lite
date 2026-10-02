@@ -65,7 +65,13 @@
     "requiredFixes": { "type": "array", "items": { "type": "string" } },
     "rationale": { "type": "string", "minLength": 1 },
     "findingsStatus": {
+      "description": "Maps host-supplied prior finding IDs to resolved or still-open. Omit when no prior findings were supplied.",
       "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S"
+      },
       "additionalProperties": {
         "type": "string",
         "enum": ["resolved", "still-open"]
@@ -88,7 +94,25 @@
           "impact": { "type": "string" },
           "requirement": { "type": "string" },
           "location": { "type": "string" }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": ["severity"],
+              "properties": {
+                "severity": { "enum": ["P0", "P1"] }
+              }
+            },
+            "then": {
+              "required": ["trigger", "impact", "requirement"],
+              "properties": {
+                "trigger": { "type": "string", "pattern": "\\S" },
+                "impact": { "type": "string", "pattern": "\\S" },
+                "requirement": { "type": "string", "pattern": "\\S" }
+              }
+            }
+          }
+        ]
       }
     },
     "reviewPolicy": {

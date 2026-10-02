@@ -46,6 +46,10 @@ Rubric:
 - **P3** — nit, style note, or suggestion; the host records it as backlog.
 
 P0 and P1 items MUST carry non-blank `trigger`, `impact`, and `requirement`.
-An unsupported blocking claim is downgraded by the host; it does not stay
-blocking. Do not emit `reviewPolicy` — the host stamps that after the
-verdict is recorded.
+Missing support never downgrades a finding or authorizes acceptance: the host
+rejects the response as malformed and asks for one correction. Do not emit
+`reviewPolicy` — the host stamps that after the verdict is recorded.
+
+`findingsStatus` maps only host-supplied prior finding IDs to `"resolved"` or
+`"still-open"`. Omit it when the host supplied no prior findings; never
+invent IDs.
