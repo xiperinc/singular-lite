@@ -560,7 +560,7 @@ if [[ "\$ac" == "1" ]]; then
   fi
   [[ -n "\$out" ]] && printf '%s\n' '{"verdict":"needs-fix","findings":[{"summary":"fix it"}]}' >"\$out"
 else
-  [[ -n "\$out" ]] && printf '%s\n' '{"verdict":"accepted","findings":[]}' >"\$out"
+  [[ -n "\$out" ]] && python3 -c 'import json,os,sys; o,v=sys.argv[1:3]; d=os.path.dirname(o); f=os.path.join(d,"packet.json"); p=json.load(open(f)) if os.path.isfile(f) else {}; json.dump({"schema":"singular.orchestration.audit-verdict.v0","taskId":p.get("taskId","TASK-0001"),"runId":p.get("runId") or os.path.basename(d),"branch":p.get("branch","unknown"),"verdict":v,"evidenceReviewed":[],"commandsRun":[],"findings":[],"requiredFixes":[],"rationale":"fixture verdict"},open(o,"w"))' "\$out" "accepted"
 fi
 exit 0
 SH

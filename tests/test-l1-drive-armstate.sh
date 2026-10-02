@@ -123,7 +123,7 @@ PKT
   exit 0
 fi
 # read-only: auditor / decider run at --level readonly.
-[[ -n "$out" ]] && printf '{"verdict":"%s","findings":[]}\n' "${MOCK_AUDIT_VERDICT:-accepted}" > "$out"
+[[ -n "$out" ]] && python3 -c 'import json,os,sys; o,v=sys.argv[1:3]; d=os.path.dirname(o); f=os.path.join(d,"packet.json"); p=json.load(open(f)) if os.path.isfile(f) else {}; json.dump({"schema":"singular.orchestration.audit-verdict.v0","taskId":p.get("taskId","TASK-0001"),"runId":p.get("runId") or os.path.basename(d),"branch":p.get("branch","unknown"),"verdict":v,"evidenceReviewed":[],"commandsRun":[],"findings":[],"requiredFixes":[],"rationale":"fixture verdict"},open(o,"w"))' "$out" "${MOCK_AUDIT_VERDICT:-accepted}"
 exit 0
 MOCK
 chmod +x "$mock_runner"

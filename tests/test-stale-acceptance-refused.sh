@@ -125,7 +125,7 @@ drive="$SCRIPT_DIR/l1-drive.sh"
 order_check="$(python3 - "$drive" <<'PY'
 import re, sys
 src = open(sys.argv[1], encoding="utf-8").read()
-start = src.index('_l1_outcome="accepted"')
+start = src.rindex('_l1_outcome="accepted"')
 block = src[start:start + 2000]
 def at(needle):
     i = block.find(needle)
@@ -134,6 +134,10 @@ record = at("l1_record_attempt terminal completed")
 owned = at("singular_lease_set_status_owned")
 inbox = at('mv "$inbox_packet.tmp" "$inbox_packet"')
 problems = []
+# Every needle must be present, or the comparisons below prove nothing (the
+# first cut indexed the FIRST accepted marker, a recovery no-op, and all three
+# lookups missed).
+if 10**9 in (record, owned, inbox): problems.append("accept path block not found")
 if record > inbox: problems.append("owner-bound disposition is published after the inbox packet")
 if owned > inbox: problems.append("lease status is published after the inbox packet")
 if record > owned: problems.append("status is published before the owner-bound disposition")
@@ -145,7 +149,7 @@ PY
 python3 - "$drive" <<'PY' || exit 1
 import sys
 src = open(sys.argv[1], encoding="utf-8").read()
-start = src.index('_l1_outcome="accepted"')
+start = src.rindex('_l1_outcome="accepted"')
 block = src[start:start + 2000]
 assert 'singular_lease_set_status "$task_id" "accepted"' not in block, \
     "the unchecked status helper still stamps acceptance on the accept path"
