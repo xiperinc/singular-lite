@@ -416,6 +416,17 @@ p = sys.argv[1]; t = open(p).read().replace("Status: accepted", "Status: ready")
 open(p, "w").write(t)
 PY
 git -C "$drv_root" worktree prune 2>/dev/null || true
+# The warmup found the affinity-0 drive's committed worktree and preserved it
+# at retained-worktrees/TASK-0001-RUN-AFFINITY-INFRA (candidate preservation,
+# ff29c88). The retry reuses the pinned run id, so it would preserve the
+# warmup's worktree to that same destination, and the driver (correctly)
+# never overwrites a preserved candidate. Real run ids are per-invocation;
+# discard this fixture-only preserved copy so the pinned id can be reused.
+retry_retained="$drv_root/.singular-state/retained-worktrees/TASK-0001-$retry_run_id"
+if [[ -e "$retry_retained" ]]; then
+  git -C "$drv_root" worktree remove --force "$retry_retained" \
+    || fail "could not discard the warmup's preserved candidate"
+fi
 
 retry_wt="$(python3 -c 'import json;print(json.load(open("'"$retry_worker_meta"'"))["cwd"])')"
 retry_head="$(git -C "$drv_root" rev-parse HEAD)"
