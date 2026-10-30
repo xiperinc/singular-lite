@@ -31,6 +31,8 @@ Required order:
 8. Run the relevant regression suite.
 9. Emit a state packet with changed files, commands, test evidence, blockers,
    and next action. Do not add top-level fields outside the packet schema.
+   Every `blockers[]` entry is an object such as
+   `{"summary": "...", "blocksThisTask": false}`, never a bare string.
 
 Every `commands[].cmd` value must be the exact executable shell text you ran,
 with nothing appended. The engine re-executes successful packet commands

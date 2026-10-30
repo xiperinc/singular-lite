@@ -16,7 +16,7 @@ cat > "$tmp/singular.config.json" <<EOF
 {
   "targetBranch": "agent/cfg-target",
   "gateCommand": "npm test && npm run build",
-  "areas": { "mcp": "axon-402-mcp/", "cli": ["axon-cli/", "axon-cli-operator/"] },
+  "areas": { "mcp": "fixture-model-mcp/", "cli": ["fixture-cli/", "fixture-cli-operator/"] },
   "proofLayers": ["storage_proof"],
   "provisionFiles": [{"source": ".env.local", "target": ".env.local", "required": true}],
   "envAllowlist": ["PUBLIC_*", "EXACT_NAME"],
@@ -76,8 +76,8 @@ assert_contains "$out" "CI=300" "controlState.commitIntervalSeconds mapping"
 assert_contains "$out" "UW=0" "legacyCompatibility.unboundWaivers mapping"
 assert_contains "$out" "GOOD=ok" "valid env key is exported"
 assert_contains "$out" "BASHBIN=<unset>" "bootstrap-only bash bin is ignored in repo config"
-assert_contains "$out" "MCP=axon-402-mcp/" "area map: mcp"
-assert_contains "$out" "CLI=axon-cli/ axon-cli-operator/" "area map: cli (multi-path)"
+assert_contains "$out" "MCP=fixture-model-mcp/" "area map: mcp"
+assert_contains "$out" "CLI=fixture-cli/ fixture-cli-operator/" "area map: cli (multi-path)"
 assert_contains "$out" "FOO=internal/foo/" "unmapped area falls back to prefix"
 
 # SECURITY: a malicious env KEY must be rejected, not eval'd.

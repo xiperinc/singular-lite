@@ -309,6 +309,11 @@ def validate_findings_status(
             raise ValueError(
                 "an accepted verdict reports prior findings still-open without "
                 "carrying them in findings/requiredFixes: " + ", ".join(dropped)
+                + ". The host could not carry them itself (it holds no usable "
+                "severity record for them). For each id either copy the prior "
+                "finding text verbatim into findings (P2/P3 backlog) with a "
+                "matching classifiedFindings item, report it \"resolved\", or "
+                "return needs-fix"
             )
 
 
@@ -323,10 +328,16 @@ def validate_blocking_support(verdict: dict[str, Any]) -> None:
         return
     if not isinstance(items, list):
         raise ValueError("classifiedFindings must be an array")
+    host_items = host_carried_item_ids(verdict)
     for index, item in enumerate(items):
         if not isinstance(item, dict):
             raise ValueError(f"classifiedFindings[{index}] must be an object")
         if item.get("severity") not in BLOCKING_SEVERITIES:
+            continue
+        if item.get("id") in host_items:
+            # The host carried this prior finding at its recorded severity and
+            # with whatever support the earlier round recorded. It is already
+            # blocking; the auditor is not asked to re-argue it.
             continue
         for field in BLOCKING_SUPPORT:
             value = item.get(field)
@@ -335,6 +346,359 @@ def validate_blocking_support(verdict: dict[str, Any]) -> None:
                     f"classifiedFindings[{index}] ({item.get('severity')}) requires "
                     f"nonblank {field}; missing support never downgrades a finding"
                 )
+
+
+# ---- Format normalisation (0.23.6) -------------------------------------------
+# The host stays strict about what carries authority: the verdict value, the
+# task/run/branch identity, the verification classification, and which
+# findings block under the review policy. It is tolerant about what does not.
+# Two things an auditor gets wrong without changing its judgment are repaired
+# here instead of being paid for with a second auditor pass:
+#
+#   1. extra properties inside classifiedFindings[] / verificationResults[]
+#      items are dropped (unknown top-level members stay fatal);
+#   2. an accepted verdict that reports a prior finding still-open without
+#      repeating its text is completed by the host from its own records: a
+#      non-blocking prior goes to findings as backlog, a blocking prior goes to
+#      requiredFixes at its recorded severity, so the review policy turns the
+#      verdict into needs-fix. A prior whose severity the host cannot establish
+#      is not carried at all and the strict check below still refuses it.
+#
+# Everything done is recorded in the top-level hostNormalization member and
+# the untouched response is kept beside the verdict.
+
+HOST_NORMALIZATION_KEY = "hostNormalization"
+HOST_NORMALIZATION_VERSION = 1
+SEVERITY_VALUES = ("P0", "P1", "P2", "P3")
+NORMALIZED_ITEM_ARRAYS = ("classifiedFindings", "verificationResults")
+# Used only when the schema file cannot be read; the schema is the authority.
+FALLBACK_ITEM_FIELDS = {
+    "classifiedFindings": {
+        "id", "severity", "summary", "trigger", "impact", "requirement",
+        "location", "assumptionId",
+    },
+    "verificationResults": {
+        "status", "command", "exitCode", "evidenceRefs", "rationale",
+    },
+}
+DEFAULT_SCHEMA = (
+    Path(__file__).resolve().parent.parent / "schemas" / "audit-verdict.v1.schema.json"
+)
+
+
+def host_carried_item_ids(verdict: dict[str, Any]) -> set[str]:
+    record = verdict.get(HOST_NORMALIZATION_KEY)
+    carried = record.get("carriedPriorFindings") if isinstance(record, dict) else None
+    if not isinstance(carried, list):
+        return set()
+    return {
+        str(entry.get("classifiedAs")) for entry in carried
+        if isinstance(entry, dict) and entry.get("source") != "auditor-classification"
+    }
+
+
+def item_fields(schema_path: Path | None) -> dict[str, set[str]]:
+    allowed = {key: set(value) for key, value in FALLBACK_ITEM_FIELDS.items()}
+    try:
+        schema = json.loads((schema_path or DEFAULT_SCHEMA).read_text(encoding="utf-8"))
+        for key in NORMALIZED_ITEM_ARRAYS:
+            properties = schema["properties"][key]["items"]["properties"]
+            if isinstance(properties, dict) and properties:
+                allowed[key] = set(properties)
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return allowed
+
+
+def drop_unknown_item_fields(
+    verdict: dict[str, Any], allowed: dict[str, set[str]]
+) -> list[dict[str, Any]]:
+    dropped: list[dict[str, Any]] = []
+    for key in NORMALIZED_ITEM_ARRAYS:
+        items = verdict.get(key)
+        if not isinstance(items, list):
+            continue
+        for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                continue
+            extra = sorted(name for name in item if name not in allowed[key])
+            if not extra:
+                continue
+            for name in extra:
+                del item[name]
+            dropped.append({"path": f"{key}[{index}]", "fields": extra})
+    return dropped
+
+
+def _review_policy():
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import review_policy  # noqa: PLC0415 - sibling module, stdlib only
+
+    return review_policy
+
+
+def blocking_severities() -> set[str]:
+    """The effective review policy's blocking set (P0/P1 are a floor)."""
+    import os
+
+    policy_module = _review_policy()
+    config = os.environ.get("SINGULAR_JSON_CONFIG_FILE") or str(
+        Path(os.environ.get("SINGULAR_ROOT") or os.getcwd()) / "singular.config.json"
+    )
+    try:
+        policy = policy_module.load_policy(config_path=config)
+    except policy_module.PolicyError as exc:
+        raise ValueError(f"review policy is invalid: {exc}") from exc
+    return set(policy.get("blockingSeverities") or []) | set(BLOCKING_SEVERITIES)
+
+
+def prior_finding_records(run_dir: Path, idents: list[str]) -> dict[str, dict[str, Any]]:
+    """What the host durably knows about each prior finding id.
+
+    The findings ledger gives the text the host showed the auditor; the review
+    round that last reported that text gives its classification. A prior the
+    host cannot tie to exactly one classified item with a consistent severity
+    has no usable severity, and is reported with the reason.
+    """
+    policy_module = _review_policy()
+    out: dict[str, dict[str, Any]] = {
+        ident: {"severity": None, "reason": "no findings-ledger entry"} for ident in idents
+    }
+    try:
+        ledger = json.loads((run_dir / "findings-status.json").read_text(encoding="utf-8"))
+        entries = ledger.get("findings") if isinstance(ledger, dict) else None
+    except (OSError, ValueError):
+        entries = None
+    if not isinstance(entries, list):
+        return out
+    rounds: dict[int, list[dict[str, Any]] | None] = {}
+
+    def round_items(attempt: Any) -> list[dict[str, Any]] | None:
+        if not isinstance(attempt, int) or isinstance(attempt, bool):
+            return None
+        if attempt not in rounds:
+            items = None
+            try:
+                record = json.loads(
+                    (run_dir / f"review-policy-attempt-{attempt}.json").read_text(encoding="utf-8")
+                )
+                raw = record.get("items") if isinstance(record, dict) else None
+                if isinstance(raw, list):
+                    items = [
+                        item for item in raw
+                        if isinstance(item, dict)
+                        and item.get("severity") in SEVERITY_VALUES
+                        and isinstance(item.get("id"), str) and item["id"].strip()
+                        and isinstance(item.get("summary"), str)
+                    ]
+            except (OSError, ValueError):
+                items = None
+            rounds[attempt] = items
+        return rounds[attempt]
+
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("id") not in out:
+            continue
+        ident = entry["id"]
+        text = entry.get("text")
+        if not isinstance(text, str) or not text.strip() or finding_ledger_id(text) != ident:
+            out[ident] = {"severity": None, "reason": "findings-ledger text does not match its id"}
+            continue
+        record: dict[str, Any] = {"text": text, "severity": None}
+        for attempt in (entry.get("lastSeenAttempt"), entry.get("firstSeenAttempt")):
+            items = round_items(attempt)
+            if items is None:
+                record["reason"] = "no review-policy round record for the attempt that reported it"
+                continue
+            item, conflict = policy_module.covering_item(text.strip(), items)
+            if item is None:
+                record["reason"] = "the reporting round left it unclassified"
+                continue
+            if conflict:
+                record["reason"] = "its severity tag conflicts with its classified item"
+                continue
+            record.update({
+                "severity": item["severity"],
+                "source": f"review-policy-attempt-{attempt}.json#{item['id']}",
+                "support": {
+                    key: item[key] for key in ("trigger", "impact", "requirement", "location")
+                    if isinstance(item.get(key), str)
+                },
+            })
+            record.pop("reason", None)
+            break
+        out[ident] = record
+    return out
+
+
+def carry_still_open_priors(
+    verdict: dict[str, Any], supplied: list[str], run_dir: Path
+) -> list[dict[str, Any]]:
+    """Complete an accepted verdict that leaves still-open priors uncarried."""
+    status = verdict.get("findingsStatus")
+    if verdict.get("verdict") != "accepted" or not isinstance(status, dict):
+        return []
+    for key in ("findings", "requiredFixes"):
+        if not isinstance(verdict.get(key), list):
+            return []  # the schema check reports this precisely
+    classified = verdict.get("classifiedFindings")
+    if classified is not None and not isinstance(classified, list):
+        return []
+    carried_ids = {
+        finding_ledger_id(item)
+        for key in ("findings", "requiredFixes")
+        for item in verdict[key] if isinstance(item, str)
+    }
+    missing = sorted(
+        ident for ident, value in status.items()
+        if value == "still-open" and ident in supplied and ident not in carried_ids
+    )
+    if not missing:
+        return []
+    policy_module = _review_policy()
+    blocking = blocking_severities()
+    records = prior_finding_records(run_dir, missing)
+    items = list(classified or [])
+    used_ids = {item.get("id") for item in items if isinstance(item, dict)}
+    carried: list[dict[str, Any]] = []
+    for ident in missing:
+        record = records[ident]
+        severity = record.get("severity")
+        if severity not in SEVERITY_VALUES:
+            # Fail closed: nothing is carried, so validate_findings_status
+            # still refuses the verdict and names this id.
+            continue
+        text = record["text"]
+        is_blocking = severity in blocking
+        entry: dict[str, Any] = {
+            "id": ident,
+            "severity": severity,
+            "disposition": "blocking" if is_blocking else "backlog",
+            "source": record.get("source", ""),
+        }
+        valid = [
+            policy_module._classified_entry(item) for item in items  # noqa: SLF001
+        ]
+        valid = [item for item in valid if item is not None]
+        covering, conflict = policy_module.covering_item(text.strip(), valid)
+        if (
+            not is_blocking and covering is not None and not conflict
+            and covering["severity"] == severity
+        ):
+            # The auditor's own classification already covers the prior text
+            # at the recorded severity; only the string was missing.
+            entry["classifiedAs"] = covering["id"]
+            entry["source"] = "auditor-classification"
+            entry["reason"] = (
+                f"still-open {severity} prior carried as backlog under the "
+                f"auditor's own item {covering['id']}"
+            )
+        else:
+            host_id = ident
+            while host_id in used_ids:
+                host_id += "-prior"
+            used_ids.add(host_id)
+            host_item = {"id": host_id, "severity": severity, "summary": text.strip()}
+            host_item.update(record.get("support") or {})
+            items.append(host_item)
+            entry["classifiedAs"] = host_id
+            entry["reason"] = (
+                f"still-open {severity} prior is blocking under the review policy; "
+                "an accepted verdict cannot close it, so it is carried as a required fix"
+                if is_blocking else
+                f"still-open {severity} prior carried as backlog at its recorded severity"
+            )
+        verdict["requiredFixes" if is_blocking else "findings"].append(text)
+        carried.append(entry)
+    if carried and items != (classified or []):
+        verdict["classifiedFindings"] = items
+    return carried
+
+
+def normalize_format(
+    verdict_path: Path, prior_findings: Path | None, run_dir: Path | None,
+    schema_path: Path | None, guard_only: bool,
+) -> dict[str, Any]:
+    from datetime import datetime, timezone
+
+    verdict = read_object(verdict_path, "audit verdict")
+    report: dict[str, Any] = {
+        "normalized": False, "droppedFields": [], "carriedPriorFindings": [],
+    }
+    if verdict.get("schema") != AUDIT_V1:
+        return report
+    if HOST_NORMALIZATION_KEY in verdict:
+        raise ValueError(
+            f"audit verdict has host-owned field: {HOST_NORMALIZATION_KEY}; "
+            "the auditor must not emit it"
+        )
+    if guard_only:
+        return report
+    original = json.dumps(verdict, indent=2) + "\n"
+    dropped = drop_unknown_item_fields(verdict, item_fields(schema_path))
+    carried: list[dict[str, Any]] = []
+    if prior_findings is not None:
+        # A host record the host itself cannot read is not the auditor's
+        # format error: carry nothing and let the strict check decide.
+        try:
+            supplied, _required = read_prior_findings(prior_findings)
+            carried = carry_still_open_priors(
+                verdict, supplied, run_dir or prior_findings.resolve().parent
+            )
+        except ValueError as exc:
+            report["carrySkipped"] = str(exc)
+            verdict = json.loads(original)
+            dropped = drop_unknown_item_fields(verdict, item_fields(schema_path))
+    if not dropped and not carried:
+        return report
+    record: dict[str, Any] = {"version": HOST_NORMALIZATION_VERSION}
+    if dropped:
+        record["droppedFields"] = dropped
+    if carried:
+        record["carriedPriorFindings"] = carried
+    record["appliedAt"] = (
+        datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    )
+    verdict[HOST_NORMALIZATION_KEY] = record
+    backup = verdict_path.with_name(verdict_path.name + ".pre-format-normalize.json")
+    backup.write_text(original, encoding="utf-8")
+    temporary = verdict_path.with_name(verdict_path.name + ".format-normalize.tmp")
+    temporary.write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(verdict_path)
+    report.update({"normalized": True, "droppedFields": dropped, "carriedPriorFindings": carried})
+    return report
+
+
+def validate_authority(
+    verdict_path: Path, host_report: Path, *, task: str, run: str, branch: str
+) -> str:
+    """Are the authority-carrying fields of this (otherwise rejected) verdict sound?
+
+    Used only to classify an exhausted auditor-format failure: a response
+    whose verdict value, task/branch identity and verification echo are valid is a
+    finished review the host could not read, not broken infrastructure.
+    Nothing is accepted on this answer.
+    """
+    verdict = read_object(verdict_path, "audit verdict")
+    if verdict.get("schema") != AUDIT_V1:
+        raise ValueError("audit verdict is not audit-verdict.v1")
+    if verdict.get("verdict") not in ("accepted", "needs-fix", "blocked", "needs-human"):
+        raise ValueError(f"unsupported verdict value: {verdict.get('verdict')!r}")
+    # Task and branch are what every acceptance edge binds exactly. runId is
+    # warn-only in the central validator (infrastructure retries reuse runs)
+    # and self-referential at acceptance, so it is not an authority test here.
+    del run
+    for field, expected in (("taskId", task), ("branch", branch)):
+        if verdict.get(field) != expected:
+            raise ValueError(
+                f"audit {field} does not match: expected {expected!r}, "
+                f"got {verdict.get(field)!r}"
+            )
+    host = host_classification(read_object(host_report, "host verification report"))
+    statuses = echo_statuses(verdict)
+    if "failed-product" in statuses and host != "failed-product":
+        raise ValueError("model reported failed-product while the host did not")
+    return "ok"
 
 
 def validate_audit_format(verdict_path: Path, prior_findings: Path) -> str:
@@ -364,13 +728,48 @@ def parse_args() -> argparse.Namespace:
                         help="check findingsStatus and P0/P1 support against "
                              "the host's --prior-findings record")
     parser.add_argument("--prior-findings", type=Path)
+    parser.add_argument("--normalize-format", action="store_true",
+                        help="drop unknown properties inside finding/verification "
+                             "items and carry still-open prior findings the host "
+                             "can classify; prints a JSON report")
+    parser.add_argument("--guard-only", action="store_true",
+                        help="with --normalize-format: rewrite nothing, only "
+                             "refuse host-owned members")
+    parser.add_argument("--run-dir", type=Path,
+                        help="run directory holding findings-status.json and the "
+                             "review-policy round records (default: beside "
+                             "--prior-findings)")
+    parser.add_argument("--schema", type=Path,
+                        help="audit-verdict.v1 schema (default: the engine's own)")
+    parser.add_argument("--validate-authority", action="store_true",
+                        help="check verdict value, identity and verification echo "
+                             "of a response that failed format validation")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     try:
-        if args.validate_audit_format:
+        if args.normalize_format:
+            if args.verdict is None:
+                raise ValueError("--normalize-format requires --verdict")
+            print(json.dumps(normalize_format(
+                args.verdict, args.prior_findings, args.run_dir, args.schema,
+                args.guard_only,
+            ), separators=(",", ":")))
+        elif args.validate_authority:
+            if args.verdict is None or args.host_report is None or not all((
+                args.expected_task, args.expected_run, args.expected_branch,
+            )):
+                raise ValueError(
+                    "--validate-authority requires --verdict, --host-report and "
+                    "the expected task, run and branch"
+                )
+            print(validate_authority(
+                args.verdict, args.host_report, task=args.expected_task,
+                run=args.expected_run, branch=args.expected_branch,
+            ))
+        elif args.validate_audit_format:
             if args.verdict is None or args.prior_findings is None:
                 raise ValueError(
                     "--validate-audit-format requires --verdict and --prior-findings"

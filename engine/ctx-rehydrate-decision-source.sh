@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ctx-rehydrate-decision-source.sh — pure, read-only decision-record extra-spec
 # producer (stage S5-routing, node `rehydrate-path`, layer engine_runtime).
-# Sourced exactly once by the context-evolution loader block in lib.sh (it matches
+# Sourced exactly once by the context module loader block in lib.sh (it matches
 # the ctx-*.sh glob). This file DEFINES a new function only; it is wired into the
 # l1-drive.sh rehydrate call sites in this same slice, but is otherwise inert.
 #

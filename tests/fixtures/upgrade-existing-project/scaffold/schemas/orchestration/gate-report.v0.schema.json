@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.gate-report.v0",
+  "title": "singular Structured Gate Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "taskId",
+    "runId",
+    "headSha",
+    "command",
+    "commandSha256",
+    "evidenceBindingSha256",
+    "outcome",
+    "expectedFailures",
+    "unexpectedFailures",
+    "resolvedExpectedFailures",
+    "rawExitCode",
+    "logRef",
+    "logSha256",
+    "logBytes",
+    "recordedAt"
+  ],
+  "properties": {
+    "schema": { "const": "singular.orchestration.gate-report.v0" },
+    "taskId": { "type": "string", "pattern": "^TASK-[0-9]{4,}$" },
+    "runId": { "type": "string", "minLength": 1 },
+    "headSha": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "command": { "type": "string", "minLength": 1 },
+    "commandSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "evidenceBindingSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "baselineRef": { "type": "string", "minLength": 1 },
+    "baselineSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "passed",
+        "passed-with-acknowledged-baseline",
+        "failed-product",
+        "inconclusive-infrastructure",
+        "not-rerun-evidence-verified"
+      ]
+    },
+    "expectedFailures": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/failure" }
+    },
+    "unexpectedFailures": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/failure" }
+    },
+    "resolvedExpectedFailures": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/failure" }
+    },
+    "rawExitCode": { "type": "integer" },
+    "logRef": { "type": "string", "minLength": 1 },
+    "logPath": { "type": "string", "minLength": 1 },
+    "logSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "logBytes": { "type": "integer", "minimum": 0 },
+    "durationMs": { "type": "integer", "minimum": 0 },
+    "phase": {
+      "type": "string",
+      "enum": ["worker", "audit-verification", "integration", "other"]
+    },
+    "workspaceKind": {
+      "type": "string",
+      "enum": ["worker", "disposable", "evidence-only", "integration"]
+    },
+    "evidenceOnly": { "type": "boolean" },
+    "sourceIntegrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "changedPaths"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["verified", "violation", "not-checked"]
+        },
+        "changedPaths": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "failureSignals": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "infrastructureSignals": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "recordedAt": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["signature"],
+      "properties": {
+        "signature": { "type": "string", "minLength": 1 },
+        "title": { "type": "string" }
+      }
+    }
+  }
+}

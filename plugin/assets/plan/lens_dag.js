@@ -7,8 +7,8 @@
    whole dependsOn graph, computed by the pure dag_layout.js module. Stages no
    longer place anything — they used to own the columns, with depth computed
    from same-stage edges only, which drew a plan that names one stage per node
-   (AXON) as a single sequential rail and could even put a node left of its own
-   prerequisite (PMGO-001). Stages now survive as text on the card and in the
+   as a single sequential rail and could even put a node left of its own
+   prerequisite. Stages now survive as text on the card and in the
    detail card, nothing more.
 
    Soft edge-to-edge bezier edges carry no arrowheads at rest and grow
@@ -113,7 +113,7 @@ function computeLayout(dag) {
 //              cohort — or with no cohort information at all, the pre-cohort
 //              server's shape.
 //   done-hist  the same, but grandfathered / cohort "historical". Historical
-//              completion must never read as campaign progress (PMGO-002), so
+//              completion must never read as campaign progress, so
 //              it wins over `done` when both descriptions fit.
 //   failed     a hard gate verdict.
 //   active     live work: an in-flight task OR an active L1 lease. The lease arm
@@ -221,7 +221,7 @@ function build() {
 
   // cards — glyph + id + ×N badge, attribution (area · stage) line under. A node
   // the scheduler cannot start yet for a *policy* reason (same-area lease, write
-  // scopes overlapping an active lease — AXON-002) carries data-runnable="false"
+  // scopes overlapping an active lease) carries data-runnable="false"
   // and wears a dashed ring: safe serialization has to look deliberate, not
   // broken. The attribute is only emitted when the server says so.
   let cards = "";
@@ -245,7 +245,7 @@ function build() {
 
   // Progress footer dots, in wave order. Historical completion is counted and
   // drawn apart from campaign completion — a plan carried over from an earlier
-  // run must not read as progress on this one (PMGO-002).
+  // run must not read as progress on this one.
   let dots = "", pTotal = 0, pPassed = 0, curTotal = 0, curPassed = 0, histPassed = 0;
   let cohortSeen = false, serializedSeen = false;
   const present = new Set();

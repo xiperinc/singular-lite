@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.l1-lease.v0",
+  "title": "singular L1 Node Lease",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "node",
+    "area",
+    "stage",
+    "layer",
+    "status",
+    "runId",
+    "baseSha",
+    "targetBranch",
+    "allowedWriteScopes",
+    "startedAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "schema": { "const": "singular.orchestration.l1-lease.v0" },
+    "node": { "type": "string", "minLength": 1 },
+    "area": { "type": "string", "minLength": 1 },
+    "stage": { "type": "string", "minLength": 1 },
+    "layer": { "type": "string", "minLength": 1 },
+    "status": {
+      "type": "string",
+      "enum": ["proposed", "planning", "active", "released", "failed"]
+    },
+    "runId": { "type": "string", "minLength": 1 },
+    "baseSha": { "type": "string", "pattern": "^[0-9a-f]{7,64}$" },
+    "targetBranch": { "type": "string", "minLength": 1 },
+    "allowedWriteScopes": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

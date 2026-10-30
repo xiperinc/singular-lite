@@ -2,7 +2,7 @@
 # ctx-rehydrate-authored-config.sh — pure, read-only config-gated entry point for
 # the authored-knowledge manifest (stage S5-routing, node `rehydrate-path`, layer
 # engine_runtime; singular-brain integration point 4). Sourced exactly once by the
-# context-evolution loader block in lib.sh (it matches the ctx-*.sh glob). The
+# context module loader block in lib.sh (it matches the ctx-*.sh glob). The
 # rehydrate driver and strategy-event builder call these functions at their
 # existing authored-context boundary.
 #

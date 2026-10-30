@@ -16,6 +16,8 @@ import fcntl
 import hashlib
 import json
 import os
+import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -60,6 +62,81 @@ def failure_identity(failure: dict[str, Any]) -> str:
         return explicit
     legacy_key = str(failure.get("key", "") or "")
     return sha256_text("legacy:" + legacy_key) if legacy_key else ""
+
+
+def task_contract_status_bytes(task_path: Path, status: str) -> tuple[bytes, str]:
+    """Return the contract bytes under ``status`` and the status now on disk.
+
+    Mirrors ``singular_task_set_status`` byte for byte: only the first
+    ``Status:`` line of the header (before the first ``## `` section) is
+    lifecycle-owned. Every other byte of the contract is preserved.
+    """
+    lines = task_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    out: list[str] = []
+    current = ""
+    done = False
+    in_header = True
+    for line in lines:
+        if line.startswith("## "):
+            in_header = False
+        if in_header and not done and re.match(r"^Status:\s*", line):
+            current = line.split(":", 1)[1].strip().lower()
+            out.append(f"Status: {status}\n")
+            done = True
+        else:
+            out.append(line)
+    return "".join(out).encode("utf-8"), current
+
+
+def regate_command(lease: dict[str, Any], lease_path: Path) -> str:
+    """The exact host command that authorizes one unchanged-candidate regate.
+
+    Empty when the retained candidate has no eligible failure, an authorization
+    is already active, or the budget a regate would consume is exhausted.
+    """
+    candidate = lease.get("acceptedCandidate")
+    if not isinstance(candidate, dict) or candidate.get("state") != "integration-failed":
+        return ""
+    failures = [item for item in candidate.get("failures") or [] if isinstance(item, dict)]
+    if not failures:
+        return ""
+    latest = failures[-1]
+    failure_id = failure_identity(latest)
+    task_id = str(candidate.get("taskId") or lease.get("taskId") or "")
+    branch = str(candidate.get("branch") or "")
+    if not failure_id or not task_id or not branch:
+        return ""
+    existing = lease.get("recoveryAuthorization")
+    recorded = [
+        item for item in lease.get("recoveryAuthorizations") or [] if isinstance(item, dict)
+    ]
+    if isinstance(existing, dict):
+        if existing.get("state") in {"issued", "claimed", "audit-accepted", "gate-passed"}:
+            return ""
+        recorded.append(existing)
+    if any(item.get("failureId") == failure_id for item in recorded):
+        return ""
+    domain = str(latest.get("domain", "") or "")
+    budget_domain = "infrastructure" if domain == "infrastructure" else "regate"
+    budgets = lease.get("failureBudgets") if isinstance(lease.get("failureBudgets"), dict) else {}
+    limits = lease.get("failureLimits") if isinstance(lease.get("failureLimits"), dict) else {}
+    default_limit = int(os.environ.get(
+        "SINGULAR_INFRASTRUCTURE_RECOVERY_MAX" if budget_domain == "infrastructure"
+        else "SINGULAR_REGATE_MAX", "3",
+    ))
+    if int(budgets.get(budget_domain, 0) or 0) >= int(limits.get(budget_domain, default_limit) or 0):
+        return ""
+    successor_run = f"RUN-REGATE-{task_id}-{len(recorded) + 1}"
+    worktrees = os.environ.get("SINGULAR_WORKTREES_DIR") or str(
+        lease_path.resolve().parent.parent.parent / ".worktrees"
+    )
+    return " ".join([
+        "singular", "recover", "candidate", shlex.quote(task_id), "--action", "regate",
+        "--successor-run", shlex.quote(successor_run),
+        "--successor-branch", shlex.quote(branch),
+        "--successor-worktree", shlex.quote(str(Path(worktrees) / successor_run)),
+        "--failure-id", shlex.quote(failure_id),
+    ])
 
 
 def failure_counters(lease: dict[str, Any]) -> tuple[dict[str, int], dict[str, int]]:
@@ -1535,7 +1612,7 @@ def close_dispatch(args: argparse.Namespace) -> None:
     correct for LEASE MUTATION and stays. It is not a reason to leave the
     dispatch record `launched`: the reaper used to count such a record as a
     running worker forever, and the successor could not bind because the record
-    was still open -- the reserve-before-bind deadlock (field 2026-09-14).
+    was still open -- the reserve-before-bind deadlock.
 
     A dispatch record is historical process bookkeeping for one generation. Its
     closure is independent of who owns the lease now. This verb closes only the
@@ -1697,6 +1774,53 @@ def retain_candidate(args: argparse.Namespace) -> None:
         print("accepted")
 
 
+def candidate_contract_restore(args: argparse.Namespace) -> None:
+    """Re-assert the lifecycle-owned Status header a retained candidate was bound under.
+
+    Releases through 0.23.4 rolled a red integration back to the committed task
+    file, which silently replaced the uncommitted ``Status: accepted`` header
+    with ``Status: ready`` while the lease kept the hash of the accepted bytes.
+    The contract itself never changed, yet every exact-hash verifier refused it.
+    This restores the header only when the result is byte-identical to the
+    bound contract, so no verifier is relaxed: any other difference is left in
+    place for those verifiers to refuse.
+    """
+    task_path = Path(args.task_file)
+    with locked(Path(args.lease), missing=True) as lease:
+        candidate = lease.get("acceptedCandidate")
+        if (
+            not isinstance(candidate, dict)
+            or lease.get("status") != "accepted"
+            or candidate.get("state") == "integrated"
+            or not task_path.is_file()
+        ):
+            if not lease:
+                lease["_deleteRecord"] = True
+            print("unchanged")
+            return
+        bound_path = Path(str(candidate.get("taskContractPath", "")))
+        bound_sha = str(candidate.get("taskContractSha256", "") or "")
+        if (
+            not bound_sha
+            or bound_path.resolve() != task_path.resolve()
+            or sha256(task_path) == bound_sha
+        ):
+            print("unchanged")
+            return
+        for status in ("accepted", "ready"):
+            data, current = task_contract_status_bytes(task_path, status)
+            if current not in {"accepted", "ready"} or current == status:
+                continue
+            if hashlib.sha256(data).hexdigest() != bound_sha:
+                continue
+            temporary = task_path.with_name(task_path.name + ".tmp")
+            temporary.write_bytes(data)
+            os.replace(temporary, task_path)
+            print(f"restored:{current}->{status}")
+            return
+        print("unchanged")
+
+
 def candidate_check(args: argparse.Namespace) -> None:
     lease = read_object(Path(args.lease))
     candidate = lease.get("acceptedCandidate")
@@ -1741,7 +1865,13 @@ def candidate_check(args: argparse.Namespace) -> None:
                 )
             budgets, limits = failure_counters(lease)
             if budgets[domain] >= limits[domain]:
-                print(f"{domain} recovery budget is exhausted")
+                # An ordinary retry is spent. Name the one remaining host route
+                # exactly instead of leaving the operator to assemble it.
+                command = regate_command(lease, Path(args.lease))
+                print(
+                    f"{domain} recovery budget is exhausted"
+                    + (f"; authorize one unchanged regate with: {command}" if command else "")
+                )
                 raise SystemExit(3)
 
 
@@ -2560,6 +2690,11 @@ def parser() -> argparse.ArgumentParser:
     retain.add_argument("--verification-report", default="")
     retain.add_argument("--verification-policy", default="")
     retain.set_defaults(action=retain_candidate)
+
+    restore = commands.add_parser("candidate-contract-restore")
+    restore.add_argument("--lease", required=True)
+    restore.add_argument("--task-file", required=True)
+    restore.set_defaults(action=candidate_contract_restore)
 
     check = commands.add_parser("candidate-check")
     for flag in ("lease", "head", "tree", "campaign", "target_head", "invalidation_key"):

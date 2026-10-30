@@ -1,0 +1,63 @@
+{
+  "originalVerdict": "needs-fix",
+  "effectiveVerdict": "needs-fix",
+  "applied": true,
+  "blocking": [
+    "F2"
+  ],
+  "backlog": [
+    "F1",
+    "F3",
+    "F4",
+    "F5",
+    "F6"
+  ],
+  "items": [
+    {
+      "id": "F1",
+      "severity": "P3",
+      "summary": "the parser mode label is ambiguous",
+      "location": "src/parser.py:1"
+    },
+    {
+      "id": "F2",
+      "severity": "P2",
+      "summary": "the parser drops the final token",
+      "location": "src/parser.py:1"
+    },
+    {
+      "id": "F3",
+      "severity": "P3",
+      "summary": "the parser help omits the empty-input example",
+      "location": "src/parser.py:1"
+    },
+    {
+      "id": "F4",
+      "severity": "P3",
+      "summary": "the parser test log has no command heading",
+      "location": "src/parser.py:1"
+    },
+    {
+      "id": "F5",
+      "severity": "P3",
+      "summary": "the parser usage text has inconsistent spacing",
+      "location": "src/parser.py:1"
+    },
+    {
+      "id": "F6",
+      "severity": "P3",
+      "summary": "the parser output label is verbose",
+      "location": "src/parser.py:1"
+    }
+  ],
+  "logicalChange": "parser",
+  "round": 1,
+  "kind": "initial",
+  "series": 1,
+  "seriesRound": 1,
+  "maxRounds": 2,
+  "allowedRounds": 2,
+  "used": 1,
+  "status": "open",
+  "recordedAt": "2000-01-01T00:00:00Z"
+}

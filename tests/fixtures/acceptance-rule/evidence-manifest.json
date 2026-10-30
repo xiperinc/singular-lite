@@ -1,0 +1,26 @@
+{
+  "schema": "singular.orchestration.evidence-manifest.v0",
+  "taskId": "TASK-0001",
+  "runId": "RUN-fixture",
+  "headSha": "@HEAD@",
+  "diffSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "files": [],
+  "commands": [],
+  "expectedFailureCount": 0,
+  "unexpectedFailureCount": 0,
+  "checks": {
+    "scope": {},
+    "secret": {},
+    "gate": {}
+  },
+  "artifacts": [],
+  "budget": {
+    "limitBytes": 262144,
+    "composedBytes": 0,
+    "excerptLimitBytes": 2048,
+    "retrievalLimitBytes": 0,
+    "auditInputTokenCanary": 100000,
+    "actualAuditInputTokens": 0
+  },
+  "createdAt": "2026-01-01T00:00:00Z"
+}

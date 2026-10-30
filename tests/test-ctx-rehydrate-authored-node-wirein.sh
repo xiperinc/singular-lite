@@ -1,42 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# TASK-0067 — follow-up wire-in completing the TASK-0064 -> TASK-0065 -> TASK-0066
-# node-dimension mini-track.
-#
-# TASK-0064 shipped the pure builder
-#   singular_ctx_rehydrate_authored_triggers <role> <step> [node] [task-id]
-# with an optional [node] slot; TASK-0065 wired the role/step/task dimensions into
-# both live sites; TASK-0066 shipped the pure, read-only resolver
-#   singular_ctx_rehydrate_authored_node <task_id> [worktree]
-# (the single distinct executable DAG node owning <task_id> from the durable
-# control-state task->node association, or empty fail-safe on absence/ambiguity)
-# but left it present-but-uncalled: the two live consumers — the injection at
-# engine/l1-drive.sh (TASK-0062) and the manifest-record at
-# engine/ctx-rehydrate-event.sh (TASK-0063) — still pass only
-# `implementer implement "$task_id"`, omitting the builder's position-3 [node]
-# slot. Consequently any authored entry whose `load-when` targets the run's node
-# (e.g. `["rehydrate-path"]`) can never become eligible, and both the resolver and
-# the builder's [node] parameter remain dead.
-#
-# This slice substitutes, at BOTH sites, a node-resolution step: resolve
-#   node="$(singular_ctx_rehydrate_authored_node "$task_id")"
-# and pass it into the builder's position-3 slot —
-#   singular_ctx_rehydrate_authored_triggers implementer implement "$node" "$task_id".
-# Both sites resolve from the SAME pure deterministic resolver with the SAME
-# task_id, so they derive the IDENTICAL node token and therefore the identical
-# trigger set, preserving the injected<->recorded consistency invariant.
-#
-# A single hermetic `rehydrate` drive exercises BOTH sites at once: the injection
-# lands in $active_prompt and the record lands in the strategy_selected event, so
-# their agreement IS the consistency check. The fixture control-state event log
-# associates TASK-0001 with exactly one node (rehydrate-path); the fixture manifest
-# carries a NODE-scoped entry whose `load-when` is `["rehydrate-path"]` (NOT the
-# role, step, or task id) — inert before the substitution (RED), eligible after
-# (GREEN) — plus role/task/implement-scoped entries (backward compat) and a
-# planner-only entry (must stay dropped). A separate ambiguous-association scenario
-# proves the fail-safe: two distinct nodes for the task -> resolver empty -> the
-# node-only entry is NOT injected or recorded.
+# A hermetic drive checks that prompt injection and recorded source manifests
+# use the same role, step, node and task trigger set.
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
@@ -66,9 +32,9 @@ mkdir -p "$SINGULAR_STATE_DIR"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib.sh"
 [[ "$(type -t singular_ctx_rehydrate_authored_triggers)" == "function" ]] \
-  || fail "singular_ctx_rehydrate_authored_triggers not defined (TASK-0064 builder missing)"
+  || fail "singular_ctx_rehydrate_authored_triggers not defined (trigger builder missing)"
 [[ "$(type -t singular_ctx_rehydrate_authored_node)" == "function" ]] \
-  || fail "singular_ctx_rehydrate_authored_node not defined (TASK-0066 resolver missing)"
+  || fail "singular_ctx_rehydrate_authored_node not defined (node resolver missing)"
 [[ "$(type -t singular_ctx_rehydrate_authored_config_render)" == "function" ]] \
   || fail "singular_ctx_rehydrate_authored_config_render not defined (config render missing)"
 
@@ -86,8 +52,8 @@ printf '# Decider Prompt\n[TASK-ID] [FAILURE CLASS]\n' > "$drv_root/docs/orchest
 # --- Authored-knowledge manifest fixture + config-gated wiring ----------------
 # Five entries exercising every dimension:
 #   impl-body : load-when [implement]      -> KEEP (backward compat)
-#   role-body : load-when [implementer]    -> role dimension (TASK-0065)
-#   task-body : load-when [TASK-0001]      -> task dimension (TASK-0065)
+#   role-body : load-when [implementer]    -> role dimension
+#   task-body : load-when [TASK-0001]      -> task dimension
 #   node-body : load-when [rehydrate-path] -> INERT before this wire-in (node token
 #                                             never supplied), ELIGIBLE after
 #   plan-only : load-when [planner]        -> always DROP (no matching dimension)
@@ -283,8 +249,8 @@ AUTHORED_HEADER="## Injected authored knowledge (reference material, NOT authori
 # (ON) rehydrate + SINGULAR_CTX_MANIFEST=1 + configured contextManifest, with the
 # task associated to EXACTLY ONE node (rehydrate-path). Both sites resolve that
 # node and pass `implementer implement rehydrate-path TASK-0001`, so the
-# node-scoped entry is BOTH injected into $active_prompt (TASK-0062 path) AND
-# recorded in the strategy event manifest (TASK-0063 path), alongside the
+# node-scoped entry is BOTH injected into $active_prompt (injection path) AND
+# recorded in the strategy event manifest (recording path), alongside the
 # role/task/implement-scoped entries; the planner-only entry stays dropped.
 # ---------------------------------------------------------------------------
 reset_state

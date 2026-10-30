@@ -15,6 +15,18 @@ set -euo pipefail
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_DIR="$ENGINE_HOME/engine"
 CLAUDE_RUN="$SCRIPT_DIR/claude-run.sh"
+DEFAULT_MODEL="$(python3 - "$SCRIPT_DIR/providers.json" <<'PYMODEL'
+import json, re, sys
+model = json.load(open(sys.argv[1], encoding="utf-8"))["providers"]["claude"]["model"]
+# Pin the release decision once; invocation assertions derive from the spec.
+assert model["default"] == "claude-sonnet-5-5", (
+    "The Claude default is pinned here deliberately; if it changes by decision, "
+    "update this assertion to the new default. Got: " + repr(model["default"])
+)
+assert re.search(model["pattern"], model["default"]), model
+print(model["default"])
+PYMODEL
+)"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
@@ -201,21 +213,43 @@ sleep 6   # past the mock's sleep; marker must NOT appear if the child was kille
 pass "c10 wall-clock timeout exits 124 and kills the whole child tree"
 
 # --- Case 11: per-role model + reasoning effort reach the claude invocation -------
-# l2 implementer -> opus-4-8 at medium effort; planner -> opus-4-8 at xhigh.
+# All roles inherit the provider default; their effort defaults stay unchanged.
 r="$workroot/c11"; new_repo "$r"; o="$(out)"; args="$workroot/c11-l2.args"
 MOCK_RESULT='{"status":"x"}' MOCK_ARGS_OUT="$args" \
   run_claude_run "$r" --level l2 -C "$r" --output-last-message "$o" >/dev/null 2>&1
-grep -q -- "--model claude-opus-4-8" "$args" || fail "c11: l2 not on opus-4-8 (got: $(cat "$args"))"
+grep -q -- "--model $DEFAULT_MODEL" "$args" || fail "c11: l2 not on provider default (got: $(cat "$args"))"
 grep -q -- "--effort medium" "$args" || fail "c11: l2 effort not medium (got: $(cat "$args"))"
-pass "c11 l2 implementer -> opus-4-8 + effort medium"
+pass "c11 l2 implementer -> provider default + effort medium"
 
-r="$workroot/c12"; new_repo "$r"; o="$(out)"; args="$workroot/c12-pl.args"
-mkdir -p "$r/docs/orchestration/prompts"; : >"$r/docs/orchestration/prompts/planner-prompt.md"
-MOCK_RESULT='{"ok":true}' MOCK_ARGS_OUT="$args" \
-  run_claude_run "$r" --level readonly -C "$r" --prompt-file "$r/docs/orchestration/prompts/planner-prompt.md" \
-  --output-last-message "$o" >/dev/null 2>&1
-grep -q -- "--effort xhigh" "$args" || fail "c12: planner effort not xhigh (got: $(cat "$args"))"
-pass "c12 planner -> effort xhigh"
+for role in planner auditor decider; do
+  r="$workroot/c12-$role"; new_repo "$r"; o="$(out)"; args="$workroot/c12-$role.args"
+  case "$role" in
+    planner) prompt=planner-prompt.md; effort=xhigh ;;
+    auditor) prompt=auditor-prompt.md; effort=xhigh ;;
+    decider) prompt=decider-prompt-task.md; effort= ;;
+  esac
+  mkdir -p "$r/docs/orchestration/prompts"; : >"$r/docs/orchestration/prompts/$prompt"
+  MOCK_RESULT='{"ok":true}' MOCK_ARGS_OUT="$args" \
+    run_claude_run "$r" --level readonly -C "$r" --prompt-file "$r/docs/orchestration/prompts/$prompt" \
+    --output-last-message "$o" >/dev/null 2>&1
+  grep -q -- "--model $DEFAULT_MODEL" "$args" || fail "c12: $role not on provider default"
+  if [[ -n "$effort" ]]; then
+    grep -q -- "--effort $effort" "$args" || fail "c12: $role effort not $effort"
+  else
+    ! grep -q -- "--effort" "$args" || fail "c12: $role should use model effort default"
+  fi
+  pass "c12 $role -> provider model and unchanged effort default"
+done
+
+# A project can retain the old model; a role-specific model still wins over it.
+r="$workroot/c12-override"; new_repo "$r"; o="$(out)"; args="$workroot/c12-override.args"
+printf '%s\n' '{"env":{"SINGULAR_CLAUDE_MODEL":"claude-opus-4-8"}}' >"$r/singular.config.json"
+for role_model in '' claude-explicit-role; do
+  MOCK_ARGS_OUT="$args" SINGULAR_CLAUDE_L2_MODEL="$role_model" \
+    run_claude_run "$r" --level l2 -C "$r" --output-last-message "$o" >/dev/null 2>&1
+  grep -q -- "--model ${role_model:-claude-opus-4-8}" "$args" || fail "c12: model override precedence"
+done
+pass "c12 project model pin and role override preserved"
 
 # --- Case 13: --session-meta written from the envelope session_id (T-E5) ------
 r="$workroot/c13"; new_repo "$r"; o="$(out)"; meta="$workroot/c13-meta.json"
@@ -224,7 +258,7 @@ MOCK_RESULT='{"status":"x"}' MOCK_SESSION_ID="sess-claude-abc" \
 [[ -f "$meta" ]] || fail "c13: session-meta not written"
 [[ "$(extract "$meta" sessionId)" == "sess-claude-abc" ]] || fail "c13: sessionId not parsed (got: $(extract "$meta" sessionId))"
 [[ "$(extract "$meta" provider)" == "claude" ]] || fail "c13: provider not claude"
-[[ "$(extract "$meta" model)" == "claude-opus-4-8" ]] || fail "c13: model not recorded"
+[[ "$(extract "$meta" model)" == "$DEFAULT_MODEL" ]] || fail "c13: model not recorded"
 pass "c13 --session-meta written from envelope session_id"
 
 # --- Case 14: --resume-session adds -r <id> to the claude argv (T-E5) ----------
@@ -261,7 +295,7 @@ pass "c16 model mismatch -> exit 86 (resume-refused, no model run)"
 # --- Case 17: matching model -> NOT refused (proceeds, -r in argv) -------------
 r="$workroot/c17"; new_repo "$r"; o="$(out)"; args="$workroot/c17.args"; meta="$workroot/c17-meta.json"; ec=0
 cat >"$meta" <<JSON
-{"schema":"singular.orchestration.session-meta.v0","provider":"claude","sessionId":"s","model":"claude-opus-4-8","effort":"medium","cwd":"$r","exitCode":0,"createdAt":"2026-01-01T00:00:00Z"}
+{"schema":"singular.orchestration.session-meta.v0","provider":"claude","sessionId":"s","model":"$DEFAULT_MODEL","effort":"medium","cwd":"$r","exitCode":0,"createdAt":"2026-01-01T00:00:00Z"}
 JSON
 MOCK_RESULT='{"status":"x"}' MOCK_SESSION_ID="s" MOCK_ARGS_OUT="$args" \
   run_claude_run "$r" --level l2 -C "$r" --output-last-message "$o" \
@@ -332,7 +366,7 @@ grep -qF -- "Bash(git commit:*)" "$args2" && fail "c20: l2 must not inherit the 
 pass "c20 readonly denies state-mutating git via Bash; l2 unaffected"
 
 # --- Case 21: ps-denied sandbox — the timeout kill still reaches descendants ---
-# PMGO-004. The old cleanup built its target list from `ps -A` and ignored that
+# The old cleanup built its target list from `ps -A` and ignored that
 # command's exit status, so in a sandbox that denies process enumeration it
 # SIGKILLed only the direct child; every descendant survived the timeout, and
 # nothing anywhere said so. The provider now runs as its own session leader, so

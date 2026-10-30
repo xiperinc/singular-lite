@@ -1,49 +1,6 @@
 #!/usr/bin/env bash
-# ctx-plan-recritic-run.sh — the plan-revision-loop RE-CRITIQUE runner brick: the
-# resume-capable critic re-critique EXECUTOR that consumes the TASK-0025 decision.
-# Stage-file deliverable of the executable DAG node `plan-revision-loop` (stage
-# S3-plan-revision, area plancritic, layer engine_runtime, kind runtime):
-#
-#   "Revised candidates re-enter the critic (same critic session where its gates
-#    allow — its prior concerns are the checklist)."
-#
-# TASK-0025 integrated the re-critique critic-session RESUME DECIDER + strategy
-# recorder, but there was no EXECUTOR: the integrated fresh-only plan-critic driver
-# (TASK-0013, engine/ctx-plan-critic.sh) never passes --resume-session, so a
-# re-critique could not actually re-enter the persisted plan-critic session. This
-# brick adds the resume-capable critic re-critique runner — the critic analog of
-# the planner's integrated revision-round re-invocation (TASK-0022 / TASK-0023) —
-# completing the RUN half of the deliverable.
-#
-# It composes ONLY integrated functions: the TASK-0025 decider + recorder, the
-# fresh-path critic delegate (TASK-0013), and the SHARED lib.sh persist/normalize
-# primitives singular_extract_json, singular_finding_id, and
-# singular_session_meta_finalize — so it reuses rather than duplicates the
-# critique-persist logic. To keep those integrated helpers structurally
-# present-but-uncalled under their own invariance grep, this brick reaches them by
-# an assembled prefix (mirroring engine/ctx-plan-revise-loop.sh), never by their
-# contiguous literal name.
-#
-# Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines NEW
-# functions only; NO existing engine path invokes them, so with this file
-# present-but-uncalled the engine is byte-identical to prior behavior (mirroring
-# engine/ctx-plan-revise-resume.sh). It never owns engine/lib.sh and adds no
-# driver-file hook. Swapping the re-critique step of engine/ctx-plan-revise-loop.sh
-# to call this runner behind SINGULAR_PLAN_RECRITIC_RESUME is the sanctioned
-# follow-up slice and is OUT OF SCOPE here.
-#
-# Advocate/skeptic line + evidence invariance: it runs the critic READ-ONLY on the
-# DEFAULT runner (cross-provider independence preserved), resumes ONLY a
-# plan-critic-role session (the decider's skeptic gate), never upgrades a
-# `fresh <reason>` to resume, never weakens a gate, and never makes the
-# un-bypassable implementation auditor bypassable. It fails OPEN so an
-# infrastructure failure never blocks or deadlocks the revision loop. Events land
-# only in the pinned SINGULAR_EVENTS_FILE.
+# Execute one read-only re-critique using the session policy, with a fresh-session fallback.
 
-# Persist a parsed critic record into the plan-critique.v0 shape using the SHARED
-# singular_finding_id id normalization, so a resumed critique yields an IDENTICAL
-# contract to the fresh path. Prints "verdict<TAB>count"; rewrites <record>.
-#   _singular_plan_recritic_normalize <record> <node> <run_id> <batch_csv>
 _singular_plan_recritic_normalize() {
   local record="$1" node="$2" run_id="$3" batch_csv="$4"
 
@@ -153,7 +110,7 @@ PY
 
 # Records ONLY the rc-86 resume-refused fresh-fallback: EXACTLY ONE role=plan-critic
 # `context.resume_failed` event carrying node, runId, revisesRunId, and the refused
-# sessionId, mirroring the planner revision-round fresh fallback (TASK-0023). No
+# sessionId, mirroring the planner revision-round fresh fallback. No
 # lease change, no runner, no outcome mutation.
 singular_plan_recritic_record_resume_failed() {
   local node="${1:-}" run_id="${2:-}" revises_run_id="${3:-}" session_id="${4:-}"
@@ -175,9 +132,9 @@ PY
 }
 
 # Perform ONE read-only critic re-critique pass over the staged candidate set that
-# MAY resume the persisted per-node plan-critic session. Consults the integrated
-# TASK-0025 decider over the canonical critic session-meta, records the outcome via
-# the TASK-0025 recorder, and:
+# MAY resume the persisted per-node plan-critic session. Consult the session
+# policy using the canonical critic session-meta, record its decision, and
+# choose the corresponding path:
 #   - fresh path (incl. knob-off `fresh disabled`): delegates to the integrated
 #     FRESH critic driver — byte-identical to today's fresh re-critique (no
 #     --resume-session, same record, same plan.critiqued event).

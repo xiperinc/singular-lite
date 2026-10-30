@@ -1,57 +1,7 @@
 #!/usr/bin/env bash
-# ctx-critic-recheck-run.sh — the POST-ACCEPTANCE critic-recheck RUNNER brick: the
-# resume-capable, READ-ONLY critic-recheck EXECUTOR that resumes the plan critic
-# over an ACCEPTED task's diff and records the per-finding dispositions. Stage-file
-# deliverable of the executable DAG node `critic-carryover` (stage S3-plan-revision,
-# area plancritic, layer engine_runtime, kind runtime):
-#
-#   "The post-acceptance recheck that finally EXECUTES the accepted-task recheck —
-#    resumes the plan critic over the accepted diff and records each prior finding's
-#    disposition."
-#
-# It is the post-acceptance sibling of the integrated in-loop re-critique runner
-# singular_plan_recritic_run (TASK-0026, engine/ctx-plan-recritic-run.sh): TASK-0026
-# re-critiques REVISED candidates in-loop; this runner rechecks an ACCEPTED task
-# AFTER acceptance. It is a DIFFERENT engagement — the ACCEPTED diff (not revised
-# candidates), gated by the default-OFF SINGULAR_CRITIC_RECHECK_PCT (not
-# SINGULAR_PLAN_RECRITIC_RESUME) — so it advances the stage rather than duplicating
-# TASK-0026.
-#
-# It composes ONLY already-integrated functions: the TASK-0027 sampling gate, the
-# TASK-0029 resume authority + strategy recorder, and the TASK-0028
-# classifier/recorder — plus the shared runner/session primitives (the DEFAULT
-# runner, the per-node critic session-path helper, singular_extract_json). To keep
-# those integrated helpers structurally present-but-uncalled under their own
-# invariance greps, this brick reaches them by an ASSEMBLED PREFIX (mirroring
-# engine/ctx-plan-recritic-run.sh), never by their contiguous literal name, and it
-# assembles the plan-critic base-prompt filename from parts (S2 contract gate).
-#
-# OUT OF SCOPE (sanctioned follow-up slices): wiring TASK-0030's assembled
-# accepted-diff/prior-findings context (engine/ctx-critic-recheck-context.sh) into
-# this runner's prompt, and the l1-drive.sh post-acceptance hook that invokes this
-# runner. This brick therefore does NOT depend on TASK-0030 and adds NO driver-file
-# hook.
-#
-# Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines NEW
-# functions only; NO existing engine path invokes them, so with this file
-# present-but-uncalled the engine is byte-identical to prior behavior (mirroring
-# engine/ctx-plan-recritic-run.sh). It never owns engine/lib.sh.
-#
-# Advocate/skeptic line + evidence invariance: the runner runs the critic READ-ONLY
-# (--level readonly, -C worktree) on the DEFAULT runner (cross-provider
-# independence), resumes ONLY through the TASK-0029 skeptic role gate (a
-# plan-critic-role session, NEVER a planner/implementer one), never upgrades a
-# `fresh` decision to resume, weakens no gate, changes no accept/reject outcome,
-# touches no packet/lease/task file/inbox placement, and never makes the
-# un-bypassable fresh implementation auditor bypassable. It fails OPEN so an
-# infrastructure failure never blocks acceptance. Events land only in the pinned
-# SINGULAR_EVENTS_FILE.
+# Run a sampled, read-only critic recheck after acceptance. Compose context, session policy
+# and finding classification; refused resume falls back to a fresh session.
 
-# Records ONLY the rc-86 resume-refused fresh-fallback: EXACTLY ONE role=plan-critic
-# `context.resume_failed` event carrying node, runId, the accepted `taskId`, and the
-# refused sessionId, mirroring the in-loop re-critique fresh fallback (TASK-0026). No
-# lease change, no runner, no outcome mutation.
-#   _singular_ctx_critic_recheck_run_resume_failed <node> <run_id> <task_id> <session_id>
 _singular_ctx_critic_recheck_run_resume_failed() {
   local node="${1:-}" run_id="${2:-}" task_id="${3:-}" session_id="${4:-}"
   local event_json
@@ -74,21 +24,21 @@ PY
 # Perform at most ONE post-acceptance recheck of the accepted task. Returns 0 on
 # EVERY path — it NEVER blocks or mutates the acceptance.
 #
-#   (1) SAMPLING GATE: key on run_id:task_id and consult the TASK-0027 sampler.
+#   (1) SAMPLING GATE: key on run_id:task_id and consult the recheck sampler.
 #       When NOT sampled (default-OFF SINGULAR_CRITIC_RECHECK_PCT), return
 #       immediately — NO runner, NO event, NO state write (byte-identical).
 #   (2) When sampled: resolve the canonical per-node plan-critic session-meta, take
-#       the accepted-diff lineage head (current worktree HEAD), consult the TASK-0029
-#       decider (its `resume <sid>` / `fresh <reason>` verdict trusted verbatim; any
-#       decide-error degrades to fresh, NEVER upgraded to resume), and record the
-#       strategy via the TASK-0029 recorder.
+#       the accepted-diff lineage head (current worktree HEAD), and consult the
+#       session policy. Trust its `resume <sid>` / `fresh <reason>` verdict
+#       verbatim; any decide-error degrades to fresh, NEVER upgraded to resume.
+#       Record the chosen strategy.
 #   (3) Run the plan critic READ-ONLY on the DEFAULT runner over the accepted diff,
 #       writing the recheck self-report to <run_dir>: on `resume <sid>` WITH
 #       --resume-session; on `fresh <reason>` FRESH (no --resume-session); on an
 #       rc-86 resume refusal record the role=plan-critic fresh-fallback event and
 #       re-run FRESH; on timeout / infra / absent output fall back to FRESH
 #       (fail-OPEN).
-#   (4) Call the TASK-0028 recorder to classify each prior finding
+#   (4) Classify and record each prior finding as
 #       addressed|survives|obsolete against <prior_critique_record> and emit EXACTLY
 #       ONE ctx.critic_recheck event — even a no-output recheck records every prior
 #       finding via the conservative `survives` default (recorded, never dropped).
@@ -97,7 +47,7 @@ PY
 singular_ctx_critic_recheck_run() {
   local node="$1" run_id="$2" task_id="$3" run_dir="$4" prior_record="$5" worktree="${6:-.}"
 
-  # Reach the integrated recheck helpers (TASK-0027/0028/0029) and the critic
+  # Reach the integrated recheck helpers and the critic
   # session-path helper by an ASSEMBLED PREFIX so they stay present-but-uncalled
   # under their own invariance greps; the contiguous literal name never appears.
   local _cr_pfx=singular_ctx_critic_recheck_
@@ -202,7 +152,7 @@ singular_ctx_critic_recheck_run() {
   fi
 
   # Extract the recheck self-report from the raw runner output. On any failure
-  # (timeout, absent, unparseable) leave <report> absent so the TASK-0028 classifier
+  # (timeout, absent, unparseable) leave <report> absent so the finding classifier
   # degrades to its conservative `survives` default — every prior finding recorded,
   # never dropped.
   rm -f "$report" 2>/dev/null || true

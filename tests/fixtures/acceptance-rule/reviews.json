@@ -1,0 +1,16 @@
+[
+  {
+    "name": "host-pass",
+    "host": "passed",
+    "effectiveVerdict": "accepted",
+    "blocking": []
+  },
+  {
+    "name": "host-product-failure",
+    "host": "failed-product",
+    "effectiveVerdict": "needs-fix",
+    "blocking": [
+      "host-verification-failed-product"
+    ]
+  }
+]

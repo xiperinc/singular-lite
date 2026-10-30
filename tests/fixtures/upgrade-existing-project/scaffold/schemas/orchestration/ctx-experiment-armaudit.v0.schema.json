@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://singular.local/schemas/orchestration/ctx-experiment-armaudit.v0.schema.json",
+  "title": "singular.orchestration.ctx-experiment-armaudit.v0",
+  "description": "A deterministic, strictly read-only audit of per-arm knob-state integrity across the runs corpus: it consumes the arm-knob-state.json provenance (singular.orchestration.ctx-experiment-armstate.v0) each run directory carries, joins each run to its arm via ctx.arm_assigned, and reports whether each arm actually ran with the expected knob-state so the experiment-report's escape / cost / bias attribution rests on validated arm integrity. It uses ONLY the generic arm boundary — a control-arm (A) run is consistent iff activeCount is 0 (the M0 knob-state) else contaminated; a treatment-arm (B) run is consistent iff activeCount is greater than 0 else misconfigured-as-M0 — and hardcodes NO specific treatment knob-set (that remains operator run-config). A run with no arm-knob-state.json is counted unrecorded for its arm (fail-safe), not an error. The audit only MEASURES arm integrity and reclassifies nothing. Keys are sorted and deterministic for a fixed input set. Additive under the singular.orchestration.*.v0 namespace; validation fails closed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "arms"],
+  "properties": {
+    "schema": {
+      "const": "singular.orchestration.ctx-experiment-armaudit.v0"
+    },
+    "arms": {
+      "type": "object",
+      "description": "Per-arm knob-state integrity rollup. Both arms (A = control / M0 knob-state, B = treatment) are always present.",
+      "additionalProperties": false,
+      "required": ["A", "B"],
+      "properties": {
+        "A": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["arm", "expectation", "runsRecorded", "runsUnrecorded", "consistent", "inconsistent", "inconsistentRuns"],
+          "properties": {
+            "arm": { "type": "string", "enum": ["A", "B"] },
+            "expectation": {
+              "type": "string",
+              "description": "The generic arm boundary this arm's runs are audited against (activeCount==0 for control, activeCount>0 for treatment)."
+            },
+            "runsRecorded": { "type": "integer", "minimum": 0 },
+            "runsUnrecorded": { "type": "integer", "minimum": 0 },
+            "consistent": { "type": "integer", "minimum": 0 },
+            "inconsistent": { "type": "integer", "minimum": 0 },
+            "inconsistentRuns": {
+              "type": "array",
+              "description": "The inconsistent runIds with their offending knob-state, sorted by runId for determinism.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["runId", "classification", "activeCount", "activeKnobs"],
+                "properties": {
+                  "runId": { "type": "string", "minLength": 1 },
+                  "classification": { "type": "string", "enum": ["contaminated", "misconfigured-as-M0"] },
+                  "activeCount": { "type": "integer", "minimum": 0 },
+                  "activeKnobs": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "B": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["arm", "expectation", "runsRecorded", "runsUnrecorded", "consistent", "inconsistent", "inconsistentRuns"],
+          "properties": {
+            "arm": { "type": "string", "enum": ["A", "B"] },
+            "expectation": {
+              "type": "string",
+              "description": "The generic arm boundary this arm's runs are audited against (activeCount==0 for control, activeCount>0 for treatment)."
+            },
+            "runsRecorded": { "type": "integer", "minimum": 0 },
+            "runsUnrecorded": { "type": "integer", "minimum": 0 },
+            "consistent": { "type": "integer", "minimum": 0 },
+            "inconsistent": { "type": "integer", "minimum": 0 },
+            "inconsistentRuns": {
+              "type": "array",
+              "description": "The inconsistent runIds with their offending knob-state, sorted by runId for determinism.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["runId", "classification", "activeCount", "activeKnobs"],
+                "properties": {
+                  "runId": { "type": "string", "minLength": 1 },
+                  "classification": { "type": "string", "enum": ["contaminated", "misconfigured-as-M0"] },
+                  "activeCount": { "type": "integer", "minimum": 0 },
+                  "activeKnobs": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

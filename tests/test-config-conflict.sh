@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AXON-001: two configuration sources describe the same knob and disagree.
+# two configuration sources describe the same knob and disagree.
 #
 # `resources.maxConcurrent: 3` and `env: {"SINGULAR_MAX_CONCURRENT": "2"}` both
 # set the dispatch cap. engine/lib.sh emits structured fields first and the
@@ -161,7 +161,7 @@ PY
 # --- (e) a THIRD source beats the winner named above -------------------------
 # .singular-state/config.local.sh is sourced after the JSON eval, so the value
 # doctor derives from the generator is not necessarily the one the run uses.
-# Naming the wrong effective value would be its own AXON-001.
+# Reporting the wrong effective value would mislead the operator.
 mkdir -p "$repo/.singular-state"
 printf 'export SINGULAR_MAX_CONCURRENT=7\n' >"$repo/.singular-state/config.local.sh"
 write_config "{'maxConcurrent': 3}" "{}" "{'SINGULAR_MAX_CONCURRENT': '2'}"

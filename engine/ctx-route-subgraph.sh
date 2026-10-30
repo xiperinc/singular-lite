@@ -1,43 +1,5 @@
 #!/usr/bin/env bash
-# ctx-route-subgraph.sh — the flat-vs-subgraph manifest SELECTOR for the route
-# spine's refused-resume rehydrate step (executable DAG node `subgraph-rehydrate`,
-# stage S6-graph, layer engine_runtime). This is the wire-in that finally makes
-# the integrated subgraph toolchain reachable from the route: the arm decider
-# (singular_ctx_rehydrate_subgraph_arm_mode, TASK-0104), the identity primitives
-# (singular_graph_identity / singular_graph_node_id, engine/ctx-graph*.sh), and the
-# order-preserving assembler (singular_ctx_rehydrate_subgraph_assemble, TASK-0102)
-# all EXIST and are integrated; nothing yet CHOSE them. This file adds the single
-# selector _singular_ctx_route_refuse_resume now delegates to.
-#
-# Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines a new
-# function ONLY. The selector COMPOSES the pieces above and re-uses the existing
-# flat composition verbatim on the OFF path, so with SINGULAR_CTX_SUBGRAPH_REHYDRATE
-# at its default (0) it returns the FLAT manifest and the route stays byte-
-# identical to today. The subgraph branch is reachable only with the knob on, the
-# treatment arm, and a present, non-empty graph corpus — exactly the conditions
-# the arm decider re-checks, so this selector does NOT duplicate them.
-#
-# Evidence invariance / advocate-skeptic line: this only chooses WHICH manifest
-# the existing decision leaf (singular_ctx_route_rehydrate_decide) sees. It is a
-# PURE READ — appends no events, writes/renames/deletes nothing, confers NO
-# independence, and never exits non-zero; the `rehydrate` strategy stays tainted
-# per singular_ctx_route_strategy_tainted regardless of which manifest is chosen.
-#
-# Public function:
-#   singular_ctx_route_subgraph_manifest <reason> <role> <step> <meta> <key>
-#     Prints the rehydration manifest for the route's decision leaf.
-#       - When SINGULAR_CTX_SUBGRAPH_REHYDRATE=1 AND
-#         singular_ctx_rehydrate_subgraph_arm_mode <key> <graphDir> == subgraph,
-#         resolve the task node id as
-#           singular_graph_node_id( singular_graph_identity task <key> )
-#         and print the contradictions-first subgraph manifest via
-#           singular_ctx_rehydrate_subgraph_assemble <graphDir> <node> manifest.
-#         graphDir defaults to ${SINGULAR_CTX_GRAPH_DIR:-.singular-state/graph}.
-#       - Otherwise print the FLAT manifest, BYTE-IDENTICAL to the legacy
-#         composition: singular_ctx_rehydrate_sources over run_dir = dirname(meta),
-#         piped into singular_ctx_rehydrate_manifest.
-#     <reason>/<role>/<step> are accepted for call-site symmetry with the decision
-#     leaf; the manifest choice keys only on <meta> and <key>.
+# Select the configured graph-backed rehydration mode and render its packet and manifest.
 singular_ctx_route_subgraph_manifest() {
   local reason="$1" role="$2" step="$3" meta="$4" key="$5"
 

@@ -1,6 +1,6 @@
 # Host-managed invocation admission, accounting and provider conformance
 
-TASK-1115. This document is the owned record of what the host actually
+This document describes what the host actually
 enforces at the provider invocation boundary, what it only measures, and what
 it cannot observe at all. Everything here describes fixture-observed behavior
 of the integrated context service and host evidence delivery. Nothing here is
@@ -141,27 +141,14 @@ invocation. An identical retained binding still resumes — the gate is a
 comparison, not a blanket refusal. A warning to ignore revoked history is not
 used as a substitute.
 
-## 7. Measurements, failed attempts and absent observations
+## 7. Verification and limits
 
-- Focused gate (this task's declared nine members) — see the packet evidence
-  for the exact commands and their raw logs.
-- `tests/test-invocation-context-budget.sh` runs the directly coupled Python
-  cases, both schema-copy conformance checks, the capability-matrix
-  conformance check, this document's row check, and the local non-billable
-  provider probe.
-- Postimplementation fixture/campaign analysis reuses B5's evaluator
-  (`tests/test-context-evaluation-e2e.sh`, `singular context evaluate` /
-  `campaign-report`). B5's evaluator was not modified to produce a second
-  report format.
-- Absent observations: no provider-observable prompt byte count, no tokenizer
-  identity, no provider-side history enumeration, no provider-enforced output
-  cap. These stay `null`/`unverified` rather than being estimated.
-- Host-failure backlog (pre-existing, re-verified on the untouched base tree,
-  not introduced here): `test-capability-runtime.sh` legacy cursor-agent
-  compatibility case and `test-session-affinity.sh`.
-- The complete canonical host suite on the final exact integration tree is a
-  separate handoff obligation. It has not been run here, and the focused gate
-  does not stand in for it.
+`tests/test-invocation-context-budget.sh` runs the coupled Python cases,
+schema-copy and capability-matrix conformance checks, this document's row
+check, and a local non-billable provider probe. The synthetic evaluator is
+covered by `tests/test-context-evaluation-e2e.sh`.
 
-Fixture success is not runtime adoption, is not an operational claim, and is
-not evidence of unattended completion.
+Provider-observable prompt byte count, tokenizer identity, provider-side
+history enumeration and provider-enforced output caps remain
+`null`/`unverified` when not observed. Fixture success does not establish
+runtime adoption or unattended completion.

@@ -10,7 +10,7 @@
 # file. When no summary source is supplied it obtains the bundle by delegating to
 # singular_ctx_experiment_summary_json with the standard env defaults.
 #
-# Guarantees pinned BEHAVIORALLY over a fixture (no absence greps, planner rule 9):
+# Guarantees pinned BEHAVIORALLY over a fixture (no absence greps):
 #   - verbatim rendering: every rendered cell equals the corresponding bundle
 #     value formatted with the shared numeric convention (no recompute/reclassify);
 #     representative cells are cross-checked against the fixture.

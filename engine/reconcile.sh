@@ -126,6 +126,9 @@ fi
 singular_require_target_branch
 
 run_id="$(singular_run_id)"
+# Cycle boundary: let a queued operator command (unpark, supersede, recover,
+# integrate --task) take the lock first. Bounded; a no-op when nobody waits.
+singular_origin_lock_yield_to_waiters || true
 singular_acquire_lock "$run_id"
 trap 'singular_release_lock "$run_id"' EXIT
 run_dir="$SINGULAR_STATE_DIR/runs/$run_id"
@@ -195,20 +198,55 @@ for packet in "${inbox_packets[@]}"; do
   fi
 done
 
+parked_imports=0
 if [[ "$do_import" == "yes" && ${#inbox_packets[@]} -gt 0 ]]; then
   import_log="$SINGULAR_STATE_DIR/runs/$run_id/import.log"
   mkdir -p "$(dirname "$import_log")"
   for packet in "${inbox_packets[@]}"; do
+    # A packet parked after repeated identical failures is not re-validated
+    # until its file changes; `singular health` carries it as ATTENTION.
+    if singular_import_packet_parked "$packet"; then
+      parked_imports=$((parked_imports + 1))
+      continue
+    fi
     # Per-packet isolation: one bad packet must not abort the whole run.
-    if "$SCRIPT_DIR/import-packet.sh" "$packet" >>"$import_log" 2>&1; then
+    import_packet_out="$(mktemp "${TMPDIR:-/tmp}/sg-import.XXXXXX")"
+    if "$SCRIPT_DIR/import-packet.sh" "$packet" >"$import_packet_out" 2>&1; then
+      cat "$import_packet_out" >>"$import_log"
       imported_this_run=$((imported_this_run + 1))
+      rm -f "$(singular_import_failure_record "$packet")"
       rm -f "$packet"   # imported packets leave the inbox queue
     else
+      cat "$import_packet_out" >>"$import_log"
       failed_imports=$((failed_imports + 1))
       echo "import failed: $(basename "$packet") (see $import_log)" >&2
-      singular_append_event "packet.import_failed" "packet import failed" \
-        "{\"runId\":\"$run_id\",\"packet\":\"$(basename "$packet")\"}"
+      import_failure_state="$(singular_import_failure_note "$packet" "$import_packet_out" 2>/dev/null || true)"
+      import_failure_payload="$(python3 - "$run_id" "$(singular_import_failure_record "$packet")" \
+        "$(basename "$packet")" <<'PY' 2>/dev/null || true
+import json, sys
+run_id, record_path, name = sys.argv[1:4]
+try:
+    record = json.load(open(record_path, encoding="utf-8"))
+except (OSError, ValueError):
+    record = {}
+print(json.dumps({"runId": run_id, "packet": name, "taskId": record.get("taskId", ""),
+                  "consecutiveFailures": record.get("count", 1),
+                  "parkAfter": record.get("limit"), "error": record.get("error", "")},
+                 separators=(",", ":")))
+PY
+)"
+      [[ -n "$import_failure_payload" ]] \
+        || import_failure_payload="{\"runId\":\"$run_id\",\"packet\":\"$(basename "$packet")\"}"
+      singular_append_event "packet.import_failed" "packet import failed" "$import_failure_payload"
+      if [[ "$import_failure_state" == *"parked=yes"* ]]; then
+        parked_imports=$((parked_imports + 1))
+        singular_append_event "packet.import_parked" \
+          "packet import parked after repeated identical failures; not retried until the file changes" \
+          "$import_failure_payload"
+        echo "import parked: $(basename "$packet") (singular health shows the error)" >&2
+      fi
     fi
+    rm -f "$import_packet_out"
   done
   imported_count="$(singular_count_files "$SINGULAR_ORCH_DIR/packets/imported" -name '*.json' -not -name '*.audit.json')"
 fi
@@ -358,15 +396,27 @@ else:
     fi
   fi
 
-  resource_configured_slots="${SINGULAR_MAX_CONCURRENT:-1}"
-  [[ "$resource_configured_slots" =~ ^[0-9]+$ ]] || resource_configured_slots=1
+  # The worker ceiling request: `auto` (default, and what anything that is not
+  # a plain integer means) lets the resource governor size it from this
+  # machine's cores, available memory and disk; an integer is a fixed upper
+  # bound and keeps the disk-only rule. resource_configured_slots is the
+  # NUMBER that request resolved to, read back from the plan below.
+  resource_slots_request="${SINGULAR_MAX_CONCURRENT:-auto}"
+  [[ "$resource_slots_request" =~ ^[0-9]+$ ]] || resource_slots_request="auto"
+  resource_configured_slots="$resource_slots_request"
+  # If the plan itself cannot be produced there is no measured ceiling to
+  # report; the failure record below carries the historical default.
+  [[ "$resource_configured_slots" == "auto" ]] && resource_configured_slots=3
   resource_plan_file="$run_dir/resource-plan.json"
   resource_plan_tmp="$resource_plan_file.tmp.$$"
   resource_plan_rc=0
-  "$SCRIPT_DIR/resource-plan.sh" --configured-slots "$resource_configured_slots" --json \
+  "$SCRIPT_DIR/resource-plan.sh" --configured-slots "$resource_slots_request" \
+    --update-governor-state --json \
     >"$resource_plan_tmp" 2>"$run_dir/resource-plan.log" || resource_plan_rc=$?
   if [[ "$resource_plan_rc" -eq 0 ]]; then
     mv "$resource_plan_tmp" "$resource_plan_file"
+    resource_plan_configured="$(singular_json_field "$resource_plan_file" configuredSlots 2>/dev/null || true)"
+    [[ "$resource_plan_configured" =~ ^[0-9]+$ ]] && resource_configured_slots="$resource_plan_configured"
   else
     rm -f "$resource_plan_tmp"
     python3 - "$resource_plan_file" "$resource_configured_slots" <<'PY'
@@ -401,10 +451,13 @@ PY
       "$SCRIPT_DIR/ops.sh" gc --from-reconcile "$run_id" \
       >"$run_dir/resource-gc.log" 2>&1 || true
     resource_plan_rc=0
-    "$SCRIPT_DIR/resource-plan.sh" --configured-slots "$resource_configured_slots" --json \
+    "$SCRIPT_DIR/resource-plan.sh" --configured-slots "$resource_slots_request" \
+      --update-governor-state --json \
       >"$resource_plan_tmp" 2>>"$run_dir/resource-plan.log" || resource_plan_rc=$?
     if [[ "$resource_plan_rc" -eq 0 ]]; then
       mv "$resource_plan_tmp" "$resource_plan_file"
+      resource_plan_configured="$(singular_json_field "$resource_plan_file" configuredSlots 2>/dev/null || true)"
+      [[ "$resource_plan_configured" =~ ^[0-9]+$ ]] && resource_configured_slots="$resource_plan_configured"
       resource_effective_slots="$(singular_json_field "$resource_plan_file" effectiveSlots 2>/dev/null || true)"
       resource_reason="$(singular_json_field "$resource_plan_file" reason 2>/dev/null || true)"
       [[ "$resource_effective_slots" =~ ^[0-9]+$ ]] || resource_effective_slots=0
@@ -425,8 +478,46 @@ PY
   resource_available_slots="$available_slots"
   dispatch_budget="$max_dispatch"
   [[ "$dispatch_budget" -gt "$available_slots" ]] && dispatch_budget="$available_slots"
+
+  # Live-pressure admission. The ceiling above says how many workers may ever
+  # run here; this says whether NEW ones may start right now. When the machine
+  # is saturated (load per core over the high-water mark) or short of memory,
+  # the governor answers "throttled" and this cycle admits nothing new — no
+  # worker, no planner, no refill. Work already running is never touched, and
+  # integration, promotion, imports and recovery all continue, which is why
+  # this is a dispatch gate and not an effectiveSlots of zero: zero slots means
+  # low disk and triggers a GC sweep that would be the wrong response to load.
+  resource_governor_view="$(python3 "$SCRIPT_DIR/resource_governor.py" --event-view "$resource_plan_file" 2>/dev/null || true)"
+  resource_admission="$(printf '%s\n' "$resource_governor_view" | sed -n '1p')"
+  resource_admission_reason="$(printf '%s\n' "$resource_governor_view" | sed -n '2p')"
+  resource_planner_slots="$(printf '%s\n' "$resource_governor_view" | sed -n '3p')"
+  resource_event_fields="$(printf '%s\n' "$resource_governor_view" | sed -n '4p')"
+  [[ -n "$resource_event_fields" ]] || resource_event_fields='"cpuSlots":null,"memorySlots":null,"diskSlots":null,"loadPerCore":null,"availableMemoryBytes":null,"cpuBusy":null,"pressureSignal":"none","mode":"explicit","admission":"open","progressFloor":false'
+  # `auto` L1 planner cap for this cycle (singular_l1_concurrency_cap).
+  if [[ "$resource_planner_slots" =~ ^[0-9]+$ && "$resource_planner_slots" -ge 1 ]]; then
+    export SINGULAR_L1_AUTO_CONCURRENT="$resource_planner_slots"
+  fi
+  resource_throttled=0
+  if [[ "$resource_admission" == "throttled" && -n "$resource_admission_reason" \
+        && "$resource_effective_slots" -gt 0 ]]; then
+    resource_throttled=1
+    resource_available_slots=0
+    dispatch_budget=0
+  fi
+  # Minimum-progress floor: the hold would apply, but nothing of ours is
+  # running (the governor checked: no active worker, no active planner), so a
+  # host saturated by other processes cannot starve the loop. Exactly one unit
+  # is admitted — one worker if a task is runnable, otherwise one planner, and
+  # never both in the same cycle (resource_floor_planned below).
+  resource_floor=0
+  resource_floor_planned=0
+  if [[ "$resource_admission" == "floor" && "$resource_effective_slots" -gt 0 ]]; then
+    resource_floor=1
+    [[ "$dispatch_budget" -gt 1 ]] && dispatch_budget=1
+    [[ "$resource_available_slots" -gt 1 ]] && resource_available_slots=1
+  fi
   singular_append_event "origin.resource_plan" "adaptive dispatch capacity calculated" \
-    "{\"runId\":\"$run_id\",\"configuredSlots\":$resource_configured_slots,\"effectiveSlots\":$resource_effective_slots,\"availableSlots\":$resource_available_slots,\"activeLeases\":$active_leases,\"gcAttempted\":$resource_gc_attempted,\"reason\":\"$resource_reason\"}"
+    "{\"runId\":\"$run_id\",\"configuredSlots\":$resource_configured_slots,\"effectiveSlots\":$resource_effective_slots,\"availableSlots\":$resource_available_slots,\"activeLeases\":$active_leases,\"gcAttempted\":$resource_gc_attempted,\"reason\":\"$resource_reason\",$resource_event_fields}"
   echo "actuation: capacity $resource_available_slots available / $resource_effective_slots effective / $resource_configured_slots configured ($resource_reason)"
 
   # Low-disk degraded mode. Zero effective slots is a real operating state, not
@@ -449,7 +540,20 @@ PY
     singular_append_event "origin.degraded_low_disk" \
       "low disk; planning and dispatch suspended, reconciliation continues" \
       "{\"runId\":\"$run_id\",\"reason\":\"$resource_reason\",\"configuredSlots\":$resource_configured_slots,\"freeGb\":$free_gb,\"gcAttempted\":$resource_gc_attempted,\"exitCondition\":\"effectiveSlots >= 1\"}"
+  elif [[ "$resource_throttled" -eq 1 ]]; then
+    dispatch_gate="$resource_admission_reason"
+    echo "actuation: MACHINE SATURATED ($resource_admission_reason) — admitting no new workers or planners this cycle; $active_leases running worker(s) continue"
+  elif [[ "$resource_floor" -eq 1 ]]; then
+    echo "actuation: MACHINE SATURATED ($resource_admission_reason) and nothing is running — minimum-progress floor admits one unit of work this cycle"
   fi
+  # Promotion sweep (0.23.7): re-attempt promotion for every node whose tasks
+  # are complete and whose gate is unpublished, whether or not a task of that
+  # node integrated in this cycle and whether or not the queue is empty.
+  # Completion-authority work, like the frontier pass below: it does not need
+  # a dispatch slot and is not held by the resource gates.
+  singular_promotion_sweep "$run_id" || true
+  gates_promoted_this_run=$((gates_promoted_this_run + ${singular_promotion_sweep_promoted:-0}))
+
   # Keep raw Status:ready telemetry separate from the dispatchable frontier.
   # A task may remain lifecycle-ready while an in-flight lease owns it, a
   # dependency is incomplete, or its owned scope conflicts with active work.
@@ -505,6 +609,9 @@ PY
   if [[ ${#dispatchable_tasks[@]} -eq 0 && "$dispatch_budget" -gt 0 \
         && "$dispatch_gate" == "open" && "${SINGULAR_GENERATE:-1}" == "1" ]]; then
     planner_backoff_json="$(singular_planner_backoff_active_json 2>/dev/null || true)"
+    # Under the floor this planner IS the one admitted unit; whatever it
+    # produces is dispatched on a later cycle.
+    [[ "$resource_floor" -eq 1 && -z "$planner_backoff_json" ]] && resource_floor_planned=1
     if [[ -n "$planner_backoff_json" ]]; then
       planner_backoff_active_this_run=1
       planner_failures_this_run=0
@@ -513,7 +620,7 @@ PY
         "planner backoff active; planning deferred without failure" \
         "{\"runId\":\"$run_id\",\"backoff\":$planner_backoff_json}"
     elif [[ "${SINGULAR_ENABLE_L1_PARALLEL:-0}" == "1" ]]; then
-      echo "actuation: dispatchable queue empty; L1 parallel fanout (cap ${SINGULAR_MAX_L1_CONCURRENT:-3}, remaining capacity $dispatch_budget)..."
+      echo "actuation: dispatchable queue empty; L1 parallel fanout (cap $(singular_l1_concurrency_cap), remaining capacity $dispatch_budget)..."
       # Plan-critique knob (default-OFF): when ON, route the L1 import fanout
       # through the integrated critique-aware orchestrator so L0 import honors the
       # plan critic verdict; it mirrors singular_l1_fanout's args and summary lines
@@ -554,7 +661,7 @@ PY
   # config and engine identity after it returns so a mid-plan hot patch cannot
   # flow into a worker launch in the same reconcile call.
   singular_campaign_verify_or_refuse reconcile pre-dispatch || exit 2
-  if [[ "$dispatch_gate" == "open" ]]; then
+  if [[ "$dispatch_gate" == "open" && "$resource_floor_planned" -eq 0 ]]; then
     mapfile -t dispatch_tasks < <(singular_select_dispatch_frontier "$dispatch_budget")
   else
     dispatch_tasks=()
@@ -1042,6 +1149,8 @@ if [[ "$mode" == "actuate" ]]; then
   echo "available_slots=$resource_available_slots"
   echo "resource_reason=$resource_reason"
   echo "dispatch_gate=$dispatch_gate"
+  echo "resource_admission=${resource_admission:-open}"
+  echo "resource_progress_floor=${resource_floor:-0}"
   echo "resource_gc_attempted=$resource_gc_attempted"
   echo "resource_plan=.singular-state/runs/$run_id/resource-plan.json"
 else

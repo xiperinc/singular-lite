@@ -833,7 +833,7 @@ def _safe_plan(reason: str, detail: str) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------
-# receipts (consumed by the existing TASK-1106 evaluator as an observation)
+# receipts (consumed by the campaign evaluator as an observation)
 # --------------------------------------------------------------------------
 
 def _write_receipt(path: Path, document: dict[str, Any], entries: dict[str, Any]) -> None:

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Attempt-open assembler of the per-run assumption ledger (stage S4-context-packets,
-# node assumption-ledger). Sourced exactly once by the context-evolution loader block in
+# node assumption-ledger). Sourced exactly once by the context module loader block in
 # lib.sh (it matches the ctx-*.sh glob). Like engine/ctx-assumptions.sh and its siblings,
 # this file defines a PURE helper and is present-but-uncalled by every existing
 # engine/CLI/driver path, so with it sourced the engine stays byte-identical to prior

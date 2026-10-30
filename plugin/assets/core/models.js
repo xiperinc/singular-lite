@@ -7,7 +7,7 @@
 
 export const MODEL_VOCABULARY = Object.freeze({
   claude: Object.freeze([
-    "claude-opus-4-8", "claude-fable-5", "claude-sonnet-5", "claude-haiku-4-5",
+    "claude-sonnet-5-5", "claude-opus-4-8", "claude-fable-5", "claude-sonnet-5", "claude-haiku-4-5",
     "opus", "fable", "sonnet", "haiku",
   ]),
   codex: Object.freeze([

@@ -15,6 +15,7 @@
 import { S, esc, escAttr, icon, gateTone, select } from "../app.js";
 import { bus } from "../core/bus.js";
 import { isHistorical } from "../core/api.js";
+import { loadingHtml } from "../core/health.js";
 import { getDag, dagIndex, fetchTimeline, getTimeline } from "./data.js";
 
 const BAR_H = 20, GAP = 5, LANE_PAD = 4;
@@ -173,7 +174,7 @@ function build() {
   // — the operator saw "no runtime activity recorded yet" while the loop was
   // demonstrably working. buildAxis already derives its axis from cycles and
   // gates as well as tasks, so it is the honest authority on "nothing to draw".
-  if (!data) { pane.innerHTML = `<div class="plan-lens-empty">loading timeline…</div>`; sigLast = sigOf(data); return; }
+  if (!data) { pane.innerHTML = loadingHtml("timeline", "plan-lens-empty"); sigLast = sigOf(data); return; }
 
   const paneW = pane.clientWidth || 900;
   lastPaneW = paneW;
@@ -612,7 +613,7 @@ async function refresh(initial) {
 export const lens = {
   mount(p) {
     pane = p; sigLast = null;
-    if (getTimeline()) build(); else pane.innerHTML = `<div class="plan-lens-empty">loading timeline…</div>`;
+    if (getTimeline()) build(); else pane.innerHTML = loadingHtml("timeline", "plan-lens-empty");
     if (typeof ResizeObserver !== "undefined") {
       resizeObserver = new ResizeObserver((entries) => {
         const width = Math.round((entries[0] && entries[0].contentRect && entries[0].contentRect.width) || (pane && pane.clientWidth) || 0);

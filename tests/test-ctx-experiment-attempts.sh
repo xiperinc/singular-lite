@@ -16,7 +16,7 @@
 #   3. one deterministic, sorted-key JSON artifact merging both per-arm rollups;
 #      it validates against the shipped v0 schema.
 #
-# Guarantees pinned BEHAVIORALLY over a fixture (no absence greps, planner rule 9):
+# Guarantees pinned BEHAVIORALLY over a fixture (no absence greps):
 #   - strictly read-only: the whole input fixture tree is byte-identical after
 #     every call (no run artifact / index / event / lease / task file created,
 #     moved, or mutated), and engine/ctx-metrics.sh plus the sibling experiment

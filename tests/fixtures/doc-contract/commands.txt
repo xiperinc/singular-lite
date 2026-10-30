@@ -1,0 +1,50 @@
+# Supported command compatibility baseline, one command per line.
+# Option aliases (--version, -v, --help, -h) are not commands.
+# The skill contract checks that these remain dispatched; it compares current
+# skill documentation against the live dispatch to cover additional commands.
+reconcile
+auto
+drive
+integrate
+status
+recover
+validate-dag
+next-area
+next-areas
+area-gate
+gate
+promote-gate
+human-gate
+supersede
+unpark
+clear-backoff
+breaker
+stop
+resume
+wake
+gates
+health
+gc
+plan
+ask
+report
+lease
+fence
+accept-packet
+campaign
+metrics
+graph
+experiment-report
+console
+setup
+init
+doctor
+manifest
+context
+memory
+review-policy
+test
+update
+migrate
+version
+help

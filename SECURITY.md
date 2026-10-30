@@ -6,10 +6,15 @@ files, and opt-in modules as executable trust boundaries.
 
 ## Reporting a vulnerability
 
-Use GitHub's private vulnerability reporting for this repository. If private
-reporting is unavailable, open a minimal public issue asking for a private
-channel and do not include exploit details, credentials, or proof-of-concept
-payloads in the public issue.
+This policy does not yet provide a working private reporting channel. GitHub's
+private vulnerability reporting is disabled for this repository; public issues
+are not a supported fallback.
+
+The proposed channel is GitHub private vulnerability reporting. It awaits the
+repository owners' decision and activation, or their choice of another monitored
+private channel. The owners must publish the confirmed reporting instructions
+here once the channel works. Until then, do not post exploit details,
+credentials, or proof-of-concept payloads publicly.
 
 ## Handling credentials
 

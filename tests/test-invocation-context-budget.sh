@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Focused gate for the host-managed invocation envelope, reserve accounting and
-# admission boundary (TASK-1115). It runs the directly coupled Python cases and
+# admission boundary. It runs the directly coupled Python cases and
 # a finite set of LOCAL conformance checks. Nothing here calls a paid provider
 # or a network service: the only provider probes are non-billable local
 # `--version`/`--help` reads, and an absent CLI is recorded as unverified

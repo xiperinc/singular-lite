@@ -133,6 +133,16 @@
       <button id="btn-refresh" class="primary-button compact" title="Reload snapshot"><svg class="icon"><use href="#i-refresh"/></svg>Refresh</button>
     </header>
 
+    <!-- DATA-HEALTH BANNER (0.23.5) — shown by core/health.js while any read is
+         failing; persistent until the next success. Shares the top grid row. -->
+    <div id="conn-banner" role="alert" hidden>
+      <span class="cb-dot" aria-hidden="true"></span>
+      <span class="cb-title"></span>
+      <span class="cb-detail"></span>
+      <span class="cb-retry mono"></span>
+      <button class="secondary-button compact" type="button" data-api-retry>Retry now</button>
+    </div>
+
     <!-- HISTORICAL BANNER — shown only when pinned to an archived plan (?plan=). -->
     <div id="plan-banner" hidden>
       <span class="pb-dot" aria-hidden="true"></span>
@@ -270,7 +280,7 @@
         <button class="dock-cell" id="dock-tasks" type="button" data-dock-nav="#plan/tasks" title="Open tasks">
           <span id="dock-tasks-text">— active · — ready</span>
         </button>
-        <!-- frontier (AXON-002) — ready-by-dependency vs runnable-now vs the
+        <!-- frontier — ready-by-dependency vs runnable-now vs the
              concurrency cap, with the per-node serialization reasons in the
              title. Hidden until /api/overview reports l1Selection. -->
         <button class="dock-cell" id="dock-frontier" type="button" data-dock-nav="#plan/dag" title="L1 frontier selection" hidden>

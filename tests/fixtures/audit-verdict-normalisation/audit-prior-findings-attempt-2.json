@@ -1,0 +1,20 @@
+{
+  "schema": "singular.orchestration.audit-prior-findings.v0",
+  "attempt": 2,
+  "suppliedIds": [
+    "f-0ec31550d9ba",
+    "f-8569ffc003a3",
+    "f-8583bd880890",
+    "f-99fa77a5abf6",
+    "f-d9d05ae8b846",
+    "f-ebe0f3724c9f"
+  ],
+  "requiredIds": [
+    "f-0ec31550d9ba",
+    "f-8569ffc003a3",
+    "f-8583bd880890",
+    "f-99fa77a5abf6",
+    "f-d9d05ae8b846",
+    "f-ebe0f3724c9f"
+  ]
+}

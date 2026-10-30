@@ -133,6 +133,31 @@ plan_attempt_manifest="$(singular_plan_attempt_input_manifest \
   echo "plan-failed:$node (attempt-input-failed)"
   exit 1
 }
+# Proof policy is a planning input: switching it must not replay a terminal
+# plan made without those obligations. Revisions also need the same policy,
+# because their renderer starts from the template rather than the initial prompt.
+proof_policy="$(singular_red_proof_prompt)"
+if [[ -n "$proof_policy" ]]; then
+  proof_planner_template="$stage_dir/red-proof-planner-template.md"
+  cat "${SINGULAR_PLANNER_TEMPLATE:-$SINGULAR_ORCH_DIR/prompts/l1-planner.md}" >"$proof_planner_template"
+  printf '%s\n' "$proof_policy" >>"$proof_planner_template"
+  export SINGULAR_PLANNER_TEMPLATE="$proof_planner_template"
+  python3 - "$plan_attempt_manifest" "$proof_policy" <<'PY'
+import hashlib
+import json
+import sys
+
+path, policy = sys.argv[1:]
+with open(path, encoding="utf-8") as f:
+    doc = json.load(f)
+doc["lineage"]["redProofPolicySha256"] = hashlib.sha256(policy.encode("utf-8")).hexdigest()
+raw = json.dumps(doc["lineage"], sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+doc["lineageSha256"] = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(doc, f, indent=2, sort_keys=True)
+    f.write("\n")
+PY
+fi
 plan_attempt_identity="$(singular_plan_attempt_identity \
   "$node" "$base_sha" "$stage_dir" "$SINGULAR_ROOT")" || {
   singular_l1_lease_set_status "$node" failed || true
@@ -193,6 +218,7 @@ initial_infra_max="${SINGULAR_PLAN_INITIAL_INFRA_MAX:-1}"
 # provider budget beyond one extra attempt.
 (( initial_infra_max <= 1 )) || initial_infra_max=1
 planner_succeeded="no"
+planner_malformed_reason=""
 while :; do
   # Reserve before calling the provider so a process crash cannot forget and
   # replay an unbounded initial attempt after restart.
@@ -214,6 +240,17 @@ while :; do
   if [[ "$planner_rc" -eq 0 ]] \
     && { singular_task_batch_has_candidates "$stage_dir" || [[ -f "$stage_dir/NO-TASKS" ]]; }; then
     planner_succeeded="yes"
+    break
+  fi
+  if [[ "$planner_rc" -eq 4 ]]; then
+    # The planner answered and its answer was malformed, after its one repair
+    # round (generate-tasks.sh). Not infrastructure: do not spend the
+    # infrastructure retry and do not record the lineage as infra-exhausted.
+    planner_malformed_reason="$(grep -a '^planner-failed (malformed-output' "$stage_dir/planner.out" 2>/dev/null \
+      | tail -1 | sed 's/^planner-failed (//;s/)$//' | head -c 700)"
+    [[ -n "$planner_malformed_reason" ]] || planner_malformed_reason="malformed-output"
+    singular_plan_attempt_mark_terminal "$plan_attempt_record" park \
+      planner-output-malformed "$run_id" || true
     break
   fi
   if (( initial_infra_count > initial_infra_max )); then
@@ -276,5 +313,12 @@ if [[ "$planner_succeeded" == "yes" ]]; then
 fi
 
 singular_l1_lease_set_status "$node" failed || true
+if [[ -n "${planner_malformed_reason:-}" ]]; then
+  planner_node_status_activity="Planner output for $node was malformed"
+  planner_node_status_next_action="Read the diagnostic; correct the planner contract or the task rule it cites"
+  planner_node_status_outcome="planner-output-malformed"
+  echo "plan-failed:$node (planner-output-malformed: $planner_malformed_reason)"
+  exit 4
+fi
 echo "plan-failed:$node"
 exit 1

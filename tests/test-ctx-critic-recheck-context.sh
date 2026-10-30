@@ -1,41 +1,5 @@
 #!/usr/bin/env bash
-# Covers the post-acceptance critic-recheck CONTEXT assembler brick
-# engine/ctx-critic-recheck-context.sh: the pure, read-only assembler that composes
-# the recheck context the resumed plan-critic reads — the ACCEPTED DIFF paired with
-# the critic's OWN PRIOR FINDINGS as a per-concern checklist, framing the skeptic
-# recheck question `for each of your prior concerns: addressed | survives | obsolete`.
-#
-# It is the post-acceptance sibling of the staged-candidate critic context assembler
-# engine/ctx-plan-critic-context.sh (TASK-0014): different inputs (accepted diff +
-# prior findings vs staged candidate files) and different purpose (addressed/
-# survives/obsolete recheck vs initial critique). It builds ONLY on already-integrated
-# primitives — git, the plan-critique.v0 record shape (TASK-0012), the sampling knob
-# (TASK-0027), the classifier/recorder (TASK-0028) — and does NOT depend on the
-# resume authority decider (TASK-0029, not yet integrated).
-#
-# The file defines NEW functions only and is invoked by NO existing engine path, so
-# with it present-but-uncalled the engine is byte-identical to prior behavior
-# (mirroring TASK-0014 / TASK-0027 / TASK-0028).
-#
-# Asserts:
-#   (a) present-but-uncalled: lib.sh auto-sources it (engine/ctx-*.sh) and it defines
-#       the two NEW functions; no existing engine path invokes them.
-#   (b) singular_ctx_critic_recheck_accepted_diff <base> <head> [worktree] is PURE and
-#       READ-ONLY: prints the git diff between base and head over a small fixture,
-#       mutates neither worktree nor state; an indeterminate/empty ref or a non-repo
-#       worktree yields EMPTY output; never crashes (exit 0).
-#   (c) singular_ctx_critic_recheck_context composes header + id-sorted per-finding
-#       checklist (id, severity, claim, evidence + recheck instruction) read from the
-#       prior plan-critique.v0 record + the accepted-diff content into ONLY <out_file>.
-#   (d) determinism: byte-stable <out_file> across repeated runs for a fixed input set
-#       (findings emitted id-sorted).
-#   (e) graceful degradation: a missing/unparseable prior record and/or a missing/empty
-#       accepted-diff file degrade to a well-formed context (empty checklist and/or
-#       empty diff section), never crash, never fabricate findings.
-#   (f) purity: the assembler writes ONLY <out_file>, appends NO events, mutates
-#       nothing else.
-# The events log is pinned to an isolated SINGULAR_EVENTS_FILE and all inputs to tmp so
-# the suite never mutates real run state.
+# Regression contracts for ctx-critic-recheck-context.
 set -uo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

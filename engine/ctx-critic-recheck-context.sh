@@ -1,59 +1,6 @@
 #!/usr/bin/env bash
-# ctx-critic-recheck-context.sh — the pure, read-only assembler that composes the
-# recheck context the RESUMED plan-critic reads: the ACCEPTED DIFF paired with the
-# critic's OWN PRIOR FINDINGS as a per-concern checklist, framing the skeptic
-# recheck question `for each of your prior concerns: addressed | survives | obsolete`.
-# It advances the executable DAG node critic-carryover (stage S3-plan-revision, area
-# plancritic, layer engine_runtime, kind runtime).
-#
-# It is the POST-ACCEPTANCE sibling of the integrated staged-candidate critic context
-# assembler singular_ctx_plan_critic_context (TASK-0014, engine/ctx-plan-critic-context.sh):
-# TASK-0014 composes the context for the PLANNING-time critique of staged candidate
-# files; this brick composes the context for the post-acceptance recheck over the
-# accepted diff. Different inputs (accepted diff + prior findings vs staged candidate
-# files) and different purpose (addressed/survives/obsolete recheck vs initial
-# critique), so it advances the stage rather than duplicating TASK-0014.
-#
-# Builds ONLY on already-integrated primitives — git (for the accepted diff), the
-# singular.orchestration.plan-critique.v0 record shape (TASK-0012), the sampling knob
-# (TASK-0027), and the classifier/recorder (TASK-0028). It does NOT depend on the
-# resume authority decider (engine/ctx-critic-recheck-resume.sh, TASK-0029), which is
-# accepted but NOT yet integrated.
-#
-# Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines NEW
-# functions only; NO existing engine path invokes them, so with this file
-# present-but-uncalled the engine is byte-identical to prior behavior (mirroring
-# TASK-0014 / TASK-0027 / TASK-0028). This task does NOT own or edit lib.sh.
-#
-# Advocate/skeptic line + evidence invariance: the assembler reads staged inputs and
-# writes ONLY its single composed output file. It changes no accept/reject outcome,
-# weakens no gate, never lets a resumed context satisfy an independence-required step,
-# and never makes the fresh implementation auditor bypassable. The whole recheck stays
-# default-OFF behind SINGULAR_CRITIC_RECHECK_PCT (TASK-0027), consulted upstream by the
-# follow-up runner. The read-only critic-resume RUNNER, the TASK-0029 resume authority,
-# and the l1-drive.sh post-acceptance hook are sanctioned follow-up slices and are OUT
-# OF SCOPE here.
-#
-# Public entry points:
-#   singular_ctx_critic_recheck_accepted_diff <base_ref> <head_ref> [worktree]
-#     PURE and READ-ONLY. Prints the accepted diff between the pre-acceptance base and
-#     the accepted/merged head via `git diff` in [worktree] (default `.`). An empty /
-#     indeterminate ref, or a non-repo worktree, yields empty output (fail-safe, never
-#     a crash). Makes no commit/checkout/reset and mutates neither the worktree nor any
-#     state. Always exits 0.
-#   singular_ctx_critic_recheck_context <node> <task_id> <prior_critique_record> \
-#                                      <accepted_diff_file> <out_file>
-#     PURE assembler. Composes into <out_file>: (1) a header framing the skeptic recheck
-#     question (per prior concern: addressed | survives | obsolete); (2) the id-sorted
-#     per-finding checklist read from the prior plan-critique.v0 record (id, severity,
-#     claim, evidence + the explicit per-finding recheck instruction); (3) the
-#     accepted-diff content from <accepted_diff_file>. Writes ONLY <out_file>, appends
-#     no event, invokes no runner, and mutates nothing else. Deterministic: findings
-#     emit in id-sorted order so the composed context is byte-stable across runs.
+# Assemble bounded context for a critic recheck of an accepted diff and its prior critique.
 
-# Pure/read-only accepted-diff reader. Prints `git diff <base> <head>` in the worktree;
-# an empty/indeterminate ref or a non-repo worktree yields empty output. No mutation of
-# worktree or state (no commit/checkout/reset). Always exits 0. See header for contract.
 singular_ctx_critic_recheck_accepted_diff() {
   local base_ref="${1:-}" head_ref="${2:-}" worktree="${3:-.}"
   # Indeterminate/empty refs or a missing worktree -> empty output (fail-safe).

@@ -3,13 +3,13 @@ set -euo pipefail
 # `singular_lease_write` is the compatibility lease writer. Its own comment says
 # it "may carry them forward but never invent or rewrite them", but it rebuilds
 # the record from a FIXED allowlist, so every key outside that list is silently
-# dropped on each write. Across the 25 field leases of BRAIN-RESCUE-20260910 the
-# dropped set is operatorReentries, campaignBinding, nextAction and failureReason.
+# dropped on each write, including operatorReentries, campaignBinding,
+# nextAction and failureReason.
 #
 # Two consequences are pinned here:
 #   1. `operatorReentries` is one of the four history markers that stop finish()
 #      from deleting a planned lease (task_lifecycle.py, the _deleteRecord
-#      guard added in 0.22.0 after the 2026-09-14 field run). Dropping it
+#      guard added in 0.22.0). Dropping it
 #      defeats that shipped fix: a lease whose only history is an operator
 #      re-entry is deleted outright on the next driver refusal.
 #   2. failureReason/nextAction are the machine-readable park reason and exit

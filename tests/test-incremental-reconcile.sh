@@ -834,7 +834,7 @@ done
 [[ "$(count_lines "$canonical_count")" == 1 ]] || exit 1
 
 # Reproducible receipts separate sweep work, rebuild cost, canonical validation
-# and unrelated control-plane activity. TASK-1106's evaluator accepts them as a
+# and unrelated control-plane activity. The campaign evaluator accepts them as a
 # declared observation input; this task adds no second reporting service.
 [[ -f "$reconcile_receipt" ]] \
   || { echo "FAIL: no reconcile discovery receipt was produced" >&2; exit 1; }

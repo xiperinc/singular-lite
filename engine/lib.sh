@@ -99,6 +99,21 @@ if isinstance(resources, dict):
     setv("SINGULAR_DISK_RESERVE_BYTES", resources.get("diskReserveBytes"))
     setv("SINGULAR_ESTIMATED_WORKTREE_BYTES", resources.get("estimatedWorktreeBytes"))
     setv("SINGULAR_MAX_CONCURRENT", resources.get("maxConcurrent"))
+    # Resource governor tunables (engine/resource_governor.py). All optional.
+    setv("SINGULAR_AUTO_MAX_CONCURRENT", resources.get("autoMaxConcurrent"))
+    setv("SINGULAR_CPU_RESERVE_CORES", resources.get("cpuReserveCores"))
+    setv("SINGULAR_WORKERS_PER_CORE", resources.get("workersPerCore"))
+    setv("SINGULAR_ESTIMATED_WORKER_BYTES", resources.get("estimatedWorkerBytes"))
+    setv("SINGULAR_MEMORY_RESERVE_BYTES", resources.get("memoryReserveBytes"))
+    setv("SINGULAR_LOAD_HIGH_WATER", resources.get("loadHighWater"))
+    setv("SINGULAR_LOAD_LOW_WATER", resources.get("loadLowWater"))
+    setv("SINGULAR_CPU_BUSY_HIGH_WATER", resources.get("cpuBusyHighWater"))
+    setv("SINGULAR_CPU_BUSY_LOW_WATER", resources.get("cpuBusyLowWater"))
+    setv("SINGULAR_CPU_SAMPLE_SEC", resources.get("cpuSampleSeconds"))
+    setv("SINGULAR_L1_AUTO_FRACTION", resources.get("plannerFraction"))
+    setv("SINGULAR_PROGRESS_FLOOR", resources.get("progressFloor"))
+    if isinstance(resources.get("throttle"), bool):
+        setv("SINGULAR_RESOURCE_THROTTLE", "1" if resources["throttle"] else "0")
 control_state = cfg.get("controlState")
 if isinstance(control_state, dict):
     setv("SINGULAR_CONTROL_COMMIT_MIN_INTERVAL_SEC", control_state.get("commitIntervalSeconds"))
@@ -230,6 +245,34 @@ if [[ -f "$SINGULAR_LOCAL_CONFIG_FILE" ]]; then
   # shellcheck disable=SC1090
   source "$SINGULAR_LOCAL_CONFIG_FILE"
 fi
+
+singular_acceptance_mode() {
+  local mode="${SINGULAR_ACCEPTANCE:-driver-only}"
+  case "$mode" in
+    driver-only|every-path) printf '%s\n' "$mode" ;;
+    *)
+      echo "singular: SINGULAR_ACCEPTANCE must be driver-only or every-path" >&2
+      return 2
+      ;;
+  esac
+}
+
+SINGULAR_ACCEPTANCE="$(singular_acceptance_mode)" || exit 2
+
+singular_red_proof_mode() {
+  local mode="${SINGULAR_RED_PROOF:-off}"
+  case "$mode" in
+    off|observe|enforce) printf '%s\n' "$mode" ;;
+    *)
+      echo "singular: SINGULAR_RED_PROOF must be off, observe or enforce" >&2
+      return 2
+      ;;
+  esac
+}
+
+SINGULAR_RED_PROOF="$(singular_red_proof_mode)" || exit 2
+SINGULAR_RED_PROOF_TIMEOUT_SEC="${SINGULAR_RED_PROOF_TIMEOUT_SEC:-1200}"
+
 # These four values describe the input selected before any configuration layer
 # ran. A JSON env{} block or shell layer cannot rewrite its own provenance for a
 # descendant process.
@@ -355,6 +398,7 @@ singular_effective_configuration_json() {
     SINGULAR_CODEX_READONLY_REASONING_EFFORT \
     SINGULAR_MAX_CONCURRENT SINGULAR_MAX_DISPATCH SINGULAR_MAX_L1_CONCURRENT \
     SINGULAR_ENABLE_L1_PARALLEL SINGULAR_L1_TASKS_PER_NODE \
+    SINGULAR_L1_SKIP_NODES_WITH_OPEN_TASKS \
     SINGULAR_L2_SLICE_BUDGET SINGULAR_L2_SLICE_BUDGET_MAX \
     SINGULAR_MAX_RETRIES SINGULAR_MAX_CONSEC_FAILS SINGULAR_MAX_HOURS \
     SINGULAR_MIN_DISK_GB SINGULAR_L1_STALE_MINUTES \
@@ -517,13 +561,31 @@ SINGULAR_SESSION_SPAWN="${SINGULAR_SESSION_SPAWN:-1}"
 SINGULAR_L1_LEASES_DIR="${SINGULAR_L1_LEASES_DIR:-$SINGULAR_STATE_DIR/l1-leases}"
 SINGULAR_L1_LEASE_SCHEMA="${SINGULAR_L1_LEASE_SCHEMA:-$SINGULAR_SCHEMA_DIR/l1-lease.v0.schema.json}"
 SINGULAR_L1_STALE_MINUTES="${SINGULAR_L1_STALE_MINUTES:-60}"
+# Worker ceiling. `auto` (the default) sizes it from the machine every cycle —
+# min(cpu, memory, disk) slots, see resource_governor.py — and an explicit
+# integer keeps the disk-only rule and acts as a fixed upper bound.
+SINGULAR_MAX_CONCURRENT="${SINGULAR_MAX_CONCURRENT:-auto}"
 # Live L1 fanout (OPT-IN: default OFF — when unset, the actuation path is
 # byte-identical to single-node planning). When enabled, L0 plans multiple
-# independent DAG nodes concurrently (default 3), then imports their staged task
+# independent DAG nodes concurrently, then imports their staged task
 # proposals serially under the origin lock. L0 stays the only scheduler/importer.
+#
+# Why this stayed opt-in when the worker ceiling went machine-aware: the two
+# planning paths are not interchangeable for an existing consumer. The serial
+# generator asks ONE node for up to the whole dispatch budget; the fanout asks
+# each selected node for SINGULAR_L1_TASKS_PER_NODE (default 1). On a DAG whose
+# frontier is a single node — every linear DAG — turning the fanout on by
+# default would cut planning from "budget tasks per cycle" to one, i.e. reduce
+# parallelism, and would move those consumers onto L1 leases and the staged
+# import's stricter shape checks without their asking. So the default is
+# unchanged; what changed is that the cap below sizes itself once it is on.
 SINGULAR_ENABLE_L1_PARALLEL="${SINGULAR_ENABLE_L1_PARALLEL:-0}"   # 1 enables concurrent L1 planners
-SINGULAR_MAX_L1_CONCURRENT="${SINGULAR_MAX_L1_CONCURRENT:-3}"     # default L1 planner concurrency when enabled
+# `auto` = SINGULAR_L1_AUTO_FRACTION (default half) of the effective worker
+# ceiling, at least 1; an integer is a fixed cap. The frontier and the cycle's
+# remaining dispatch capacity bound it further either way.
+SINGULAR_MAX_L1_CONCURRENT="${SINGULAR_MAX_L1_CONCURRENT:-auto}"
 SINGULAR_L1_TASKS_PER_NODE="${SINGULAR_L1_TASKS_PER_NODE:-1}"     # tasks each L1 planner proposes per node
+SINGULAR_L1_SKIP_NODES_WITH_OPEN_TASKS="${SINGULAR_L1_SKIP_NODES_WITH_OPEN_TASKS:-0}" # 1 = fanout skips a node that still has ready/in-flight/accepted tasks
 SINGULAR_L2_SLICE_BUDGET="${SINGULAR_L2_SLICE_BUDGET:-1}"         # independent strict-test-first slices folded per L2 task (1 = today)
 SINGULAR_L2_SLICE_BUDGET_MAX="${SINGULAR_L2_SLICE_BUDGET_MAX:-3}" # hard cap on slice budget (per-task blast-radius guard)
 SINGULAR_MIN_DISK_GB="${SINGULAR_MIN_DISK_GB:-2}"                 # below this free-space floor, fanout blocks entirely
@@ -575,6 +637,25 @@ singular_ensure_gitignore_entries() {
   done
 }
 
+# Supplemental policy keeps existing prompt templates byte-identical when off.
+# Older consumer repositories can use the bundled policy without a scaffold
+# update. Resolve bundled assets from the library, not the context-script path.
+singular_red_proof_prompt() {
+  case "${SINGULAR_RED_PROOF:-off}" in
+    observe|enforce) ;;
+    *) return 0 ;;
+  esac
+  local policy="$SINGULAR_ORCH_DIR/prompts/red-proof.md"
+  [[ -f "$policy" ]] || policy="$SINGULAR_LIB_DIR/prompt-policies/red-proof.md"
+  printf '\n\n'
+  cat "$policy" || return
+  if [[ "$SINGULAR_RED_PROOF" == "observe" ]]; then
+    printf '\nMode: observe. The host records proof outcomes; proof alone refuses nothing.\n'
+  else
+    printf '\nMode: enforce. A declared red proof requires a host `proved` record for acceptance.\n'
+  fi
+}
+
 singular_ensure_repo_scaffold() {
   local schema_sync_mode="${1:-preserve}"
   case "$schema_sync_mode" in
@@ -618,6 +699,13 @@ Target branch: `agent/integration`
 Worker branch: `agent/core/TASK-XXXX-<slug>`
 Test policy: `strict_test_first`
 Gate command: `true`
+EOF
+    case "${SINGULAR_RED_PROOF:-off}" in
+      observe|enforce)
+        printf 'Proof command:\nProof tests: []\n' >>"$SINGULAR_ORCH_DIR/tasks/TEMPLATE.md"
+        ;;
+    esac
+    cat >>"$SINGULAR_ORCH_DIR/tasks/TEMPLATE.md" <<'EOF'
 Dispatch mode: canonical
 Depends on: []
 
@@ -1680,7 +1768,7 @@ PY
 # WHY: 0.16 built the target list solely from `ps -A`, ignored its return code,
 # and wrapped the lot in `2>/dev/null || true`. In a sandbox that denies `ps`
 # the child map came back empty, only the root was signalled, descendants
-# survived a timeout — and the failure was invisible (field finding PMGO-004).
+# survived a timeout — and the failure was invisible.
 # So the kill now ends with a bounded VERIFY poll and, when it cannot prove the
 # tree is gone, says so on stderr and in a `kill.unverified` event.
 #
@@ -2078,6 +2166,141 @@ singular_origin_guard_remove_stale() {
   rm -rf -- "$stale_path"
 }
 
+# --- bounded wait for the origin lock (0.23.7) ---------------------------------
+# Operator verbs failed at once with "origin lock busy" whenever a loop cycle
+# held the lock; with parallel planning that is almost always, causing repeated
+# retries. They now wait, bounded, and the
+# loop yields to a registered waiter at its next cycle boundary.
+#
+# SINGULAR_LOCK_WAIT_SEC: seconds an operator verb waits (default 120; 0 = fail
+# fast, the previous behaviour). `--wait[=SECONDS]` / `--no-wait` set it for one
+# command. SINGULAR_LOCK_YIELD_SEC: how long a reconcile cycle holds off for a
+# waiter before it takes the lock anyway (default 20; 0 = never yield).
+singular_lock_wait_seconds() {
+  local raw="${SINGULAR_LOCK_WAIT_SEC:-120}"
+  [[ "$raw" =~ ^[0-9]+$ ]] || raw=120
+  printf '%s\n' "$raw"
+}
+
+# Split `--wait`, `--wait=SECONDS` and `--no-wait` out of an operator verb's
+# arguments. Sets SINGULAR_LOCK_WAIT_SEC when one is present and leaves the
+# remaining arguments in SINGULAR_LOCK_WAIT_ARGS. Returns 2 on a bad value.
+singular_lock_wait_parse_args() {
+  SINGULAR_LOCK_WAIT_ARGS=()
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --wait) SINGULAR_LOCK_WAIT_SEC="$(singular_lock_wait_seconds)"
+              [[ "$SINGULAR_LOCK_WAIT_SEC" -gt 0 ]] || SINGULAR_LOCK_WAIT_SEC=120 ;;
+      --wait=*)
+        [[ "${arg#--wait=}" =~ ^[0-9]+$ ]] || {
+          echo "invalid ${arg}: --wait takes whole seconds (0 = fail fast)" >&2; return 2; }
+        SINGULAR_LOCK_WAIT_SEC="${arg#--wait=}" ;;
+      --no-wait) SINGULAR_LOCK_WAIT_SEC=0 ;;
+      *) SINGULAR_LOCK_WAIT_ARGS+=("$arg") ;;
+    esac
+  done
+  export SINGULAR_LOCK_WAIT_SEC
+  return 0
+}
+
+singular_origin_lock_waiters_dir() {
+  printf '%s\n' "$SINGULAR_STATE_DIR/locks/origin.waiters"
+}
+
+# True while at least one live operator command is queued for the origin lock.
+# Markers of dead processes are removed as they are found.
+singular_origin_lock_live_waiters() {
+  local dir marker pid live=1
+  dir="$(singular_origin_lock_waiters_dir)"
+  [[ -d "$dir" ]] || return 1
+  for marker in "$dir"/*.waiter; do
+    [[ -f "$marker" ]] || continue
+    pid="$(head -1 "$marker" 2>/dev/null | tr -d '[:space:]')"
+    if [[ "$pid" =~ ^[1-9][0-9]*$ ]] && singular_pid_alive "$pid"; then
+      live=0
+    else
+      rm -f "$marker" 2>/dev/null || true
+    fi
+  done
+  return "$live"
+}
+
+# The loop's half of the queue: called by reconcile before it takes the lock.
+# While an operator command is waiting (and, once the loop has stepped aside,
+# while that command holds the lock) the cycle holds off, bounded by
+# SINGULAR_LOCK_YIELD_SEC, so a cycle boundary always lets the operator in.
+singular_origin_lock_yield_to_waiters() {
+  local max="${SINGULAR_LOCK_YIELD_SEC:-20}" deadline yielded=0 guard_dir guard_pid
+  [[ "$max" =~ ^[0-9]+$ ]] || max=20
+  [[ "$max" -gt 0 ]] || return 0
+  singular_origin_lock_live_waiters || return 0
+  guard_dir="$(singular_origin_guard_lock_path 2>/dev/null)" || return 0
+  deadline=$(( $(date +%s) + max ))
+  while [[ "$(date +%s)" -lt "$deadline" ]]; do
+    if singular_origin_lock_live_waiters; then
+      yielded=1
+    else
+      guard_pid="$(cat "$guard_dir/pid" 2>/dev/null | tr -d '[:space:]' || true)"
+      [[ "$guard_pid" =~ ^[1-9][0-9]*$ ]] && singular_pid_alive "$guard_pid" || break
+    fi
+    sleep 0.2
+  done
+  if [[ "$yielded" -eq 1 ]]; then
+    echo "origin lock: this cycle waited for a queued operator command" >&2
+    singular_append_event "origin.lock_yielded" \
+      "reconcile held off for an operator command queued on the origin lock" \
+      "{\"maxSeconds\":$max}" 2>/dev/null || true
+  fi
+  return 0
+}
+
+# Acquire the origin lock, waiting up to SINGULAR_LOCK_WAIT_SEC for a holder to
+# release it. Prints one line when it has to wait. Exit codes are
+# singular_acquire_lock's; 75 after the bound means still busy.
+# args: run_id label
+singular_acquire_lock_wait() {
+  local run_id="$1" label="${2:-singular}"
+  local wait rc=0 err marker dir deadline poll="${SINGULAR_LOCK_WAIT_POLL_SEC:-0.5}"
+  wait="$(singular_lock_wait_seconds)"
+  if [[ "$wait" -eq 0 ]]; then
+    singular_acquire_lock "$run_id"
+    return $?
+  fi
+  [[ "$poll" =~ ^[0-9]+(\.[0-9]+)?$ ]] || poll=0.5
+  singular_ensure_state_dirs
+  err="$(mktemp "${TMPDIR:-/tmp}/singular-lock-wait.XXXXXX")" || return 1
+  SINGULAR_LOCK_PROBE_QUIET=1 singular_acquire_lock "$run_id" 2>"$err" || rc=$?
+  if [[ "$rc" -ne 75 ]]; then
+    [[ "$rc" -eq 0 ]] || cat "$err" >&2
+    rm -f "$err"
+    return "$rc"
+  fi
+  dir="$(singular_origin_lock_waiters_dir)"
+  mkdir -p "$dir" 2>/dev/null || true
+  marker="$dir/${BASHPID:-$$}.waiter"
+  printf '%s\n%s\n%s\n' "${BASHPID:-$$}" "$label" "$(date +%s)" >"$marker" 2>/dev/null || true
+  echo "$label: waiting for the loop's lock… (up to ${wait}s; --wait=0 fails fast)" >&2
+  deadline=$(( $(date +%s) + wait ))
+  while [[ "$(date +%s)" -lt "$deadline" ]]; do
+    sleep "$poll"
+    rc=0
+    SINGULAR_LOCK_PROBE_QUIET=1 singular_acquire_lock "$run_id" 2>"$err" || rc=$?
+    [[ "$rc" -eq 75 ]] || break
+  done
+  rm -f "$marker" 2>/dev/null || true
+  if [[ "$rc" -eq 75 ]]; then
+    singular_append_event "origin.lock_wait_timeout" \
+      "operator command gave up waiting for the origin lock" \
+      "{\"command\":\"$label\",\"waitedSeconds\":$wait}" 2>/dev/null || true
+    echo "$label: the loop still holds the origin lock after ${wait}s" >&2
+  elif [[ "$rc" -ne 0 ]]; then
+    cat "$err" >&2
+  fi
+  rm -f "$err"
+  return "$rc"
+}
+
 singular_acquire_lock() {
   local run_id="$1"
   local capability capability_sha lock_file guard_dir guard_pid metadata_pid process_id waited=0 stale
@@ -2108,9 +2331,13 @@ singular_acquire_lock() {
     guard_pid=""
     guard_pid="$(cat "$guard_dir/pid" 2>/dev/null | tr -d '[:space:]' || true)"
     if [[ "$guard_pid" =~ ^[1-9][0-9]*$ ]] && singular_pid_alive "$guard_pid"; then
-      echo "active origin lock exists for pid $guard_pid: $lock_file" >&2
-      singular_append_event "origin.lock_skipped" "active origin lock exists" \
-        "{\"pid\":\"$guard_pid\"}"
+      # A bounded waiter (singular_acquire_lock_wait) probes repeatedly; it
+      # reports once itself instead of one line and one event per probe.
+      if [[ "${SINGULAR_LOCK_PROBE_QUIET:-0}" != "1" ]]; then
+        echo "active origin lock exists for pid $guard_pid: $lock_file" >&2
+        singular_append_event "origin.lock_skipped" "active origin lock exists" \
+          "{\"pid\":\"$guard_pid\"}"
+      fi
       return 75
     fi
     # Allow an acquiring process a brief window to publish its owner pid.
@@ -2145,9 +2372,11 @@ singular_acquire_lock() {
     metadata_pid="$(singular_json_field "$lock_file" pid 2>/dev/null || true)"
     if [[ "$metadata_pid" =~ ^[1-9][0-9]*$ ]] \
         && singular_pid_alive "$metadata_pid"; then
-      echo "active legacy origin lock exists for pid $metadata_pid: $lock_file" >&2
-      singular_append_event "origin.lock_skipped" "active legacy origin lock exists" \
-        "{\"pid\":\"$metadata_pid\"}"
+      if [[ "${SINGULAR_LOCK_PROBE_QUIET:-0}" != "1" ]]; then
+        echo "active legacy origin lock exists for pid $metadata_pid: $lock_file" >&2
+        singular_append_event "origin.lock_skipped" "active legacy origin lock exists" \
+          "{\"pid\":\"$metadata_pid\"}"
+      fi
       rm -f "$guard_dir/pid" 2>/dev/null || true
       rmdir "$guard_dir" 2>/dev/null || true
       return 75
@@ -2440,9 +2669,8 @@ required = schema["required"]
 properties = set(schema["properties"].keys())
 missing = [key for key in required if key not in data]
 if missing == ["createdAt"]:
-    # Field run 2026-09-15: a complete, otherwise valid packet was refused
-    # twice for lacking only its timestamp, which parked an audited-clean
-    # candidate. The host knows the time; it does not need the model for it.
+    # The host can supply a missing timestamp on an otherwise valid packet.
+    # It does not need the model to emit the current time.
     from datetime import datetime, timezone
     data["createdAt"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     with open(path, "w", encoding="utf-8") as f:
@@ -2838,6 +3066,155 @@ if schema == legacy_schema or normalized.endswith("/" + legacy_schema):
 PY
 }
 
+# Free-text normalisation of a state packet (0.23.6). The schema types
+# blockers[] and evidence[] entries as objects, and workers write a sentence
+# there instead. A bare string carries no authority, so the host wraps it
+# rather than refusing the packet: blockers -> {"summary": text}, evidence ->
+# {"kind": "note", "ref": text}. Nothing else is touched: identity, status,
+# commands[] and tests[] stay exactly as written and stay strict. The file is
+# rewritten only when something changed. Prints a JSON report
+# {"normalized": bool, "fields": [{"path": "blockers[0]", "as": "summary"}]}.
+# An accepted packet with a string blocker otherwise fails
+# import on every reconcile cycle and never integrates.
+singular_packet_normalize_free_text() {
+  local packet="$1"
+  python3 - "$packet" <<'PY'
+import json
+import os
+import sys
+
+path = sys.argv[1]
+report = {"normalized": False, "fields": []}
+try:
+    with open(path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+except (OSError, ValueError):
+    data = None
+if isinstance(data, dict):
+    for key, wrap in (("blockers", lambda text: {"summary": text}),
+                      ("evidence", lambda text: {"kind": "note", "ref": text})):
+        items = data.get(key)
+        if not isinstance(items, list):
+            continue
+        for index, item in enumerate(items):
+            if isinstance(item, str) and item.strip():
+                items[index] = wrap(item)
+                report["fields"].append({
+                    "path": f"{key}[{index}]",
+                    "as": "summary" if key == "blockers" else "note",
+                })
+    if report["fields"]:
+        temporary = path + ".normalize.tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
+            handle.write("\n")
+        os.replace(temporary, path)
+        report["normalized"] = True
+print(json.dumps(report, separators=(",", ":")))
+PY
+}
+
+# Normalise a packet's free text and record it. args: packet stage [task] [run]
+singular_packet_normalize_and_record() {
+  local packet="$1" stage="$2" task="${3:-}" run="${4:-}" report
+  report="$(singular_packet_normalize_free_text "$packet" 2>/dev/null)" || return 0
+  [[ "$report" == *'"normalized":true'* ]] || return 0
+  singular_append_event "packet.normalized" \
+    "state packet free-text entries wrapped as objects by the host" \
+    "$(python3 - "$report" "$stage" "$task" "$run" "$(basename "$packet")" <<'PY'
+import json, sys
+report, stage, task, run, name = sys.argv[1:6]
+print(json.dumps({"taskId": task, "runId": run, "packet": name, "stage": stage,
+                  "fields": json.loads(report).get("fields", [])}, separators=(",", ":")))
+PY
+)" 2>/dev/null || true
+}
+
+# Consecutive-failure accounting for one inbox packet (0.23.6). A packet that
+# cannot be imported used to be retried on every reconcile cycle forever, with
+# one packet.import_failed event per cycle and nothing in health. The record is
+# keyed to the packet's bytes and mtime: the same bytes failing with the same
+# error SINGULAR_IMPORT_FAIL_PARK times (default 3) park the packet, and a
+# parked packet is not re-validated until the file changes (edit it, or touch
+# it to retry as is).
+singular_import_failure_record() {
+  printf '%s/import-failures/%s.json' "$SINGULAR_STATE_DIR" "$(basename "$1" .json)"
+}
+
+# exit 0 when this exact packet file is parked.
+singular_import_packet_parked() {
+  local packet="$1" record
+  record="$(singular_import_failure_record "$packet")"
+  [[ -f "$record" ]] || return 1
+  python3 - "$packet" "$record" <<'PY'
+import hashlib, json, os, sys
+packet, record_path = sys.argv[1:3]
+try:
+    record = json.load(open(record_path, encoding="utf-8"))
+    digest = hashlib.sha256(open(packet, "rb").read()).hexdigest()
+    mtime = os.stat(packet).st_mtime_ns
+except (OSError, ValueError):
+    raise SystemExit(1)
+raise SystemExit(0 if record.get("parked") is True and record.get("sha256") == digest
+                 and record.get("mtimeNs") == mtime else 1)
+PY
+}
+
+# Note one failed import. args: packet error_file. Prints "count=N parked=yes|no".
+singular_import_failure_note() {
+  local packet="$1" error_file="$2" record
+  record="$(singular_import_failure_record "$packet")"
+  mkdir -p "$(dirname "$record")"
+  python3 - "$packet" "$record" "$error_file" "${SINGULAR_IMPORT_FAIL_PARK:-3}" <<'PY'
+import hashlib, json, os, sys
+from datetime import datetime, timezone
+
+packet, record_path, error_file, limit_raw = sys.argv[1:5]
+try:
+    limit = max(1, int(limit_raw))
+except ValueError:
+    limit = 3
+now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+try:
+    lines = [line.strip() for line in open(error_file, encoding="utf-8", errors="replace")]
+except OSError:
+    lines = []
+# The validator names the packet by path; the path is not part of the error.
+error = " / ".join(
+    line.replace(packet, os.path.basename(packet)) for line in lines if line
+)[-600:] or "import failed without output"
+digest = hashlib.sha256(open(packet, "rb").read()).hexdigest()
+task = ""
+try:
+    value = json.load(open(packet, encoding="utf-8"))
+    task = str(value.get("taskId") or "") if isinstance(value, dict) else ""
+except (OSError, ValueError):
+    pass
+try:
+    record = json.load(open(record_path, encoding="utf-8"))
+    if not isinstance(record, dict):
+        record = {}
+except (OSError, ValueError):
+    record = {}
+same = record.get("sha256") == digest and record.get("error") == error
+count = int(record.get("count") or 0) + 1 if same else 1
+record = {
+    "schema": "singular.orchestration.import-failure.v0",
+    "packet": os.path.basename(packet), "taskId": task, "sha256": digest,
+    "mtimeNs": os.stat(packet).st_mtime_ns, "error": error, "count": count,
+    "limit": limit, "parked": count >= limit,
+    "firstFailedAt": record.get("firstFailedAt", now) if same else now,
+    "lastFailedAt": now,
+}
+temporary = record_path + ".tmp"
+with open(temporary, "w", encoding="utf-8") as handle:
+    json.dump(record, handle, indent=2)
+    handle.write("\n")
+os.replace(temporary, record_path)
+print(f"count={count} parked={'yes' if record['parked'] else 'no'}")
+PY
+}
+
 singular_l1_prepare_worker_packet() {
   local raw_message="$1" packet="$2" validation_log="$3"
   [[ -n "$validation_log" ]] && mkdir -p "$(dirname "$validation_log")"
@@ -2849,6 +3226,8 @@ singular_l1_prepare_worker_packet() {
     return 11
   fi
   singular_l1_normalize_worker_packet_schema "$packet"
+  # Before validation, host stamping and every hash that later binds packet.json.
+  singular_packet_normalize_and_record "$packet" worker "${task_id:-}" "${run_id:-}"
   if ! singular_validate_packet_basic "$packet" >"$validation_log" 2>&1; then
     return 12
   fi
@@ -3045,6 +3424,8 @@ print(json.dumps(value, separators=(",", ":")) if isinstance(value, (dict, list)
 #   exemption); every other check still applies.
 # - acceptanceCriteria is required when SINGULAR_PREFLIGHT_REQUIRE_ACCEPTANCE=1
 #   (the default).
+# - Proof command and Proof tests must be declared together, with a single
+#   program and proof paths inside the owned scope, even when red proof is off.
 # Owned/forbidden conflicts use the same segment-boundary semantics as
 # scope-check.sh: "a/b" conflicts with "a/b" and "a/b/c", but NOT with "a/bc".
 # Forbidden prose is removed by the canonical task parser; every remaining
@@ -3052,7 +3433,7 @@ print(json.dumps(value, separators=(",", ":")) if isinstance(value, (dict, list)
 singular_task_preflight() {
   local task_json="$1" gate_cmd="${2-}" target_branch="${3-}" require_gate="${4:-1}"
   python3 - "$task_json" "$gate_cmd" "$target_branch" "$require_gate" \
-    "${SINGULAR_PREFLIGHT_REQUIRE_ACCEPTANCE:-1}" <<'PY'
+    "${SINGULAR_PREFLIGHT_REQUIRE_ACCEPTANCE:-1}" "$SINGULAR_LIB_DIR" <<'PY'
 import json
 import sys
 
@@ -3066,6 +3447,14 @@ except Exception as exc:
     sys.exit(1)
 
 reasons = []
+if "proofCommand" in task or "proofTests" in task:
+    sys.path.insert(0, sys.argv[6])
+    from task_parser import proof_preflight_reasons
+    proof_reasons = proof_preflight_reasons(task)
+    if proof_reasons:
+        reasons.extend(proof_reasons)
+        reasons.append("task author must correct the proof headers; operator can then run "
+                       f"singular unpark {task.get('taskId') or 'TASK-XXXX'}")
 
 def field(key):
     return str(task.get(key, "") or "").strip()
@@ -3773,7 +4162,7 @@ singular_runner_spawn_one() {
   fi
   # LAST command, so the `&` at the call site makes $! the session leader itself
   # (pid == pgid) and singular_kill_tree group-kills the whole tree with one
-  # negative pid, without `ps` -- which is the whole point (PMGO-004: in a
+  # negative pid, without `ps` -- which is the whole point (in a
   # sandbox that denies process enumeration only the direct child was signalled,
   # and the provider's descendants survived every timeout, invisibly).
   singular_setsid_exec "$@"
@@ -5033,7 +5422,16 @@ singular_provider_pressure_enabled() {
 # The same configured baseline resource-plan.sh starts from, so a decrease
 # halves the real ceiling rather than an invented one.
 singular_provider_pressure_configured_slots() {
-  local configured="${SINGULAR_MAX_CONCURRENT:-${SINGULAR_MAX_L1_CONCURRENT:-3}}"
+  # `auto` has no number until resource-plan.sh measures the machine (and then
+  # passes that number in through SINGULAR_MAX_CONCURRENT). The observe and
+  # success paths run outside a plan, so they use the ceiling the last
+  # reconcile cycle recorded; with no cycle yet, the historical default of 3.
+  local configured="${SINGULAR_MAX_CONCURRENT:-auto}"
+  if [[ "$configured" == "auto" ]]; then
+    configured="$(singular_json_field \
+      "${SINGULAR_RESOURCE_GOVERNOR_STATE_FILE:-$SINGULAR_STATE_DIR/resource-governor.json}" \
+      configuredSlots 2>/dev/null || true)"
+  fi
   [[ "$configured" =~ ^[0-9]+$ && "$configured" -ge 1 ]] || configured=3
   printf '%s\n' "$configured"
 }
@@ -6014,8 +6412,8 @@ forbidden_files = parse_array(forbidden_raw, [])
 # default: every key this writer does not itself compute is preserved, including
 # keys it has no knowledge of. Until 0.23.3 an allowlist enumerated the keys to
 # keep, so everything outside it was silently dropped on each write
-# (operatorReentries, campaignBinding, nextAction, failureReason across the
-# BRAIN-RESCUE-20260910 leases). Dropping operatorReentries defeated the
+# (operatorReentries, campaignBinding, nextAction, failureReason).
+# Dropping operatorReentries defeated the
 # _deleteRecord history guard in task_lifecycle.py: a lease whose only history
 # was an operator re-entry was deleted outright by the next driver refusal.
 # Underscore-prefixed names are lifecycle control sentinels, never durable
@@ -6064,8 +6462,7 @@ PY
 #
 # A refused reservation was logged and retried on the next cycle, forever: the
 # refusal advanced no counter the breaker reads, so a task could spin at the
-# poll interval with nothing but an event stream to show for it (field
-# 2026-09-14: 28 refusals in nine minutes, invisible to the loop). The count
+# poll interval with nothing but an event stream to show for it. The count
 # must key on a STABLE condition -- never on runId or reservation generation,
 # which change every attempt and would reset the count each time, which is
 # precisely why the spin was unbounded.
@@ -6073,11 +6470,14 @@ PY
 # Prints three fields for the caller: count, new (first observation of THIS
 # condition) and park (the count reached the threshold).
 singular_refusal_note() {
-  local task_id="$1" reason="$2"
-  local dir="$SINGULAR_STATE_DIR/refusals"
+  # args: task_id reason [kind] [threshold]. `kind` selects an independent
+  # counter (refusals/<kind>/<task>.json): a reservation that succeeds clears
+  # the reservation counter and must not clear a dispatch-refusal count.
+  local task_id="$1" reason="$2" kind="${3:-}" threshold="${4:-${SINGULAR_REFUSAL_PARK_THRESHOLD:-3}}"
+  local dir="$SINGULAR_STATE_DIR/refusals${kind:+/$kind}"
   mkdir -p "$dir"
   python3 - "$dir/$task_id.json" "$task_id" "$reason" \
-    "${SINGULAR_REFUSAL_PARK_THRESHOLD:-3}" <<'PY'
+    "$threshold" <<'PY'
 import hashlib
 import json
 import os
@@ -6147,6 +6547,264 @@ PY
 # single refusal.
 singular_refusal_clear() {
   rm -f "$SINGULAR_STATE_DIR/refusals/$1.json" 2>/dev/null || true
+}
+
+# --- promotion sweep (0.23.7) --------------------------------------------------
+# Promotion used to be attempted only at the moment a task of the node
+# integrated (integrate.sh) or when the dispatch queue was empty (reconcile's
+# frontier pass). If a stale sibling was still open at that moment, superseding
+# it did not trigger another check while the queue remained busy. Dependents stayed
+# suppressed (planner.suppressed_pending_promotion) until the operator ran the
+# promoter by hand. Each reconcile cycle now re-attempts promotion for every
+# node that singular_node_pending_promotion reports.
+#
+# Cheap when nothing changed: one python pass derives the candidate nodes from
+# the task records and skips a node whose (task set + statuses, target HEAD)
+# fingerprint equals the one recorded at its last attempt. Bounded: at most
+# SINGULAR_PROMOTION_SWEEP_MAX (3) promoter runs per cycle.
+# args: run_id. Sets singular_promotion_sweep_promoted to the number of
+# authoritative gate transitions it caused.
+singular_promotion_sweep_candidates() {
+  local head="$1" dir="$2"
+  python3 - "$SINGULAR_TASKS_DIR" "$SINGULAR_ORCH_DIR/gates" "$dir" "$head" "$SINGULAR_LIB_DIR" <<'PY'
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+tasks_dir, gates_dir, attempts_dir, head, lib_dir = sys.argv[1:6]
+OPEN = {"ready", "planned", "running", "needs-review", "accepted", ""}
+DECIDED = {"passed", "passed-with-acknowledged-baseline", "failed", "blocked"}
+sys.path.insert(0, lib_dir)
+import task_parser  # noqa: E402  (the engine's own parser: same node attribution as the predicate)
+
+nodes = {}
+for source in sorted(Path(tasks_dir).rglob("TASK-*.md")):
+    try:
+        task = task_parser.parse_task(source)
+    except Exception:
+        continue
+    node = str(task.get("dagNode") or "")
+    task_id = str(task.get("taskId") or "")
+    if node and task_id:
+        nodes.setdefault(node, []).append((task_id, str(task.get("status") or "").lower()))
+for node in sorted(nodes):
+    rows = sorted(nodes[node])
+    statuses = [status for _task, status in rows]
+    if "integrated" not in statuses or any(status in OPEN for status in statuses):
+        continue
+    try:
+        with open(os.path.join(gates_dir, node + ".gate-result.json"), encoding="utf-8") as handle:
+            if json.load(handle).get("status") in DECIDED:
+                continue
+    except (OSError, ValueError, AttributeError):
+        pass
+    fingerprint = hashlib.sha256(json.dumps([rows, head]).encode("utf-8")).hexdigest()[:24]
+    safe = hashlib.sha256(node.encode("utf-8")).hexdigest()[:16]
+    try:
+        with open(os.path.join(attempts_dir, safe + ".json"), encoding="utf-8") as handle:
+            if json.load(handle).get("fingerprint") == fingerprint:
+                continue
+    except (OSError, ValueError, AttributeError):
+        pass
+    print("{}\t{}\t{}".format(node, fingerprint, safe))
+PY
+}
+
+singular_promotion_sweep() {
+  local run_id="$1"
+  singular_promotion_sweep_promoted=0
+  [[ "${SINGULAR_AUTO_PROMOTE_GATES:-1}" == "1" ]] || return 0
+  [[ -d "$SINGULAR_TASKS_DIR" ]] || return 0
+  local max="${SINGULAR_PROMOTION_SWEEP_MAX:-3}"
+  [[ "$max" =~ ^[0-9]+$ ]] || max=3
+  [[ "$max" -gt 0 ]] || return 0
+  local dir="$SINGULAR_STATE_DIR/promotion-attempts" head attempted=0
+  head="$(git -C "$SINGULAR_ROOT" rev-parse --verify "${SINGULAR_TARGET_BRANCH:-HEAD}^{commit}" 2>/dev/null || true)"
+  local node fingerprint safe was_passed is_passed promo_out outcome
+  while IFS=$'\t' read -r node fingerprint safe; do
+    [[ -n "$node" && -n "$fingerprint" && -n "$safe" ]] || continue
+    # The cheap pass only narrows; this predicate is the authority.
+    singular_node_pending_promotion "$node" 2>/dev/null || continue
+    if [[ "$attempted" -ge "$max" ]]; then
+      echo "actuation: promotion sweep: per-cycle bound ($max) reached; remaining nodes wait for the next cycle"
+      break
+    fi
+    attempted=$((attempted + 1))
+    echo "actuation: promotion sweep: node $node is pending promotion; invoking promoter..."
+    was_passed=0; singular_authoritative_gate_passed "$node" && was_passed=1
+    promo_out="$(singular_with_origin_lock_capability \
+      "$SINGULAR_LIB_DIR/promote-gate.sh" --from-reconcile --if-ready "$node" 2>&1)" || true
+    printf '%s\n' "$promo_out" | sed 's/^/  promotion: /'
+    is_passed=0; singular_authoritative_gate_passed "$node" && is_passed=1
+    outcome="not-promoted"
+    if [[ "$was_passed" -eq 0 && "$is_passed" -eq 1 ]]; then
+      outcome="promoted"
+      singular_promotion_sweep_promoted=$((singular_promotion_sweep_promoted + 1))
+    fi
+    mkdir -p "$dir" 2>/dev/null || true
+    python3 - "$dir/$safe.json" "$node" "$fingerprint" "$head" "$run_id" "$outcome" <<'PY' 2>/dev/null || true
+import json, os, sys
+from datetime import datetime, timezone
+path, node, fingerprint, head, run_id, outcome = sys.argv[1:7]
+doc = {"node": node, "fingerprint": fingerprint, "head": head, "runId": run_id, "outcome": outcome,
+       "attemptedAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")}
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as handle:
+    json.dump(doc, handle, indent=2)
+    handle.write("\n")
+os.replace(tmp, path)
+PY
+    singular_append_event "origin.promotion_reattempted" \
+      "reconcile re-attempted promotion of a node whose tasks are complete" \
+      "{\"runId\":\"$run_id\",\"node\":$(printf '%s' "$node" | singular_json_escape),\"outcome\":\"$outcome\",\"fingerprint\":\"$fingerprint\",\"head\":\"$head\"}" || true
+  done < <(singular_promotion_sweep_candidates "$head" "$dir" 2>/dev/null || true)
+  return 0
+}
+
+# --- refused dispatches (0.23.7) ---------------------------------------------
+# l1-drive exits 2 when its preconditions are unmet. The reaper counted that as
+# `refused`, never as a failure, and the frontier re-selected the task on the
+# next cycle with no park, no event naming the reason and nothing in
+# `singular health`.
+# The same reason on N consecutive dispatches (SINGULAR_DISPATCH_REFUSAL_PARK_THRESHOLD,
+# default 3) parks the task with that reason, once.
+
+# The driver's own words for a refusal: its `l1-drive:` lines, else the tail.
+singular_dispatch_refusal_reason() {
+  local log="$1" reason=""
+  if [[ -n "$log" && -f "$log" ]]; then
+    reason="$(grep -a '^l1-drive: ' "$log" 2>/dev/null | tail -2 | sed 's/^l1-drive: //' \
+      | tr '\n' ' ' | sed 's/  */ /g;s/^ //;s/ $//' | head -c 600)"
+    [[ -n "$reason" ]] || reason="$(grep -av '^[[:space:]]*$' "$log" 2>/dev/null | tail -2 \
+      | tr '\n' ' ' | sed 's/  */ /g;s/^ //;s/ $//' | head -c 600)"
+  fi
+  [[ -n "$reason" ]] || reason="dispatch refused (driver exit 2) without a recorded reason"
+  printf '%s\n' "$reason"
+}
+
+singular_dispatch_refusal_path() {
+  printf '%s\n' "$SINGULAR_STATE_DIR/refusals/dispatch/$1.json"
+}
+
+singular_dispatch_refusal_clear() {
+  rm -f "$(singular_dispatch_refusal_path "$1")" 2>/dev/null || true
+}
+
+# args: task_id run_id dispatch_log. Prints nothing on stdout (the reaper's
+# stdout is a counter protocol). Never fails the caller.
+singular_dispatch_refusal_account() {
+  local task_id="$1" run_id="$2" log="${3:-}"
+  local threshold="${SINGULAR_DISPATCH_REFUSAL_PARK_THRESHOLD:-3}"
+  [[ "$threshold" =~ ^[1-9][0-9]*$ ]] || threshold=3
+  local reason out count park condition task_file command
+  reason="$(singular_dispatch_refusal_reason "$log")"
+  out="$(singular_refusal_note "$task_id" "$reason" dispatch "$threshold" 2>/dev/null || true)"
+  count="$(printf '%s\n' "$out" | sed -n 's/^count=//p' | tail -1)"
+  park="$(printf '%s\n' "$out" | sed -n 's/^park=//p' | tail -1)"
+  condition="$(printf '%s\n' "$out" | sed -n 's/^condition=//p' | tail -1)"
+  [[ "$count" =~ ^[0-9]+$ ]] || count=0
+  [[ "$park" == "yes" ]] || return 0
+  task_file="$SINGULAR_TASKS_DIR/$task_id.md"
+  [[ -f "$task_file" ]] || return 0
+  # Park the task, not the lease: the refused driver consumed no state and the
+  # reaper has already settled its reservation.
+  [[ "$(singular_task_status "$task_file" 2>/dev/null || true)" == "blocked" ]] \
+    || singular_task_set_status "$task_file" "blocked" 2>/dev/null || true
+  command="singular unpark $task_id"
+  python3 - "$(singular_dispatch_refusal_path "$task_id")" "$command" <<'PY' 2>/dev/null || true
+import json, os, sys
+from datetime import datetime, timezone
+path, command = sys.argv[1:3]
+with open(path, encoding="utf-8") as handle:
+    entry = json.load(handle)
+if entry.get("parked") is True:
+    raise SystemExit(0)
+entry["parked"] = True
+entry["parkedAt"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+entry["suggestedCommand"] = command
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as handle:
+    json.dump(entry, handle, indent=2)
+    handle.write("\n")
+os.replace(tmp, path)
+PY
+  "$SINGULAR_LIB_DIR/record-decision.sh" --task "$task_id" --decision "escalate-parked" \
+    --rationale "dispatch refused $count consecutive times for the same reason: $reason" \
+    --run "$run_id" --authority origin >/dev/null 2>&1 || true
+  singular_append_event "origin.dispatch_refusal_parked" \
+    "task parked after consecutive dispatch refusals for the same reason" \
+    "{\"runId\":\"$run_id\",\"taskId\":\"$task_id\",\"refusals\":$count,\"threshold\":$threshold,\"conditionKey\":\"$condition\",\"reason\":$(printf '%s' "$reason" | singular_json_escape),\"failureReason\":\"dispatch-refusal-limit\",\"suggestedCommand\":\"$command\",\"nextAction\":\"fix the refusal condition, then $command\"}" \
+    >/dev/null 2>&1 || true
+  echo "reap: parked $task_id after $count consecutive dispatch refusals: $reason" >&2
+  return 0
+}
+
+# Commit a retained worker checkout's uncommitted work on its own branch
+# (0.23.7). The driver commits a worker branch only after a green gate, so a
+# task parked on a red gate keeps its work uncommitted in .worktrees/<task>;
+# the base refresh below then refused the dirty checkout on every dispatch.
+# The operator's remedy was always: commit the work, merge the target. This
+# does the first half, as a clearly labelled engine WIP commit that claims no
+# gate and no audit. Only paths inside the task's owned scope are committed;
+# anything else dirty is a refusal that names the paths.
+# args: root branch task_id hint_worktree owned_newline_list [forbidden_newline_list]
+# stdout: the new head when a commit was made; nothing when there was nothing
+# to commit. Exit 1 with one reason line on stderr on refusal.
+singular_retained_wip_commit() {
+  local root="$1" branch="$2" task_id="$3" hint_worktree="${4:-}" owned_list="${5:-}" forbidden_list="${6:-}"
+  local checkout f scope_out
+  checkout="$(git -C "$root" worktree list --porcelain 2>/dev/null \
+    | awk -v b="refs/heads/$branch" '$1=="worktree"{w=$2} $1=="branch" && $2==b {print w}' | head -1)"
+  [[ -n "$checkout" && -d "$checkout" ]] || return 0
+  [[ -n "$(git -C "$checkout" status --porcelain 2>/dev/null)" ]] || return 0
+  if git -C "$checkout" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 \
+      || [[ -n "$(git -C "$checkout" diff --name-only --diff-filter=U 2>/dev/null)" ]]; then
+    echo "retained checkout $checkout has an unfinished merge; resolve or abort it by hand" >&2
+    return 1
+  fi
+  local -a owned=() scope_args=()
+  while IFS= read -r f; do [[ -n "$f" ]] && owned+=("$f"); done <<<"$owned_list"
+  if [[ ${#owned[@]} -eq 0 ]]; then
+    echo "retained checkout $checkout is dirty and the task declares no owned scope" >&2
+    return 1
+  fi
+  for f in "${owned[@]}"; do scope_args+=(--allow-prefix "$f"); done
+  while IFS= read -r f; do [[ -n "$f" ]] && scope_args+=(--forbid-prefix "$f"); done <<<"$forbidden_list"
+  if ! scope_out="$("$SINGULAR_LIB_DIR/scope-check.sh" --worktree "$checkout" --base HEAD \
+      "${scope_args[@]}" 2>&1)"; then
+    echo "retained checkout $checkout has uncommitted changes outside the owned scope of $task_id: $(printf '%s' "$scope_out" | tr '\n' ' ' | sed 's/  */ /g' | head -c 400)" >&2
+    return 1
+  fi
+  for f in "${owned[@]}"; do
+    [[ -n "$(git -C "$checkout" status --porcelain --untracked-files=all -- "$f" 2>/dev/null)" ]] || continue
+    git -C "$checkout" add -A -- "$f" >/dev/null 2>&1 || {
+      echo "retained checkout $checkout: could not stage $f" >&2; return 1; }
+  done
+  if git -C "$checkout" diff --cached --quiet 2>/dev/null; then
+    echo "retained checkout $checkout is dirty but nothing in the owned scope of $task_id could be staged" >&2
+    return 1
+  fi
+  if ! git -C "$checkout" -c user.name="${SINGULAR_GIT_L1_NAME:-singular L1}" \
+      -c user.email="${SINGULAR_GIT_L1_EMAIL:-l1@singular.local}" \
+      commit -q --no-verify \
+      -m "wip(singular): preserve uncommitted $task_id worker work before base refresh" \
+      -m "Engine WIP commit. The worker's uncommitted work was found in the retained
+checkout when the branch had to be refreshed onto its admitted base. It is
+committed as found, inside the task's owned scope only. No gate and no audit
+has run on it; the next drive gates and audits the result.
+
+Singular-WIP: $task_id" >/dev/null 2>&1; then
+    git -C "$checkout" reset -q >/dev/null 2>&1 || true
+    echo "retained checkout $checkout: the WIP commit failed" >&2
+    return 1
+  fi
+  if [[ -n "$(git -C "$checkout" status --porcelain 2>/dev/null)" ]]; then
+    echo "retained checkout $checkout is still dirty after the WIP commit" >&2
+    return 1
+  fi
+  git -C "$checkout" rev-parse HEAD
 }
 
 # Owner-checked status publication. singular_lease_set_status performs NO
@@ -6277,7 +6935,7 @@ now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00
 # attempt's terminal record stays history, not a live guard: reserve() refuses
 # any lease that still carries attemptLifecycle/terminalDisposition without
 # continuation or repair authority, so an unpark that left them in place could
-# never be dispatched again (field run 2026-09-14: 28 silent refusals).
+# never be dispatched again.
 attempt = data.pop("attemptLifecycle", None)
 if isinstance(attempt, dict):
     history = data.setdefault("attemptHistory", [])
@@ -6364,6 +7022,41 @@ with open(tmp, "w", encoding="utf-8") as f:
     f.write("\n")
 os.replace(tmp, path)
 print(data["retryCount"])
+PY
+}
+
+# Record a candidate whose audit verdict could not be read (0.23.6), beside
+# the lease's budget state. args: task_id record_json. The record binds the
+# retained run, branch, head and admitted base so `drive --audit-only` can
+# re-run only the audit of that exact candidate; `singular health` prints its
+# recoveryCommand. It never touches retryCount or productPassStarted, and the
+# next drive of the task (audit-only or not) consumes it.
+singular_lease_record_audit_recheck() {
+  local task_id="$1" record_json="$2"
+  local lease
+  lease="$(singular_lease_path "$task_id")"
+  [[ -f "$lease" && -n "$record_json" ]] || return 1
+  python3 - "$lease" "$record_json" <<'PY'
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+path, raw = sys.argv[1:3]
+record = json.loads(raw)
+if not isinstance(record, dict):
+    raise SystemExit(1)
+with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+record["recordedAt"] = now
+data["auditRecheck"] = record
+data["updatedAt"] = now
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
 PY
 }
 
@@ -6786,6 +7479,12 @@ singular_reap_dispatches() {
         singular_dispatch_record_finalize "$tid" "$ec" "$outcome"
         singular_append_event "origin.dispatch_reaped" "dispatch reaped" \
           "{\"runId\":\"$run_id\",\"taskId\":\"$tid\",\"exitCode\":$ec,\"outcome\":\"$outcome\"}"
+        if [[ "$ec" -eq 2 ]]; then
+          singular_dispatch_refusal_account "$tid" "$run_id" \
+            "$(singular_json_field "$record" log 2>/dev/null || true)" || true
+        else
+          singular_dispatch_refusal_clear "$tid"
+        fi
         continue
       fi
       if singular_dispatch_tree_alive "$tid" "$pid" "$pid_start" "$rec_run" "${pgid:-0}"; then
@@ -6847,14 +7546,17 @@ singular_l1_area_write_scopes() {
 # minLength, pattern, format:date-time, array minItems/items, and object
 # required/properties/additionalProperties. Exits non-zero with a stderr message
 # on the first violation (fail-closed). args: <json-string> <schema-path> [root-label]
+# The acceptance program owns the rules; retain the shell interface and exits.
 singular_json_schema_check() {
-  python3 - "$2" "$1" "${3:-value}" <<'PY'
+  python3 - "$SINGULAR_LIB_DIR" "$2" "$1" "${3:-value}" <<'PY'
 import json
-import re
 import sys
-from datetime import datetime
 
-schema_path, raw, root = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+from acceptance_validator import check_schema
+
+schema_path, raw, root = sys.argv[2:]
 with open(schema_path, "r", encoding="utf-8") as f:
     schema = json.load(f)
 try:
@@ -6862,66 +7564,11 @@ try:
 except Exception as exc:
     sys.stderr.write("invalid JSON: %s\n" % exc)
     sys.exit(2)
-
-
-def fail(message):
-    sys.stderr.write(message + "\n")
+try:
+    check_schema(data, schema, root)
+except ValueError as exc:
+    sys.stderr.write(str(exc) + "\n")
     sys.exit(2)
-
-
-def check(val, spec, where):
-    kind = spec.get("type")
-    if kind == "string" and not isinstance(val, str):
-        fail(f"{where} must be a string")
-    if kind == "boolean" and not isinstance(val, bool):
-        fail(f"{where} must be a boolean")
-    if kind == "array" and not isinstance(val, list):
-        fail(f"{where} must be an array")
-    if kind == "object" and not isinstance(val, dict):
-        fail(f"{where} must be an object")
-    if kind == "integer" and (not isinstance(val, int) or isinstance(val, bool)):
-        fail(f"{where} must be an integer")
-    if "const" in spec and val != spec["const"]:
-        fail(f"{where} must equal {spec['const']!r}")
-    if "enum" in spec and val not in spec["enum"]:
-        fail(f"{where} must be one of {spec['enum']}")
-    if kind == "string":
-        min_len = spec.get("minLength")
-        if min_len is not None and len(val) < min_len:
-            fail(f"{where} must be at least {min_len} character(s)")
-        if spec.get("format") == "date-time":
-            try:
-                datetime.fromisoformat(str(val).replace("Z", "+00:00"))
-            except ValueError:
-                fail(f"{where} must be an ISO-8601 date-time")
-        pattern = spec.get("pattern")
-        # JSON Schema `pattern` uses regular-expression search semantics, not
-        # an implicit whole-string match.  Schemas that require a full match
-        # carry their own ^...$ anchors.
-        if pattern and not re.search(pattern, val):
-            fail(f"{where} must match pattern {pattern}")
-    if kind == "array":
-        min_items = spec.get("minItems")
-        if min_items is not None and len(val) < min_items:
-            fail(f"{where} must have at least {min_items} item(s)")
-        item_spec = spec.get("items", {})
-        for idx, item in enumerate(val):
-            check(item, item_spec, f"{where}[{idx}]")
-    if kind == "object":
-        props = spec.get("properties", {})
-        if spec.get("additionalProperties") is False:
-            unknown = sorted(set(val) - set(props))
-            if unknown:
-                fail(f"{where} has unknown field(s): {', '.join(unknown)}")
-        for key in spec.get("required", []):
-            if key not in val:
-                fail(f"{where} missing required field: {key}")
-        for key, child in props.items():
-            if key in val:
-                check(val[key], child, f"{where}.{key}" if where else key)
-
-
-check(data, schema, root)
 PY
 }
 
@@ -7545,15 +8192,48 @@ print(json.dumps(current, separators=(",", ":")))
 ' "$_area" "$scopes_map_json")"
   done <<< "$_frontier_areas"
 
-  python3 - "$limit" "$SINGULAR_L1_LEASES_DIR" "$frontier_json" "$scopes_map_json" <<'PY'
+  python3 - "$limit" "$SINGULAR_L1_LEASES_DIR" "$frontier_json" "$scopes_map_json" \
+      "${SINGULAR_L1_SKIP_NODES_WITH_OPEN_TASKS:-0}" "$SINGULAR_TASKS_DIR" <<'PY'
 import json
 import os
+import re
 import sys
 
 limit = int(sys.argv[1])
 leases_dir = sys.argv[2]
 frontier_raw = sys.argv[3]
 scopes_map_raw = sys.argv[4] if len(sys.argv) > 4 else "{}"
+skip_open = len(sys.argv) > 5 and sys.argv[5] == "1"
+tasks_dir = sys.argv[6] if len(sys.argv) > 6 else ""
+
+# (d) OPT-IN (SINGULAR_L1_SKIP_NODES_WITH_OPEN_TASKS=1): a consumer whose
+# planner batches cover a whole node gains nothing from planning that node again
+# while its tasks are still being worked -- the planner can only answer "nothing
+# to plan", which burns a planner slot per cycle and is recorded as a failure.
+# A node with a task that is ready, in flight or accepted-awaiting-integration
+# is skipped. Failed, blocked and parked tasks do NOT hold the node: re-planning
+# is how those get superseded.
+OPEN_TASK_STATUSES = {"ready", "running", "in-progress", "in_progress", "leased",
+                      "dispatched", "accepted"}
+open_task_nodes = set()
+if skip_open and tasks_dir and os.path.isdir(tasks_dir):
+    for name in sorted(os.listdir(tasks_dir)):
+        if not re.fullmatch(r"TASK-\d+\.md", name):
+            continue
+        status = node = ""
+        try:
+            with open(os.path.join(tasks_dir, name), "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("## "):
+                        break
+                    if line.startswith("Status:"):
+                        status = line.split(":", 1)[1].strip().lower()
+                    elif line.startswith("DAG node:"):
+                        node = line.split(":", 1)[1].strip().strip("`")
+        except Exception:
+            continue
+        if node and status in OPEN_TASK_STATUSES:
+            open_task_nodes.add(node)
 
 try:
     frontier = json.loads(frontier_raw).get("frontier", [])
@@ -7618,6 +8298,8 @@ for entry in frontier:                       # DAG order preserved
     if not node:
         continue
     if node in active_nodes:                  # (a) node already leased
+        continue
+    if node in open_task_nodes:               # (d) node's batch is still open
         continue
     if area in active_areas:                  # (b) area already leased
         continue
@@ -7778,6 +8460,25 @@ with open(path, "w", encoding="utf-8") as f:
 PY
 }
 
+# The L1 planner cap for this cycle. An integer >= 1 is used as given. `auto`
+# takes the planner share reconcile computed from this cycle's resource plan
+# (SINGULAR_L1_AUTO_CONCURRENT = plannerSlots); a direct caller that never ran
+# a plan gets the historical default of 3. Anything else floors to 1, exactly
+# as the fanout always treated a non-numeric or zero cap.
+singular_l1_concurrency_cap() {
+  local raw="${SINGULAR_MAX_L1_CONCURRENT:-auto}" derived="${SINGULAR_L1_AUTO_CONCURRENT:-}"
+  if [[ "$raw" == "auto" ]]; then
+    if [[ "$derived" =~ ^[0-9]+$ && "$derived" -ge 1 ]]; then
+      printf '%s\n' "$derived"
+    else
+      printf '3\n'
+    fi
+    return 0
+  fi
+  [[ "$raw" =~ ^[0-9]+$ && "$raw" -ge 1 ]] || raw=1
+  printf '%s\n' "$raw"
+}
+
 # Plan up to SINGULAR_MAX_L1_CONCURRENT independent DAG nodes in parallel, then
 # import their staged task proposals serially. Concurrent planners write ONLY to
 # their private staging dir + their own lease + a private events file; the L0
@@ -7793,8 +8494,8 @@ singular_l1_fanout() {
     singular_append_event "origin.fanout_aborted" "STOP sentinel present; no l1 fanout" "{\"runId\":\"$run_id\"}"
     return 0
   fi
-  local cap="${SINGULAR_MAX_L1_CONCURRENT:-3}"
-  [[ "$cap" =~ ^[0-9]+$ && "$cap" -ge 1 ]] || cap=1
+  local cap
+  cap="$(singular_l1_concurrency_cap)"
   [[ -n "$remaining_capacity" ]] || remaining_capacity="$cap"
   [[ "$remaining_capacity" =~ ^[0-9]+$ ]] || remaining_capacity=0
   [[ "$cap" -gt "$remaining_capacity" ]] && cap="$remaining_capacity"
@@ -7871,8 +8572,14 @@ singular_l1_fanout() {
 	      import_nodes+=("${pnodes[$i]}")
 	    else
 	      planner_failures=$((planner_failures + 1))
+	      # Say why (0.23.7): the node driver's own last line, and whether the
+	      # planner's output was malformed (exit 4) rather than the provider or
+	      # the infrastructure failing.
+	      local plan_fail_reason plan_fail_kind="planner-failed"
+	      plan_fail_reason="$(grep -a "^plan-failed:" "$plan_root/${pnodes[$i]}/plan.log" 2>/dev/null | tail -1 | head -c 800)"
+	      [[ "$ec" -eq 4 ]] && plan_fail_kind="planner-output-malformed"
 	      singular_append_event "origin.l1_planner_failed" "l1 planner failed (isolated)" \
-	        "{\"runId\":\"$run_id\",\"node\":\"${pnodes[$i]}\",\"exitCode\":$ec}"
+	        "{\"runId\":\"$run_id\",\"node\":\"${pnodes[$i]}\",\"exitCode\":$ec,\"failureKind\":\"$plan_fail_kind\",\"reason\":$(printf '%s' "$plan_fail_reason" | singular_json_escape)}"
 	    fi
 	  done
 	  if [[ "${#import_nodes[@]}" -gt 0 ]]; then
@@ -8284,7 +8991,7 @@ singular_readonly_guard_sweep() {
 # Two attempts with the same fingerprint did the same thing and got the same
 # answer, so the next one will too.
 #
-# TASK-0006 spent attempts 2 through 6 at a byte-identical head SHA on an
+# Repeated attempts can leave a byte-identical head SHA on an
 # identical failure — 25 minutes of worker, gate and decider cycles on a rerun
 # that could not have differed. `prev_failure_class` already existed but was only
 # used to escalate the fast path to the model decider, never to stop.
@@ -9382,7 +10089,17 @@ P0/P1 findings require nonblank trigger, impact, and requirement.
 Missing support never downgrades a finding or authorizes acceptance.
 
 Use accepted when there are no blocking findings, including reviews with
-only P2/P3 backlog items. Do not emit reviewPolicy; it is host-owned.
+only P2/P3 backlog items. Do not emit reviewPolicy or hostNormalization;
+they are host-owned.
+
+Add no member the schema does not define, at the top level or inside a
+classifiedFindings[] or verificationResults[] item. A classifiedFindings
+item may carry only id, severity, summary, trigger, impact, requirement,
+location, and assumptionId.
+
+An accepted verdict that reports a prior finding "still-open" must repeat
+that finding's text verbatim in findings and classify it (P2/P3 backlog).
+A prior P0/P1 finding that is still open means needs-fix, not accepted.
 TXT
 }
 
@@ -10261,7 +10978,7 @@ fi
 
 # ---- Context-evolution loader (structural hook) -----------------------------
 # Source every engine/ctx-*.sh once, in sorted order, AFTER all generic engine
-# functions and modules are defined so context-evolution slices get the last
+# functions and modules are defined so context modules get the last
 # word. This block is the ONLY place ctx-*.sh files load: later stages ship
 # context logic as new engine/ctx-*.sh files, never by editing lib.sh again. A
 # ctx file that fails to source is FATAL (fail closed) — never silently skipped.

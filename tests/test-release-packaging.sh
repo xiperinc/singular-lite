@@ -3,6 +3,20 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
+# Inspect the actual payload loop without running the installer or touching a
+# user's installation. The licence must travel with every installed payload.
+python3 - "$ROOT" <<'PY'
+import pathlib
+import re
+import sys
+root = pathlib.Path(sys.argv[1])
+installer = (root / "install.sh").read_text()
+payload = re.search(r'for item in ([^;]+); do\s+copy "\$item"\s+done', installer)
+assert payload, "installer payload loop not found"
+assert "LICENSE" in payload.group(1).split(), "installer omits LICENSE"
+assert (root / "LICENSE").is_file(), "payload licence is missing"
+PY
+
 # VERSION is the single source of truth; everything else must AGREE with it.
 # These three used to hard-code the release string, so the suite went red on
 # every version bump and told you nothing except that someone had bumped the
@@ -70,7 +84,7 @@ for config in configs:
     assert config["resources"] == {
         "diskReserveBytes": 2147483648,
         "estimatedWorktreeBytes": 268435456,
-        "maxConcurrent": 3,
+        "maxConcurrent": "auto",
     }
     assert config["controlState"]["commitIntervalSeconds"] == 300
     assert config["legacyCompatibility"] == {"unboundWaivers": False}

@@ -86,7 +86,7 @@
 
 /* ---- 2. gates ------------------------------------------------------------- */
 .home-gates-val { margin-left: auto; font-size: 13px; font-weight: 600; color: var(--ink); }
-/* cohort split (PMGO-002): current-campaign headline + a faint historical/all-time
+/* cohort split: current-campaign headline + a faint historical/all-time
    subline. One wrapper carries the auto margin so the pair stays right-aligned. */
 .home-gates-nums { margin-left: auto; display: inline-flex; align-items: baseline; gap: 9px; min-width: 0; }
 .home-gates-nums .home-gates-val { margin-left: 0; }

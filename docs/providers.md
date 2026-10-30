@@ -3,7 +3,16 @@
 Each shipped provider is one row in `engine/providers.json` and one
 `engine/<name>-run.sh` adapter. `singular doctor` and the console read that
 spec; adapters load their row at spawn so model defaults and update pins are
-not copied into six scripts.
+not duplicated across adapters.
+
+The Claude provider's shipped default model is `claude-sonnet-5-5` as of
+0.23.7. Every Claude call inherits it unless a model override applies. Effort
+defaults are unchanged. The plan critic, the planner's repair round, the paired
+audit, the supervisor briefing and `singular ask` read only `SINGULAR_CLAUDE_MODEL`,
+then the provider default. A project that pins models by role only must also
+set `SINGULAR_CLAUDE_MODEL=claude-opus-4-8` in its configuration to keep every
+Claude call on the old model; any role-specific pins for other models still win
+for calls that read them. See the [upgrade note](upgrade.md) for precedence.
 
 ## Role runners
 
@@ -104,10 +113,23 @@ for the worktree, `$SINGULAR_ROOT`, and `$SINGULAR_STATE_DIR` (deduped,
 `pwd -P`). Tool denials, the read-only system-prompt clause, and the post-run
 restore guard stay in place.
 
-`SINGULAR_CLAUDE_OS_SANDBOX=0` skips the OS sandbox (tests of the restore guard).
-`SINGULAR_CLAUDE_SANDBOX_EXEC` overrides the tool path.
+Writable levels (`l0` / `l1` / `l2`) use the same wrapper under those conditions,
+with a workspace profile: deny writes under `$SINGULAR_ROOT` and
+`$SINGULAR_STATE_DIR`, allow writes in the candidate worktree, then deny the
+state directory again so nesting it inside the worktree cannot reopen it.
+Temporary-directory and configured build-cache allowances precede the denies.
+Only existing directories are resolved and included. The profile starts with
+`(allow default)`; it does not deny writes everywhere outside the worktree.
 
-Non-readonly levels (`l0` / `l1` / `l2`) do not wrap the argv.
+`SINGULAR_CLAUDE_SANDBOX_EXEC` overrides the tool path.
+`SINGULAR_CLAUDE_OS_SANDBOX=0` disables the wrapper. When the tool is unavailable,
+even `SINGULAR_CLAUDE_OS_SANDBOX=1` does not by itself refuse the invocation.
+The required-enforcement flags make this fail closed: read-only calls with
+`SINGULAR_RUNNER_REQUIRE_OS_READONLY=1`, or writable calls with
+`SINGULAR_RUNNER_REQUIRE_OS_WORKSPACE=1`, exit 78 if wrapping is disabled or the
+sandbox executable is unavailable. Without the applicable requirement, the
+adapter can run without OS containment. Read-only tool denials remain; the
+separate restore guard follows `SINGULAR_READONLY_GUARD_MODE`.
 
 ### Grok
 

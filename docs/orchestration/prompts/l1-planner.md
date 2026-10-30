@@ -25,10 +25,10 @@ Required completion: `[REQUIRED-COMPLETION]`
 - The repository's build plan or design documents, when it has them (the area
   state file names them); find the section for this area's stage and read its
   responsibilities and exit gate.
-- `docs/orchestration/brain-tasks/` — existing task files and their `Status:` headers
+- `docs/orchestration/tasks/` — existing task files and their `Status:` headers
   (the inline summary below lists them). Completed work has `Status: accepted`
   or `Status: integrated`.
-- `docs/orchestration/brain-tasks/TEMPLATE.md` — the exact task-file structure to follow.
+- `docs/orchestration/tasks/TEMPLATE.md` — the exact task-file structure to follow.
 - [AREA-PATHS] — the area's owned paths; current code, to choose the next
   smallest brick that builds on what exists.
 
@@ -48,7 +48,7 @@ Required completion: `[REQUIRED-COMPLETION]`
   depend on another task in the same batch, and owned files must not overlap.
 - `Status: ready`. `Area: [AREA]`. `DAG node: [NODE]` (the executable node this
   task belongs to -- required for duplicate detection and gate promotion).
-  `Worker branch: codex/[AREA]/<task-id>-<kebab-slug>`.
+  `Worker branch: agent/[AREA]/<task-id>-<kebab-slug>`.
   `Test policy: strict_test_first`.
   `Gate command: [GATE-COMMAND]`.
 - `Dispatch mode: canonical`.
@@ -112,21 +112,10 @@ Output ONLY a JSON object matching
   "tasks": [
     {
       "taskId": "TASK-XXXX",
-      "markdown": "# TASK-XXXX: <title>\n\nStatus: ready\nArea: [AREA]\nDAG node: [NODE]\nTarget branch: `[TARGET]`\nWorker branch: `codex/[AREA]/TASK-XXXX-<slug>`\nTest policy: `strict_test_first`\nGate command: `[GATE-COMMAND]`\nDispatch mode: canonical\nDepends on: []\n\n## Objective\n\n...\n"
+      "markdown": "# TASK-XXXX: <title>\n\nStatus: ready\nArea: [AREA]\nDAG node: [NODE]\nTarget branch: `[TARGET]`\nWorker branch: `agent/[AREA]/TASK-XXXX-<slug>`\nTest policy: `strict_test_first`\nGate command: `[GATE-COMMAND]`\nDispatch mode: canonical\nDepends on: []\n\n## Objective\n\n...\n"
     }
   ]
 }
 ```
 
 No code fences, no commentary before or after.
-
-
-## Brain campaign task width and authority
-
-Read docs/brain-build-plan/campaign.md and docs/orchestration/planner-contract.md.
-Their vertical-task scope explicitly supersedes the generic one-implementation-
-file-plus-one-test slice convention above: up to 8 named files are allowed when
-required to deliver a usable capability. A vendored upstream or test-fixture
-subtree may be owned as a directory. Prefer 1–3 substantive tasks per node.
-Do not write the node end-to-end acceptance file until the task closes ALL node
-requirements. Use a scoped meaningful host gate, and full regression in B5.

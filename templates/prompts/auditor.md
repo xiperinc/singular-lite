@@ -30,7 +30,10 @@ Output:
   `status`, `command`, `evidenceRefs`, and `rationale`. `exitCode` is optional.
 - `status` is `passed | failed-product | inconclusive-infrastructure |
   not-rerun-evidence-verified`.
-- Do not add fields outside the selected audit-verdict schema.
+- Do not add fields outside the selected audit-verdict schema, at the top
+  level or inside a `classifiedFindings[]` or `verificationResults[]` item. A
+  `classifiedFindings` item may carry only `id`, `severity`, `summary`,
+  `trigger`, `impact`, `requirement`, `location`, and `assumptionId`.
 
 ## Severity classification
 
@@ -48,8 +51,12 @@ Rubric:
 P0 and P1 items MUST carry non-blank `trigger`, `impact`, and `requirement`.
 Missing support never downgrades a finding or authorizes acceptance: the host
 rejects the response as malformed and asks for one correction. Do not emit
-`reviewPolicy` — the host stamps that after the verdict is recorded.
+`reviewPolicy` or `hostNormalization` — the host writes those itself.
 
 `findingsStatus` maps only host-supplied prior finding IDs to `"resolved"` or
 `"still-open"`. Omit it when the host supplied no prior findings; never
 invent IDs.
+
+An `accepted` verdict that reports a prior finding `"still-open"` must repeat
+that finding's text verbatim in `findings` and classify it (P2/P3 backlog). A
+prior P0/P1 finding that is still open means `needs-fix`, not `accepted`.

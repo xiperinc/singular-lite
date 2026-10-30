@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import sys
 from typing import Any
 
@@ -121,6 +122,58 @@ def _acceptance(lines: list[str]) -> list[str]:
     return [item for item in criteria if item.strip()]
 
 
+def proof_preflight_reasons(task: dict[str, Any]) -> list[str]:
+    """Validate optional proof declarations without running the command.
+
+    Missing fields stay absent in legacy task JSON. Proof paths use the same
+    lexical, segment-boundary ownership as scope checks; they need not exist
+    until the implementer writes them.
+    """
+    reasons: list[str] = []
+    command = task.get("proofCommand", "")
+    proofs = task.get("proofTests", [])
+    if not isinstance(command, str):
+        reasons.append("Proof command must be a string")
+    if not isinstance(proofs, list) or not all(isinstance(p, str) for p in proofs):
+        reasons.append("Proof tests must be a JSON array of repository paths")
+    if reasons:
+        return reasons
+
+    if command.strip() and not proofs:
+        reasons.append("missing Proof tests: declare the paths checked by Proof command")
+    if proofs and not command.strip():
+        reasons.append("missing Proof command: declare the program that checks Proof tests")
+    if command.strip():
+        # Reject operators even inside quoted arguments: the declared command
+        # must not contain shell composition or substitution syntax.
+        if (any(char in command for char in "|&;<>`") or "$(" in command
+                or any(ord(char) < 32 and char != "\t" for char in command)
+                or "\x7f" in command):
+            reasons.append("Proof command must be one program and its arguments; shell operators and substitutions are not allowed")
+        else:
+            try:
+                argv = shlex.split(command)
+                if not argv or not argv[0]:
+                    raise ValueError("empty program")
+            except ValueError:
+                reasons.append("Proof command must name one program with valid argument quoting")
+
+    owned = task.get("ownedFiles") or []
+    for path in proofs:
+        try:
+            validate_scope_path(path)
+        except TaskParseError as exc:
+            reasons.append(f"Proof tests: {exc}")
+            continue
+        if not any(
+            isinstance(own, str) and own.rstrip("/")
+            and (path.rstrip("/") == own.rstrip("/") or path.startswith(own.rstrip("/") + "/"))
+            for own in owned
+        ):
+            reasons.append(f"Proof tests path is outside owned files: {path}")
+    return reasons
+
+
 def parse_task(path: str | os.PathLike[str]) -> dict[str, Any]:
     source = Path(path)
     task_document = source.read_text(encoding="utf-8")
@@ -186,6 +239,22 @@ def parse_task(path: str | os.PathLike[str]) -> dict[str, Any]:
                 elif key in ("supersedes", "superseded by"):
                     field = "supersedes" if key == "supersedes" else "supersededBy"
                     data[field] = _depends(value)
+                elif key in ("proof command", "proof tests"):
+                    field = "proofCommand" if key == "proof command" else "proofTests"
+                    if field in data:
+                        raise TaskParseError(f"{source}:{number}: duplicate {key} header")
+                    value = value.strip()
+                    # Remove one Markdown code span, preserving inner quoting
+                    # and backticks for validation rather than stripping them.
+                    if value.startswith("`") and value.endswith("`") and len(value) >= 2:
+                        value = value[1:-1]
+                    if key == "proof command":
+                        data[field] = value
+                    else:
+                        try:
+                            data[field] = json.loads(value)
+                        except json.JSONDecodeError:
+                            raise TaskParseError(f"{source}:{number}: Proof tests must be a JSON array of repository paths") from None
                 elif key in header_keys:
                     data[header_keys[key]] = value.strip().strip("`").strip()
             continue

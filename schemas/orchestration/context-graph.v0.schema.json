@@ -27,7 +27,7 @@
         "recordType": {
           "type": "string",
           "minLength": 1,
-          "description": "Optional S0-S5 source record/event type this line projects from (see docs/context-build-plan/graph-event-mapping.md)."
+          "description": "Optional S0-S5 source record/event type this line projects from (see docs/context-graph.md#durable-recordevent-coverage-every-source-is-mapped)."
         }
       }
     },

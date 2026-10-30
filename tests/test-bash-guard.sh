@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# PMGO-007: engine/bash-guard.sh is the ONE Bash >= 4 gate, and cli/singular
+# engine/bash-guard.sh is the ONE Bash >= 4 gate, and cli/singular
 # embeds a verbatim copy of it (the CLI cannot source a file it needs Bash >= 4
 # to locate). This covers the guard's whole contract:
 #
@@ -123,7 +123,7 @@ else
 fi
 
 # --- e2) the bare-3.2-no-env case: fallback probes must find a Bash >= 4 ----
-# This is the exact gap PMGO-007 named — the old CLI guard only re-exec'd when
+# The old CLI guard only re-executed when
 # SINGULAR_BASH_BIN was set, so `/bin/bash <script>` ran unguarded under 3.2.
 if [[ "$legacy_bash" == "yes" ]]; then
   if [[ -x /opt/homebrew/bin/bash || -x /usr/local/bin/bash ]]; then
@@ -141,7 +141,7 @@ else
 fi
 
 # --- f) the CLI's embedded copy behaves identically -------------------------
-# A bare `/bin/bash singular` with NO SINGULAR_* env is the gap PMGO-007 named:
+# A bare `/bin/bash singular` with NO SINGULAR_* env must also bootstrap:
 # it used to fall straight through the old pin-only guard.
 if [[ "$legacy_bash" == "yes" ]]; then
   rc=0
@@ -163,7 +163,7 @@ fi
 # --- h) the harness hands every test a Bash >= 4 interpreter ---------------
 # tests/run.sh used to launch each test with a bare `bash`. With a 3.2 first on
 # PATH that turned one environmental fact into one failure per test file — the
-# cascade PMGO-007 is about. Prove it launches "$BASH" (already vetted >= 4)
+# cascade of interpreter failures. Prove it launches "$BASH" (already vetted >= 4)
 # even when PATH-bash is ancient.
 if [[ "$legacy_bash" == "yes" ]]; then
   fx="$tmp/harness"

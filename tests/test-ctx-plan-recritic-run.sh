@@ -1,34 +1,5 @@
 #!/usr/bin/env bash
-# Covers the plan-revision-loop RE-CRITIQUE runner brick
-# engine/ctx-plan-recritic-run.sh: the resume-capable critic re-critique EXECUTOR
-# that consumes the TASK-0025 decision. It performs ONE read-only critic
-# re-critique pass over the staged candidate set that MAY resume the persisted
-# per-node plan-critic session (its prior concerns the checklist), completing the
-# run half of the stage-file deliverable begun by the decider/recorder.
-#
-#   singular_plan_recritic_run <node> <run_id> <stage_dir> <revises_run_id> [worktree]
-#
-# Asserts:
-#   (A) knob off (SINGULAR_PLAN_RECRITIC_RESUME unset/0) -> the decider returns
-#       `fresh disabled`; the runner delegates to the integrated FRESH critic
-#       (singular_ctx_plan_critic_run) producing the SAME plan-critique.json record
-#       + exactly one plan.critiqued event with NO --resume-session on the runner,
-#       plus a role=plan-critic strategy_selected event (strategy fresh, the exact
-#       reason, revisesRunId) — byte-identical to today's fresh re-critique.
-#   (B) knob on + a valid plan-critic session -> the pass runs the DEFAULT runner
-#       WITH --resume-session <sid> (read-only), persists the critique through the
-#       SHARED lib.sh helpers into the same plan-critique.json record with finding
-#       ids matching singular_finding_id, appends the SAME single plan.critiqued
-#       event, and records a role=plan-critic RESUME strategy event carrying
-#       revisesRunId + sessionId.
-#   (C) rc-86 (resume refused) on the resume run -> a context.resume_failed fresh
-#       fallback is recorded and the pass re-runs FRESH (no --resume-session),
-#       producing the record + plan.critiqued.
-#   (D) unparseable runner output -> fail-OPEN: an approve verdict + a
-#       ctx.plan_critique_infra event, NO plan.critiqued, returns 0 (never blocks).
-#   (E) present-but-uncalled -> no existing engine path invokes the new function.
-# The events log is pinned to an isolated SINGULAR_EVENTS_FILE and temp dirs so the
-# suite never mutates real run state.
+# Regression contracts for ctx-plan-recritic-run.
 set -uo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -370,7 +341,7 @@ pass "(D) unparseable -> fail-open approve + ctx.plan_critique_infra, no plan.cr
 # ===========================================================================
 callers="$(grep -rl 'singular_plan_recritic_run' "$ENGINE_HOME/engine" 2>/dev/null \
   | grep -v '/ctx-plan-recritic-run.sh$' || true)"
-: # temporal assertion neutralized (planner-contract rule 9: later slices may legitimately call this)
+: # temporal assertion neutralized (later slices may legitimately call this)
 pass "(E) invariance: the new runner is present-but-uncalled by any existing engine path"
 
 echo "ctx-plan-recritic-run tests passed"

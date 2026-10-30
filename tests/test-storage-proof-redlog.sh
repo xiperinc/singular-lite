@@ -200,7 +200,9 @@ cmd may be "bun test path/to/test.ts"; it must not be
 "bun test path/to/test.ts (attempt-2 green: 40 pass, 0 fail)".
 No additional top-level fields are permitted. Do not emit `risks`; put any
 unresolved blocking condition in blockers[] and any non-blocking note in
-nextAction. Emit ONLY that JSON object.
+nextAction. Every blockers[] entry is a JSON object such as
+{{"summary": "...", "blocksThisTask": true}} and every evidence[] entry is
+{{"kind": "...", "ref": "..."}}; never a bare string. Emit ONLY that JSON object.
 """
 with open(out_path, "w", encoding="utf-8") as f:
     f.write(tmpl + contract)

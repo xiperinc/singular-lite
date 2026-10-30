@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import errno
 import copy
 import datetime as dt
 import hashlib
@@ -1620,7 +1621,7 @@ def collect_gates_summary(repo: Path) -> dict[str, Any]:
     hardwired gateD0/gateD1 subprocess probes): passed/total across every
     registry node plus the per-node gate status ("absent" when no file), plus
     `cohorts` splitting that passed set into historical accepted-as-done
-    evidence and what the current campaign earned (PMGO-002)."""
+    evidence and what the current campaign earned."""
     registry_ids = list(load_dag_registry(repo).get("by_id") or {})
     records = _all_gate_records(repo)
     by_node = {node_id: str((records.get(node_id) or {}).get("status") or "absent")
@@ -1728,6 +1729,35 @@ def collect_resource_plan_native(repo: Path) -> dict[str, Any]:
         reason = "insufficient-disk-after-reserve"
     else:
         reason = "disk-limited-concurrency"
+    # Resource governor view. The console never probes the machine itself: the
+    # per-resource slots, load and admission shown here are the ones the last
+    # reconcile cycle measured and acted on (engine/resource_governor.py), so
+    # the page cannot disagree with the loop about why it is holding work.
+    # With `maxConcurrent: "auto"` and no cycle yet, `configured` above is the
+    # historical default of 3 and `governor` is absent.
+    governor: dict[str, Any] = {}
+    if isinstance(prior, dict) and source == "latest-reconcile":
+        for key in (
+            "mode", "capacityReason", "cpuSlots", "memorySlots", "diskSlots",
+            "plannerSlots", "cpuCount", "loadAverage1m", "loadPerCore",
+            "availableMemoryBytes", "estimatedWorkerBytes", "memoryReserveBytes",
+            "admission", "admissionReason", "progressFloor", "loadHighWater", "loadLowWater",
+            "probeFailures",
+        ):
+            if key in prior:
+                governor[key] = prior[key]
+        # Disk is the one fact recomputed live above; keep the view consistent.
+        if "diskSlots" in governor:
+            governor["diskSlots"] = affordable
+        if governor.get("admission") in ("throttled", "floor") and effective > 0 \
+                and governor.get("admissionReason") in ("load-high", "memory-low"):
+            reason = governor["admissionReason"] + (
+                "-floor" if governor.get("admission") == "floor" else "")
+        elif governor.get("mode") == "auto" and effective > 0 and effective == configured \
+                and governor.get("capacityReason") in ("cpu-bound", "memory-bound", "probe-unavailable"):
+            reason = governor["capacityReason"]
+        elif governor.get("mode") == "auto" and effective < configured:
+            reason = "disk-bound"
     return {
         "schema": "singular.orchestration.resource-plan.v0",
         "configuredSlots": configured,
@@ -1739,6 +1769,7 @@ def collect_resource_plan_native(repo: Path) -> dict[str, Any]:
         "reason": reason,
         "source": source,
         **({"recordRef": str(latest)} if latest else {}),
+        **({"governor": governor} if governor else {}),
     }
 
 
@@ -3523,6 +3554,24 @@ class ConfigurationUnavailable(RuntimeError):
 
 _CONFIGURATION_LOCK = threading.RLock()
 
+# A bound configuration input that changes on disk (the plan was regenerated,
+# the operator edited singular.config.json) starts a new generation in-process
+# instead of refusing every read until the console is restarted. The reload is
+# the same single lib.sh resolution that startup and POST /api/settings run; it
+# happens once per detected change, never on a steady-state read. Set
+# SINGULAR_CONSOLE_CONFIG_RELOAD=0 to keep the strict pre-0.23.5 contract (reads
+# never resolve configuration; a change answers 409 until restart).
+CONFIGURATION_AUTO_RELOAD = os.environ.get("SINGULAR_CONSOLE_CONFIG_RELOAD", "1") != "0"
+# Resolutions attempted per reload when an input is rewritten mid-resolution.
+_CONFIGURATION_RELOAD_ATTEMPTS = 2
+# An unsettled snapshot (inputs still moving after those attempts) is reloaded
+# by a later read, but no more often than this.
+_CONFIGURATION_UNSETTLED_RETRY_SECONDS = 2.0
+# Liveness and static routes never run a reload themselves and never wait this
+# long behind one: `singular console --ensure` probes /api/health with a 2s
+# budget and would otherwise start a second console during a slow resolution.
+_CONFIGURATION_PEEK_LOCK_SECONDS = 0.5
+
 
 def _diagnostic_bash() -> str | None:
     configured = str(os.environ.get("SINGULAR_BASH_BIN") or "").strip()
@@ -3542,6 +3591,23 @@ def _diagnostic_infrastructure_path(selected_bash: str | None) -> str:
         "/opt/homebrew/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin",
     ]
     return os.pathsep.join(dict.fromkeys(p for p in candidates if p and Path(p).is_dir()))
+
+
+def _resolution_failure_detail(stderr: str | None) -> str:
+    """Why lib.sh could not resolve, in the engine's own words.
+
+    Only the engine's `singular: …` diagnostic and a JSON decode position are
+    passed through (neither quotes file content); arbitrary shell output from a
+    repo's singular.config.sh is not."""
+    found: dict[str, str] = {}
+    for line in reversed((stderr or "").splitlines()):
+        line = line.strip()
+        if line.startswith("singular: ") and "engine" not in found:
+            found["engine"] = line[len("singular: "):]
+        elif line.startswith("json.decoder.JSONDecodeError: ") and "json" not in found:
+            found["json"] = line[len("json.decoder."):]
+    parts = [found[key] for key in ("engine", "json") if key in found]
+    return "; ".join(parts)[:400]
 
 
 def _compute_effective_configuration(repo: Path) -> dict[str, Any]:
@@ -3592,9 +3658,13 @@ def _compute_effective_configuration(repo: Path) -> dict[str, Any]:
             selected_path = Path(selected).expanduser() if selected else repo / "singular.config.json"
             if not selected_path.is_absolute():
                 selected_path = repo / selected_path
+            detail = _resolution_failure_detail(proc.stderr)
             return _unavailable_effective_configuration(
                 repo,
-                f"effective configuration projection failed for {selected_path.resolve()} (exit {proc.returncode})",
+                (f"configuration could not be loaded (exit {proc.returncode}): {detail}"
+                 if detail else
+                 f"effective configuration projection failed for {selected_path.resolve()} "
+                 f"(exit {proc.returncode})"),
                 reason="configuration-load-failed",
             )
     return _unavailable_effective_configuration(
@@ -3721,6 +3791,19 @@ def _configuration_bindings(view: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     return tuple(_configuration_file_identity(label, path) for label, path in paths)
 
 
+def _bindings_modified_since(bindings: tuple[dict[str, Any], ...], since_ns: int) -> bool:
+    """True when any bound file was written at or after ``since_ns``."""
+    for item in bindings:
+        if item.get("status") != "file" or not item.get("path"):
+            continue
+        try:
+            if os.stat(item["path"]).st_mtime_ns >= since_ns:
+                return True
+        except OSError:
+            return True
+    return False
+
+
 def _configuration_generation_id(env_digest: str,
                                  bindings: tuple[dict[str, Any], ...]) -> str:
     payload = json.dumps({"environment": env_digest, "files": bindings},
@@ -3751,16 +3834,32 @@ class _ConfigurationSnapshots:
     def __init__(self) -> None:
         self._snapshots: dict[str, dict[str, Any]] = {}
         self._local = threading.local()
+        self._kick_lock = threading.Lock()
+        self._kicked = False
 
-    def initialize(self, repo: Path, *, force: bool = False) -> dict[str, Any]:
+    def initialize(self, repo: Path, *, force: bool = False,
+                   reload: dict[str, Any] | None = None) -> dict[str, Any]:
         root = Path(repo).resolve()
         key = str(root)
         with _CONFIGURATION_LOCK:
             if not force and key in self._snapshots:
                 return self._snapshots[key]["view"]
-            environment = _environment_digest()
-            view = _compute_effective_configuration(root)
-            bindings = _configuration_bindings(view)
+            # A resolution is only trustworthy for the bytes it actually read.
+            # If a bound file is rewritten while lib.sh runs (a regenerated plan
+            # writes several inputs in a row), the hash taken afterwards would
+            # bind the NEW bytes to a view computed from the OLD ones and the
+            # stale view would look current forever. Resolve again, and if the
+            # inputs still move, mark the snapshot unsettled so the next read
+            # reloads once more.
+            unsettled = False
+            for _attempt in range(_CONFIGURATION_RELOAD_ATTEMPTS):
+                started_ns = time.time_ns()
+                environment = _environment_digest()
+                view = _compute_effective_configuration(root)
+                bindings = _configuration_bindings(view)
+                unsettled = _bindings_modified_since(bindings, started_ns)
+                if not unsettled:
+                    break
             generation_id = _configuration_generation_id(environment, bindings)
             view = copy.deepcopy(view)
             available = (view.get("configuration") or {}).get("status") != "error"
@@ -3771,9 +3870,21 @@ class _ConfigurationSnapshots:
                     (view.get("configuration") or {}).get("restartRequired")
                 ),
                 "boundInputCount": len(bindings) + 1,
+                "autoReload": CONFIGURATION_AUTO_RELOAD,
             }
+            previous = self._snapshots.get(key) or {}
+            reloads = int(previous.get("reloads") or 0)
+            last_reload = previous.get("lastReload")
+            if reload is not None:
+                reloads += 1
+                last_reload = reload
+            if reloads:
+                view["generation"]["reloadCount"] = reloads
+                view["generation"]["lastReload"] = last_reload
             self._snapshots[key] = {
                 "view": view, "environment": environment, "bindings": bindings,
+                "unsettled": unsettled, "reloads": reloads, "lastReload": last_reload,
+                "boundAt": time.monotonic(),
             }
             return view
 
@@ -3786,47 +3897,117 @@ class _ConfigurationSnapshots:
             for item in changed
         ]
         generation = dict(previous.get("generation") or {})
-        generation.update({"status": "changed", "restartRequired": True})
+        generation.update({"status": "changed",
+                           "restartRequired": not CONFIGURATION_AUTO_RELOAD})
         return {
             "schema": "singular.effective-configuration.v1",
             "configuration": {
                 "status": "error", "reason": "configuration-changed",
-                "message": "configuration inputs changed; restart the console or apply settings again",
-                "restartRequired": True, "changedInputs": details,
+                "message": ("configuration inputs changed; reloading"
+                            if CONFIGURATION_AUTO_RELOAD else
+                            "configuration inputs changed; restart the console or apply settings again"),
+                "restartRequired": not CONFIGURATION_AUTO_RELOAD, "changedInputs": details,
             },
             "generation": generation,
             "runner": None, "provider": "unknown", "targetBranch": None,
             "roles": {}, "settings": {}, "paths": {}, "providerRuntime": {},
         }
 
-    def get(self, repo: Path) -> dict[str, Any]:
+    def _reload_in_background(self, root: Path) -> None:
+        with self._kick_lock:
+            if self._kicked:
+                return
+            self._kicked = True
+
+        def run() -> None:
+            try:
+                self.get(root)
+            except Exception as exc:  # daemon thread: report, never raise
+                sys.stderr.write(f"singular console: configuration reload failed: {exc}\n")
+            finally:
+                with self._kick_lock:
+                    self._kicked = False
+
+        threading.Thread(target=run, daemon=True).start()
+
+    @staticmethod
+    def _changed_inputs(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+        changed: list[dict[str, Any]] = []
+        if _environment_digest() != snapshot["environment"]:
+            changed.append({"label": "environment", "path": None,
+                            "previousStatus": "bound", "currentStatus": "changed"})
+        current = _configuration_bindings(snapshot["view"])
+        for before, after in zip(snapshot["bindings"], current):
+            if before != after:
+                changed.append({"label": before["label"], "path": after.get("path"),
+                                "previousStatus": before.get("status"),
+                                "currentStatus": after.get("status")})
+        return changed
+
+    def get(self, repo: Path, *, reload: bool = True) -> dict[str, Any]:
         requested = Path(repo)
         root = requested.resolve()
         key = str(root)
         pinned = getattr(self._local, "pinned", None)
         if pinned and key in pinned:
             return pinned[key]
+        if not reload:
+            # Peek: validate if the lock is free, otherwise hand back whatever
+            # is published. A detected change is reloaded off-thread.
+            if not _CONFIGURATION_LOCK.acquire(timeout=_CONFIGURATION_PEEK_LOCK_SECONDS):
+                snapshot = self._snapshots.get(key)
+                return snapshot["view"] if snapshot else _uninitialized_configuration(requested)
+            try:
+                snapshot = self._snapshots.get(key)
+                if snapshot is None:
+                    return _uninitialized_configuration(requested)
+                changed = self._changed_inputs(snapshot)
+                if not changed:
+                    return snapshot["view"]
+                if CONFIGURATION_AUTO_RELOAD:
+                    self._reload_in_background(root)
+                return self._changed_view(snapshot, changed)
+            finally:
+                _CONFIGURATION_LOCK.release()
         with _CONFIGURATION_LOCK:
             snapshot = self._snapshots.get(key)
             if snapshot is None:
                 return _uninitialized_configuration(requested)
-            changed: list[dict[str, Any]] = []
-            if _environment_digest() != snapshot["environment"]:
-                changed.append({"label": "environment", "path": None,
-                                "previousStatus": "bound", "currentStatus": "changed"})
-            current = _configuration_bindings(snapshot["view"])
-            for before, after in zip(snapshot["bindings"], current):
-                if before != after:
-                    changed.append({"label": before["label"], "path": after.get("path"),
-                                    "previousStatus": before.get("status"),
-                                    "currentStatus": after.get("status")})
-            return self._changed_view(snapshot, changed) if changed else snapshot["view"]
+            changed = self._changed_inputs(snapshot)
+            unsettled = (
+                CONFIGURATION_AUTO_RELOAD and snapshot.get("unsettled")
+                and time.monotonic() - snapshot.get("boundAt", 0.0)
+                >= _CONFIGURATION_UNSETTLED_RETRY_SECONDS
+            )
+            if not changed and not unsettled:
+                return snapshot["view"]
+            if not CONFIGURATION_AUTO_RELOAD:
+                return self._changed_view(snapshot, changed)
+            # Re-bind in process. Holding _CONFIGURATION_LOCK makes this
+            # single-flight: concurrent readers wait and then observe the
+            # replacement generation, and a settings write (same lock) is either
+            # wholly before or wholly after it. Requests already pinned to the
+            # old generation finish on it; their cache slots are keyed by the old
+            # generation id and cannot be read by the new one. If the new inputs
+            # do not load, the published view is the resolver's error projection
+            # (reads answer 409 with its reason) bound to the same files, so
+            # fixing them is itself a detected change and recovers the same way.
+            return initialize_configuration(root, force=True, reload={
+                "at": utc_now(),
+                "previousGeneration": (snapshot["view"].get("generation") or {}).get("id"),
+                "changedInputs": [
+                    {"label": item["label"], "path": item.get("path"),
+                     "previousStatus": item.get("previousStatus"),
+                     "currentStatus": item.get("currentStatus")}
+                    for item in changed
+                ],
+            })
 
     @contextlib.contextmanager
-    def pin(self, repo: Path):
+    def pin(self, repo: Path, *, reload: bool = True):
         root = Path(repo).resolve()
         key = str(root)
-        view = self.get(root)
+        view = self.get(root, reload=reload)
         prior = getattr(self._local, "pinned", None)
         pinned = dict(prior or {})
         pinned[key] = view
@@ -3856,13 +4037,31 @@ class _ConfigurationSnapshots:
 _EFFECTIVE_CONFIGURATION_CACHE = _ConfigurationSnapshots()
 
 
-def initialize_configuration(repo: Path, *, force: bool = False) -> dict[str, Any]:
-    """Execute the trusted startup boundary and atomically publish its view."""
+def initialize_configuration(repo: Path, *, force: bool = False,
+                             reload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Execute the trusted resolution boundary and atomically publish its view.
+
+    Called at startup, by POST /api/settings, and (``reload`` set) when a bound
+    input changed on disk. A reload also retires every derived cache and the
+    engine helper modules loaded from the previous generation's engine."""
     global TARGET_BRANCH
-    view = _EFFECTIVE_CONFIGURATION_CACHE.initialize(Path(repo), force=force)
-    configuration = view.get("configuration") or {}
-    if configuration.get("status") != "error" and view.get("targetBranch"):
-        TARGET_BRANCH = str(view["targetBranch"])
+    with _CONFIGURATION_LOCK:
+        if reload is not None:
+            _forget_engine_modules()
+        view = _EFFECTIVE_CONFIGURATION_CACHE.initialize(
+            Path(repo), force=force, reload=reload)
+        configuration = view.get("configuration") or {}
+        if configuration.get("status") != "error" and view.get("targetBranch"):
+            TARGET_BRANCH = str(view["targetBranch"])
+        if reload is not None:
+            _invalidate_configuration_derived_caches()
+            changed = ", ".join(
+                str(item.get("label")) for item in reload.get("changedInputs") or []
+            ) or "unsettled inputs"
+            generation = view.get("generation") or {}
+            sys.stderr.write(
+                "singular console: configuration reloaded (%s) -> generation %s (%s)\n"
+                % (changed, generation.get("id"), generation.get("status")))
     return view
 
 
@@ -4283,12 +4482,14 @@ SETTINGS_SPEC = [
          "effort the diff auditor spends reviewing a packet before the gate"),
     ]),
     ("Throughput · work flowing per cycle", "list", [
-        ("SINGULAR_MAX_CONCURRENT", "max concurrent workers", "1", "count", "",
-         "L2 workers running at the same time"),
+        ("SINGULAR_MAX_CONCURRENT", "max concurrent workers", "auto", "count", "",
+         "L2 workers running at the same time; auto sizes it from this machine's "
+         "cores, available memory and disk"),
         ("SINGULAR_MAX_DISPATCH", "max dispatch / cycle", "follows max concurrent", "derived", "",
          "tasks dispatched per cycle; unset, so it follows max concurrent workers"),
-        ("SINGULAR_MAX_L1_CONCURRENT", "max parallel L1 planners", "3", "count", "",
-         "area planners that may plan at once — only when parallel planning is on (below)"),
+        ("SINGULAR_MAX_L1_CONCURRENT", "max parallel L1 planners", "auto", "count", "",
+         "area planners that may plan at once — only when parallel planning is on (below); "
+         "auto is half the worker ceiling"),
         ("SINGULAR_ENABLE_L1_PARALLEL", "L1 parallel planning", "0", "bool", "",
          "off = plan one area at a time; gates the parallel-planner limit above"),
         ("SINGULAR_L1_TASKS_PER_NODE", "tasks per planner node", "1", "count", "",
@@ -4509,7 +4710,7 @@ def _gate_cohort(record: Any) -> str | None:
 def _cohort_progress(cohorts: Any, total: int) -> dict[str, Any]:
     """The `cohorts` block from an iterable of per-node cohort values. Pure.
 
-    PMGO-002: one combined percentage let "30% — 13/44 gated complete" stand
+    One combined percentage let "30% — 13/44 gated complete" stand
     beside a loop that had never actuated, and every reading of that was wrong.
     historical.total == historical.passed by construction — the historical cohort
     IS the accepted-as-done set, green by definition, and can never serve as a
@@ -4595,7 +4796,7 @@ def _stage_rank_map(by_stage: Any, ranks: dict[str, int]) -> dict[str, int]:
 
 def _stage_order_key(stage: str, stage_ranks: dict[str, int]) -> tuple:
     """Topology-first stage order: dependency rank, then the legacy lexical key,
-    then the id. PMGO-001: with only the lexical key, a stage could be ordered
+    then the id. With only the lexical key, a stage could be ordered
     (and drawn) ahead of a stage holding its own prerequisites."""
     return (stage_ranks.get(str(stage), 0),) + _stage_sort_key(stage) + (str(stage),)
 
@@ -4606,8 +4807,8 @@ def compute_plan_progress(registry: dict[str, Any], gate_status: dict[str, str],
 
     Stages come out in dependency order (see _stage_order_key). `progress` keeps
     the combined passedNodes/totalNodes/pct exactly as before and adds `cohorts`,
-    which separates the historical accepted-as-done set from the current campaign
-    (PMGO-002). `gate_records` carries the provenance; without it every
+    which separates the historical accepted-as-done set from the current campaign.
+    `gate_records` carries the provenance; without it every
     successful gate counts as current — the honest reading when no evidenceClass
     is known."""
     by_stage = registry.get("by_stage") or {}
@@ -4768,7 +4969,7 @@ def compute_loop_pulse(index: dict[str, Any], registry: dict[str, Any],
 
 
 # --------------------------------------------------------------------------- #
-# L1 selection replica (AXON-002) + stop reason (PMGO-003)                     #
+# L1 selection replica + stop reason                     #
 # --------------------------------------------------------------------------- #
 #
 # "Ready by dependency" and "runnable now" are different numbers and only the
@@ -4850,13 +5051,21 @@ def _l1_selection_limits(repo: Path) -> tuple[bool, int]:
 
     SINGULAR_ENABLE_L1_PARALLEL != "1" means there is no fanout at all — the loop
     advances one node per cycle — so the honest cap is 1, not whatever
-    SINGULAR_MAX_L1_CONCURRENT happens to say. When enabled, singular_l1_fanout's
-    own rule applies: default 3, and any non-numeric or zero value floors to 1."""
+    SINGULAR_MAX_L1_CONCURRENT happens to say. When enabled, the engine's
+    singular_l1_concurrency_cap rule applies: `auto` (the default) is the
+    planner share of the last reconcile's resource plan (plannerSlots), or 3
+    when no cycle has measured one; any other non-numeric or zero value floors
+    to 1."""
     enabled = str(_engine_env_value(repo, "SINGULAR_ENABLE_L1_PARALLEL") or "").strip() == "1"
     if not enabled:
         return False, 1
     raw = _engine_env_value(repo, "SINGULAR_MAX_L1_CONCURRENT")
-    raw = "3" if raw in (None, "") else str(raw).strip()
+    raw = "auto" if raw in (None, "") else str(raw).strip()
+    if raw == "auto":
+        planner = (collect_resource_plan_native(repo).get("governor") or {}).get("plannerSlots")
+        if isinstance(planner, int) and not isinstance(planner, bool) and planner >= 1:
+            return True, planner
+        return True, 3
     return True, (int(raw) if raw.isdigit() and int(raw) >= 1 else 1)
 
 
@@ -5020,7 +5229,7 @@ def compute_l1_selection(repo: Path, frontier_entries: Any = None) -> dict[str, 
 def derive_stop_reason(repo: Path, loop_info: dict[str, Any]) -> str | None:
     """Why the loop is stopped, in one operator sentence, or None when it isn't.
 
-    PMGO-003: the console could prove the loop was stopped and could not say why,
+    The console could prove the loop was stopped and could not say why,
     so "stopped" read as "broken". Order is by actionability — an unapproved
     human gate on a node that is otherwise dependency-ready is a decision waiting
     on a person, and naming the node turns the status into a next action. Failing
@@ -5215,7 +5424,7 @@ def collect_dag_view(repo: Path) -> dict[str, Any]:
     l1_by_node = {str(l.get("node")): l for l in collect_l1_leases(repo)}
     frontier_entries = compute_frontier_native(repo).get("frontier") or []
     frontier_ids = {str(e.get("node")) for e in frontier_entries}
-    # AXON-002: dependency-ready is not runnable. Replicate the engine's own L1
+    # Dependency-ready is not runnable. Replicate the engine's own L1
     # selection so each ready node carries the constraint that holds it back.
     selection = compute_l1_selection(repo, frontier_entries)
     runnable_ids = set(selection["selected"])
@@ -5303,7 +5512,7 @@ def collect_dag_view(repo: Path) -> dict[str, Any]:
             area_nodes.setdefault(str(entry["area"]), []).append(nid)
 
     stages = []
-    # Dependency order first (PMGO-001), lexical order only as the tie-break.
+    # Dependency order first, lexical order only as the tie-break.
     stage_ranks = {sid: min([ranks.get(i, 0) for i in ids] or [0])
                    for sid, ids in stage_nodes.items()}
     for sid in sorted(stage_nodes, key=lambda s: _stage_order_key(s, stage_ranks)):
@@ -5660,7 +5869,7 @@ _CONFIG_ROLE_KEYS = {
     "grok":     {r: ("SINGULAR_GROK_MODEL", None, None) for r in ("planner", "implementer", "auditor", "decider")},
     "openrouter": {r: ("SINGULAR_OPENROUTER_MODEL", None, None) for r in ("planner", "implementer", "auditor", "decider")},
 }
-_CONFIG_MODEL_FALLBACK = {"claude": ("SINGULAR_CLAUDE_MODEL", "claude-opus-4-8"),
+_CONFIG_MODEL_FALLBACK = {"claude": ("SINGULAR_CLAUDE_MODEL", "claude-sonnet-5-5"),
                           "codex": ("SINGULAR_CODEX_MODEL", "gpt-5.5"),
                           "gemini": ("SINGULAR_GEMINI_MODEL", ""),
                           "opencode": ("SINGULAR_OPENCODE_MODEL", ""),
@@ -6589,6 +6798,15 @@ def _load_provider_resolver():
         return module
 
 
+def _forget_engine_modules() -> None:
+    """Drop engine helper modules so a reload imports the current files."""
+    global _HEALTH_DETAILS_MODULE
+    with _PROVIDER_RESOLVER_LOCK:
+        _PROVIDER_RESOLVER_CACHE.clear()
+    with _HEALTH_DETAILS_LOCK:
+        _HEALTH_DETAILS_MODULE = None
+
+
 def _load_health_details():
     """Load the engine's shared read-only lifecycle projector."""
     global _HEALTH_DETAILS_MODULE
@@ -6903,8 +7121,6 @@ PROMPT_ROLE_MAP = {
     "auditor.md": "auditor",
     "reviewer.md": "reviewer",
     "decider.md": "decider",
-    "l0-origin.md": "origin",
-    "l1-area-orchestrator.md": "l1-orchestrator",
     "plan-critic.md": "critic",
 }
 PROMPT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.md$")
@@ -6982,7 +7198,7 @@ RAW_ROOTS: dict[str, dict[str, Any]] = {
 
 
 # Env-var names whose VALUE is a credential. Key-name based, not value-shape
-# based, and that is the whole point: SINGULAR_CLAUDE_MODEL="claude-opus-4-8" and
+# based, and that is the whole point: SINGULAR_CLAUDE_MODEL="claude-sonnet-5-5" and
 # ANTHROPIC_API_KEY="sk-ant-..." are both long opaque strings, and only the name
 # tells them apart. Value-shape detection would either miss short credentials or
 # redact model ids and break the Providers surface.
@@ -8126,7 +8342,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:
-        with _EFFECTIVE_CONFIGURATION_CACHE.pin(self.repo):
+        route = urlparse(self.path).path
+        # Liveness, the page shell and static reference data must answer while a
+        # configuration reload is running; they never start one on this thread.
+        peek = (route in ("/", "/api/health", "/api/roles")
+                or route.startswith("/assets/"))
+        with _EFFECTIVE_CONFIGURATION_CACHE.pin(self.repo, reload=not peek):
             try:
                 self._do_GET()
             except ConfigurationUnavailable as exc:
@@ -8518,15 +8739,43 @@ def write_console_state(repo: Path, url: str) -> list[Path]:
     if os.environ.get("SINGULAR_CONSOLE_NO_STATE") == "1":
         return []
     written: list[Path] = []
-    for path, content in ((state_path(repo, "console.url"), url),
-                          (state_path(repo, "console.pid"), str(os.getpid()))):
+    port = urlparse(url).port
+    try:
+        state_dir = state_path(repo)
+    except ConfigurationUnavailable:
+        # Started while the configuration does not load (it will be served as an
+        # error and reloaded once fixed). The console must still be findable:
+        # use the default layout, which is where `singular console` looks.
+        state_dir = Path(repo).resolve() / STATE_DIR_REL
+    for path, content, transient in (
+            (state_dir / "console.url", url, True),
+            (state_dir / "console.pid", str(os.getpid()), True),
+            # console.port outlives the process on purpose: `singular console`
+            # binds it again on the next start so the address stays stable.
+            (state_dir / "console.port", str(port) if port else "", False)):
+        if not content:
+            continue
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content + "\n")
-            written.append(path)
+            if transient:
+                written.append(path)
         except OSError as exc:
             print(f"singular console: could not write {path}: {exc}", file=sys.stderr)
     return written
+
+
+def bind_console_server(host: str, port: int) -> ThreadingHTTPServer:
+    """Bind the requested port; if another process holds it, take a free one
+    instead of dying (the caller persists whatever was bound)."""
+    try:
+        return ThreadingHTTPServer((host, port), Handler)
+    except OSError as exc:
+        if exc.errno != errno.EADDRINUSE or port == 0:
+            raise
+        print(f"singular console: port {port} is in use; binding a free port instead",
+              file=sys.stderr, flush=True)
+        return ThreadingHTTPServer((host, 0), Handler)
 
 
 def remove_console_state(paths: list[Path]) -> None:
@@ -8637,7 +8886,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(_pinned_configuration_call(repo, collect_plans, repo), indent=2))
         return 0
     Handler.repo = repo
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    server = bind_console_server(args.host, args.port)
     bound_port = server.server_address[1]
     url = f"http://{args.host}:{bound_port}"
     print(f"singular orchestration console serving {repo} at {url}", flush=True)

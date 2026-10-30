@@ -15,7 +15,8 @@
 import { S, esc, escAttr, icon, toneOf, relTime, toast, select, navigateToTask, renderActivityFeed } from "../app.js";
 import { getDag, fetchDag, onDag } from "../plan/data.js";
 import { feedState, subscribe as subscribeSessions } from "../core/sessions-feed.js";
-import { apiFetch, isHistorical, switchPlan } from "../core/api.js";
+import { apiFetch, isHistorical, switchPlan, onRecover } from "../core/api.js";
+import { loadingHtml } from "../core/health.js";
 import { fetchPlans, plansList, activePlanEntry, fmtDate } from "../core/plans.js";
 
 const POLL_MS = 10000;
@@ -148,7 +149,9 @@ function render() {
   if (sig === HOME.sig) return;
   HOME.sig = sig;
   const d = HOME.data;
-  if (!d) { host.innerHTML = `<div class="home-loading">loading digest…</div>`; return; }
+  // No digest yet: a loading line, or — while reads are failing — the error
+  // with a Retry button. core/health.js keeps the placeholder current.
+  if (!d) { host.innerHTML = loadingHtml("digest", "home-loading"); return; }
   // Preserve chat focus across the rebuild (the draft itself rides CHAT.draft).
   const chatFocused = document.activeElement && document.activeElement.id === "home-sup-input";
   host.innerHTML =
@@ -459,7 +462,7 @@ function resetsIn(epochSec) {
 }
 
 // 2. Gates block — gates X/Y headline + per-stage bars (from the shared dag).
-// PMGO-002: when the server splits the cohorts the headline is the CURRENT
+// When the server splits the cohorts the headline is the CURRENT
 // campaign and the historical accepted-as-done set drops to a subline, so the
 // landing page can never present grandfathered evidence as this run's delivery.
 // Older server (no cohorts) → the combined headline, unchanged.
@@ -882,6 +885,7 @@ export function initHome() {
   subscribeSessions(() => { if (HOME.visible) render(); }, () => HOME.visible);
   // Independent 10s poll — only ticks while Home is visible + the tab is shown.
   // Providers ride every 6th tick (~60s, aligned with the server's quota cache).
+  onRecover(() => { if (HOME.visible && !isHistorical()) { fetchHome(); fetchProviders(); } });
   HOME.timer = setInterval(() => {
     if (!HOME.visible || document.hidden) return;
     fetchHome();

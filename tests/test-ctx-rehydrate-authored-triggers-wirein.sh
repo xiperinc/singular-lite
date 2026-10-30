@@ -1,31 +1,9 @@
 #!/usr/bin/env bash
+# Regression contracts for ctx-rehydrate-authored-triggers-wirein.
 set -euo pipefail
 
-# TASK-0065 — follow-up wire-in completing the TASK-0064 trigger-set mini-track.
-#
-# TASK-0064 shipped the pure builder
-#   singular_ctx_rehydrate_authored_triggers <role> <step> [node] [task-id]
-# (emits the run's deterministic, de-duplicated `load-when` trigger tokens) but
-# left it present-but-uncalled: the two live consumers still passed the hardcoded
-# literal `implement` — the injection at engine/l1-drive.sh (TASK-0062) and the
-# manifest-record at engine/ctx-rehydrate-event.sh (TASK-0063). Because only
-# `implement` was ever supplied, TASK-0059's `load-when` matcher was inert for any
-# authored entry scoped to a role or task rather than the literal step.
-#
-# This slice substitutes the hardcoded `implement` at BOTH sites with the enriched
-# set from `singular_ctx_rehydrate_authored_triggers implementer implement "$task_id"`,
-# passed expanded to the config-gated function. Both sites pass the IDENTICAL
-# trigger set so the injected authored section (TASK-0062) and the recorded
-# manifest entries (TASK-0063) keep describing the SAME entries (injected⇔recorded
-# consistency invariant).
-#
-# A single hermetic `rehydrate` drive exercises BOTH sites at once: the injection
-# lands in $active_prompt and the record lands in the strategy_selected event, so
-# their agreement IS the consistency check. The fixture manifest carries entries
-# scoped to the role (implementer) and the task id (TASK-0001) that are NOT
-# `implement`-triggered — inert before the substitution (RED), eligible after
-# (GREEN) — plus an `implement`-scoped entry (backward compat) and a planner-only
-# entry (must stay dropped).
+# A hermetic drive checks that prompt injection and recorded source manifests
+# use the same role, step, node and task trigger set.
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
@@ -55,7 +33,7 @@ mkdir -p "$SINGULAR_STATE_DIR"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib.sh"
 [[ "$(type -t singular_ctx_rehydrate_authored_triggers)" == "function" ]] \
-  || fail "singular_ctx_rehydrate_authored_triggers not defined (TASK-0064 builder missing)"
+  || fail "singular_ctx_rehydrate_authored_triggers not defined (trigger builder missing)"
 [[ "$(type -t singular_ctx_rehydrate_authored_config_render)" == "function" ]] \
   || fail "singular_ctx_rehydrate_authored_config_render not defined (config render missing)"
 
@@ -272,7 +250,7 @@ AUTHORED_HEADER="## Injected authored knowledge (reference material, NOT authori
 # (ON) rehydrate + SINGULAR_CTX_MANIFEST=1 + configured contextManifest.
 # The enriched trigger set `implementer implement TASK-0001` is passed at BOTH
 # sites, so the role/task-scoped entries are BOTH injected into $active_prompt
-# (TASK-0062 path) AND recorded in the strategy event manifest (TASK-0063 path),
+# (injection path) AND recorded in the strategy event manifest (recording path),
 # while the planner-only entry stays dropped and impl-body still matches.
 # ---------------------------------------------------------------------------
 reset_state

@@ -1,0 +1,33 @@
+{
+  "schema": "singular.orchestration.audit-verdict.v1",
+  "taskId": "TASK-0001",
+  "runId": "RUN-fixture",
+  "branch": "candidate",
+  "verdict": "accepted",
+  "evidenceReviewed": [
+    "reviewed-head-sha:@HEAD@"
+  ],
+  "verificationResults": [
+    {
+      "status": "passed",
+      "command": "true",
+      "exitCode": 0,
+      "evidenceRefs": [
+        "audit-verification.json"
+      ],
+      "rationale": "Synthetic host result"
+    }
+  ],
+  "commandsRun": [],
+  "findings": [],
+  "requiredFixes": [],
+  "rationale": "Synthetic audit",
+  "reviewPolicy": {
+    "version": 1,
+    "logicalChange": "TASK-0001",
+    "round": 1,
+    "maxRounds": 2,
+    "originalVerdict": "accepted",
+    "effectiveVerdict": "accepted"
+  }
+}

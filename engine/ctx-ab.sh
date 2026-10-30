@@ -4,7 +4,7 @@
 # Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines new
 # functions only; NO existing engine path invokes them, so with this file
 # present-but-uncalled the engine is byte-identical to prior behavior. Later
-# context-evolution stages key their own knobs off the assigned arm; this slice
+# context module stages key their own knobs off the assigned arm; this slice
 # only assigns and (when enabled) records it.
 #
 # Knob: SINGULAR_CTX_AB (default OFF). Unset or "0" -> assignment still maps a

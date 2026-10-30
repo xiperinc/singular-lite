@@ -431,7 +431,51 @@ test_init_scaffolds_fresh_repo_and_reconcile_apply_is_noop_safe() {
   assert_contains "$(cat "$repo/docs/orchestration/project-state.md")" "Latest Reconcile Snapshot" "fresh reconcile writes project snapshot"
 }
 
-# PMGO-006: an operator who already ran `init` must be able to reach a verified
+# The engine has exactly one schema bundle. `init` mirrors it byte-for-byte,
+# repairs a mirror something else rewrote (a consumer formatter is the usual
+# cause of doctor's schema.bundle drift), and `plan archive` never writes a
+# mirror of its own.
+test_init_and_plan_archive_mirror_only_the_authoritative_schema_bundle() {
+  local tmp repo out schema base count=0
+  tmp="$(mktemp -d)"
+  repo="$tmp/repo"
+  new_git_repo "$repo"
+  assert_mirrors_authoritative() {
+    local label="$1"
+    for schema in "$ENGINE_HOME"/schemas/*.schema.json; do
+      base="$(basename "$schema")"
+      cmp -s "$schema" "$repo/schemas/orchestration/$base" \
+        || fail "$label: schemas/orchestration/$base is not the authoritative bytes"
+    done
+  }
+
+  (cd "$repo" && SINGULAR_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" init >/dev/null 2>&1)
+  for schema in "$ENGINE_HOME"/schemas/*.schema.json; do count=$((count + 1)); done
+  assert_eq "$(find "$repo/schemas/orchestration" -maxdepth 1 -name '*.schema.json' -type f | wc -l | tr -d ' ')" \
+    "$count" "init mirrors every authoritative schema and nothing else"
+  assert_mirrors_authoritative "init"
+
+  # Same JSON, different bytes: what a repository-wide formatter leaves behind.
+  python3 - "$repo/schemas/orchestration/dag.v0.schema.json" <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+open(sys.argv[1], "w", encoding="utf-8").write(json.dumps(value, indent=4) + "\n")
+PY
+  ! cmp -s "$ENGINE_HOME/schemas/dag.v0.schema.json" "$repo/schemas/orchestration/dag.v0.schema.json" \
+    || fail "fixture did not reformat the mirror"
+  (cd "$repo" && SINGULAR_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" init >/dev/null 2>&1)
+  assert_mirrors_authoritative "repeated init repairs a reformatted mirror"
+
+  git -C "$repo" add -A
+  git -C "$repo" -c user.name=test -c user.email=test@example.local commit -q -m scaffold
+  out="$(cd "$repo" && SINGULAR_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" plan archive --force 2>&1)" \
+    || fail "plan archive --force failed: $out"
+  assert_mirrors_authoritative "plan archive"
+  assert_eq "$(git -C "$repo" status --porcelain -- schemas)" "" \
+    "plan archive leaves the schema mirrors untouched"
+}
+
+# An operator who already ran `init` must be able to reach a verified
 # stopped state without undoing anything. Every ladder step that init already
 # satisfied has to report itself as satisfied — not redo the work — and the
 # config init wrote must come out byte-for-byte identical.
@@ -903,6 +947,7 @@ elif [[ "${SINGULAR_FRESH_CONSUMER_CASE:-all}" == "l1-only" ]]; then
 else
   test_frozen_engine_creates_editable_consumer_copies_without_touching_existing_files
   test_init_scaffolds_fresh_repo_and_reconcile_apply_is_noop_safe
+  test_init_and_plan_archive_mirror_only_the_authoritative_schema_bundle
   test_setup_after_init_is_a_clean_noop_ladder
   test_v0_to_v2_migration_backfills_scaffold_rebrands_and_syncs_contracts
   test_integrate_retains_and_suppresses_missing_branch_until_restored

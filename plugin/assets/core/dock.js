@@ -140,7 +140,7 @@ function renderCells() {
   setText("dock-tasks-text", tasksActive + " active · " + (ready != null ? ready : "—") + " ready");
 
   // gates — the CURRENT campaign's passed/total when the server splits the
-  // cohorts (PMGO-002); historical accepted-as-done evidence and the combined
+  // cohorts; historical accepted-as-done evidence and the combined
   // figure ride in the tooltip instead of being blended into one number. Older
   // server (no cohorts) → the combined "gates P/T" exactly as before. Ochre when
   // blocked/failed tasks stall gate progress.
@@ -162,7 +162,7 @@ function renderCells() {
   }
   toggleClass("dock-gates", "attention-cell", blockedFailed > 0);
 
-  // frontier (AXON-002) — ready-by-dependency vs runnable-now and the concurrency
+  // frontier — ready-by-dependency vs runnable-now and the concurrency
   // cap, with the named per-node reason for the gap in the tooltip. Same-area
   // serialization and scope-overlap holds are a SAFETY policy, and without this
   // cell a deliberately narrowed wave looks like a broken parallel engine. The

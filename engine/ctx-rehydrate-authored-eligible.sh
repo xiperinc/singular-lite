@@ -1,49 +1,6 @@
 #!/usr/bin/env bash
-# ctx-rehydrate-authored-eligible.sh — pure, read-only authored-knowledge
-# eligibility filter (stage S5-routing, node `rehydrate-path`, layer
-# engine_runtime; singular-brain integration point 3). Sourced exactly once by
-# the context-evolution loader block in lib.sh (it matches the ctx-*.sh glob).
-# This file DEFINES a new function only and is present-but-uncalled by every
-# existing engine/CLI/driver path, so with it sourced the engine stays
-# byte-identical to prior behavior.
-#
-# This is the SECOND slice of the explicitly-OPTIONAL authored-knowledge
-# deliverable. The first slice (singular_ctx_rehydrate_authored_select) emits the
-# surviving authored-knowledge entries as JSON Lines but does NOT filter on
-# `load-when` or `freshness`. This slice adds that filter. It is NOT part of the
-# `rehydrate-path` node's requiredCompletion and does NOT gate the node.
-# SINGULAR_CTX_MANIFEST (default 0) gates the later packet wire-in, NOT this pure
-# leaf. The JSONL contract is the whole interface: it takes NO dependency on any
-# singular-brain runtime.
-#
-#   singular_ctx_rehydrate_authored_eligible <trigger> [<trigger> ...]
-#
-# Reads the selector's JSON Lines on stdin — one authored-knowledge record per
-# line, each carrying "id", "source" (body|path), "class":"authored-knowledge",
-# "authoritative":false, "load-when" (list), and "freshness" (string) — and a
-# current trigger context in argv, and prints only the entries eligible to
-# inject now, under the AUTHORED-KNOWLEDGE class rules:
-#
-#   - load-when matching: an entry is eligible iff its "load-when" list is empty
-#     (the documented unconditional-baseline default) or contains at least one of
-#     the supplied <trigger> values; ineligible entries are dropped.
-#   - freshness gate: an entry whose "freshness" is a documented stale/expired
-#     state (see STALE_FRESHNESS below) is NEVER emitted as current — it is
-#     skipped, mirroring TASK-0058's `description_unverified` rule, so non-current
-#     authored knowledge can never be presented as current or authoritative.
-#   - class markers pass through unchanged: emitted entries retain
-#     "class":"authored-knowledge" and "authoritative":false; the filter never
-#     elevates an entry to authoritative.
-#   - Output is deterministic: the eligible subset is emitted in the same fixed
-#     id-sorted order as the selector, so identical input and triggers yield
-#     byte-identical output.
-#
-# Pure and READ-ONLY: it reads stdin only and never writes, renames, or deletes
-# anything; appends no events; and never exits non-zero on well-formed input.
-# Malformed JSONL lines are skipped and empty input yields empty output
-# (fail-soft).
+# Filter authored knowledge by freshness and load-when triggers before context assembly.
 
-# singular_ctx_rehydrate_authored_eligible <trigger> [<trigger> ...]
 singular_ctx_rehydrate_authored_eligible() {
   # Triggers arrive as argv; the selector JSONL arrives on stdin. The pure
   # renderer reads stdin and receives the trigger context as its own argv. The

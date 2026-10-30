@@ -1,3 +1,0 @@
-PASS  test-context-service-e2e.sh
-
-SUMMARY: 1 passed, 0 failed

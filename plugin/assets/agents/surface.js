@@ -17,6 +17,7 @@ import { S, esc, escAttr, icon, relTime, toast, viewRaw, viewPrompt, viewSession
 import { subscribe as subscribeSessions, feedState } from "../core/sessions-feed.js";
 import { writeRoute } from "../core/router.js";
 import { apiFetch } from "../core/api.js";
+import { loadingHtml } from "../core/health.js";
 import { modelOptions } from "../core/models.js";
 
 const shortRun = (r) => String(r || "").replace(/^ORIGIN-|^RUN-/, "").slice(0, 16);
@@ -486,7 +487,7 @@ function renderSysPanel() {
   if (!body) return;
   if (AG.settingsUnavailable) { body.innerHTML = `<div class="section-empty">the settings API is unavailable on this server — settings are read-only.</div>`; return; }
   const s = AG.settings;
-  if (!s) { body.innerHTML = `<div class="section-empty">loading settings…</div>`; fetchSettings(); return; }
+  if (!s) { body.innerHTML = loadingHtml("settings", "section-empty"); fetchSettings(); return; }
   body.innerHTML = (s.groups || []).map((g) => {
     const rows = (g.items || []).map((it) => ({
       envKey: it.envKey || it.key, label: it.label, value: it.value, kind: it.kind, unit: it.unit, meaning: it.meaning,

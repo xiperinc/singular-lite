@@ -30,7 +30,7 @@ strict	resource-exhausted	\btoo many open files\b|\bemfile\b|\benfile\b
 strict	missing-executable	\bcommand not found\b|\bis not recognized as an internal or external command\b
 # TS2688 / a bare "cannot find module" with no adapter report. A worktree that is
 # missing a nested node_modules cannot resolve the @types packages tsconfig asks
-# for, and tsc reports it exactly like this. It is what killed TASK-0006: the
+# for, and tsc reports it exactly like this. Without a dependency provision step, the
 # auditor's disposable worktree never received the monorepo's nested dependency
 # trees, so a gate that was green for the worker failed there and normalized to a
 # product defect nobody could fix. A worker CAN write a genuinely broken import

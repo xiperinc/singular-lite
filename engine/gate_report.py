@@ -147,7 +147,7 @@ def main() -> None:
         # path every non-zero gate normalized to failed-product. A worktree
         # missing its dependencies then read as a code defect, and the decider
         # spent the whole retry budget asking a model to fix code that was never
-        # broken. That is what produced TASK-0006's five identical attempts.
+        # broken. Repeated attempts cannot repair missing dependencies.
         infrastructure_signals = infra_patterns.matches(
             log_path.read_text(encoding="utf-8", errors="replace")
             if log_path.is_file()

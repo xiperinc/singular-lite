@@ -14,7 +14,7 @@
 # JSON output and merging them under stable keys (report, strategy, attempts) plus
 # a schema field.
 #
-# Guarantees pinned BEHAVIORALLY over a fixture (no absence greps, planner rule 9):
+# Guarantees pinned BEHAVIORALLY over a fixture (no absence greps):
 #   - loss-preserving delegation: each nested sub-object is byte-identical to
 #     invoking the corresponding composer directly on the same inputs (no
 #     re-derivation, nothing dropped or reshaped).

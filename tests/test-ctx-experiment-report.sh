@@ -11,7 +11,7 @@
 #      a per-arm cost rollup (tokens + wall-clock per accepted task), and the bias
 #      rate; the artifact validates against the shipped v0 schema.
 #
-# Guarantees pinned BEHAVIORALLY over a fixture (no absence greps, planner rule 9):
+# Guarantees pinned BEHAVIORALLY over a fixture (no absence greps):
 #   - strictly read-only: the whole workspace tree is byte-identical after every
 #     call (no run artifact / index / event / lease / task file created, moved, or
 #     mutated).

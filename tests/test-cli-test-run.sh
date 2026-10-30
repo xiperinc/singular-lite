@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# PMGO-009: `singular test` is the supervised, attachable form of the engine's
+# `singular test` is the supervised, attachable form of the engine's
 # own regression suite. What that has to be true of:
 #
 #   a  --no-wait starts a detached run and returns: manifest published, current
@@ -307,7 +307,7 @@ assert_contains "$out" "run from an engine checkout" "g: recovery line"
 # --- g2) an engine home that is not a Git checkout refuses BEFORE writing -----
 #
 # An INSTALLED engine is a plain `cp -Rp` tree with no .git, and tests/run.sh's
-# own preflight (PMGO-010) rejects it — but by then a run dir, a manifest and a
+# own preflight rejects it — but by then a run dir, a manifest and a
 # detached supervisor already exist, and the run has to be reconciled to explain
 # a failure that was knowable up front. The refusal belongs before the first
 # write. The fixture is the auditor's: a copy of a working engine home with its

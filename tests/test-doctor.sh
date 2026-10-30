@@ -179,7 +179,7 @@ rm -rf "$root/.singular-state/readonly-guard"
 out="$(doctor)" || true
 [[ "$out" != *"were never applied"* ]] || fail "no journals must not warn"
 
-# 11. Pidfile verdicts (PMGO-005). A PID probe has four outcomes and doctor used
+# 11. Pidfile verdicts. A PID probe has four outcomes and doctor used
 # to print one of them. The field cost was a live console server reported as a
 # leftover in a sandbox that denies process inspection, which is an invitation
 # to delete the pidfile of a running process.
@@ -207,7 +207,7 @@ out="$(doctor)" || true
 assert_contains "$out" "malformed pidfile" "a group selector is not a live pid"
 [[ "$out" != *"names live PID"* ]] || fail "a negative pid must never read as alive"
 
-# (c) unknown-permission: the PMGO-005 case itself, driven by a REAL EPERM.
+# (c) unknown-permission: exercise the verdict with a REAL EPERM.
 # PID 1 is root-owned, and POSIX applies the permission check to signal 0 too,
 # so an unprivileged `kill -0 1` is the same inconclusive answer a restricted
 # sandbox gives for every pid. Skipped under root, where the probe legitimately
@@ -240,7 +240,7 @@ out="$(SINGULAR_TEST_PID_PROBE=1 SINGULAR_TEST_PID_PROBE_STATE=unknown doctor --
   || fail "doctor must never delete a pidfile, least of all an uninspectable one"
 printf '99999999\n' >"$root/.singular-state/autonomate.pid"
 
-# 12. Process-control capability (PMGO-004). Timeout cleanup depends on session
+# 12. Process-control capability. Timeout cleanup depends on session
 # creation + group termination; `ps` is now only the fallback.
 rc=0
 out="$(SINGULAR_TEST_PROCESS_CONTROL=1 SINGULAR_TEST_PROCESS_CONTROL_STATE=no-ps doctor)" || rc=$?

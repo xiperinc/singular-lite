@@ -200,7 +200,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Unattended actuation gate (PMGO-004).
+# Unattended actuation gate.
 #
 # This loop dispatches agents nobody is watching and kills them when they time
 # out. If the host cannot terminate a process group, that kill does not contain
@@ -243,6 +243,21 @@ max_hours_int="${SINGULAR_MAX_HOURS%%.*}"; [[ "$max_hours_int" =~ ^[0-9]+$ ]] ||
 deadline=$(( start_ts + max_hours_int * 3600 ))
 iteration=0
 campaign_drifted="no"
+# Why the loop ended (0.23.7): carried by autonomate.exited so an operator
+# watching events.ndjson can tell a halted loop from a finished one.
+exit_reason="unknown"
+breaker_open_emitted="no"
+# One event when the breaker is at its threshold. Emitted where it trips and
+# again (once per process) where the loop refuses to run because of it, so a
+# loop started with the breaker already open says so too.
+autonomate_breaker_open_event() {
+  local count="$1" where="$2"
+  [[ "$breaker_open_emitted" == "no" ]] || return 0
+  breaker_open_emitted="yes"
+  singular_append_event "autonomate.breaker_open" \
+    "circuit breaker open; the autonomous loop halts until it is reset" \
+    "{\"iteration\":$iteration,\"breaker\":$count,\"threshold\":$SINGULAR_MAX_CONSEC_FAILS,\"observedAt\":\"$where\",\"nextAction\":\"fix the cause named by the autonomate.breaker_incremented events, then: singular breaker reset\"}" || true
+}
 
 singular_append_event "autonomate.started" "autonomous loop started" \
   "{\"pid\":$$,\"maxHours\":\"$SINGULAR_MAX_HOURS\",\"autoIntegrate\":\"$SINGULAR_AUTO_INTEGRATE\",\"push\":\"$SINGULAR_PUSH\"}"
@@ -255,12 +270,14 @@ while true; do
     echo "[autonomate] STOP sentinel; halting after $((iteration-1)) iteration(s)"
     singular_write_status "$iteration" "stopped (STOP sentinel)"
     singular_append_event "autonomate.stopped" "stopped by STOP sentinel" "{\"iteration\":$iteration}"
+    exit_reason="stop-sentinel"
     break
   fi
   if [[ "$now" -ge "$deadline" ]]; then
     echo "[autonomate] wall-clock budget reached (${SINGULAR_MAX_HOURS}h); halting"
     singular_write_status "$iteration" "stopped (time-box ${SINGULAR_MAX_HOURS}h)"
     singular_append_event "autonomate.stopped" "stopped by time-box" "{\"iteration\":$iteration}"
+    exit_reason="time-box"
     break
   fi
   breaker="$(singular_breaker_count)"
@@ -268,6 +285,8 @@ while true; do
     echo "[autonomate] circuit breaker open ($breaker/$SINGULAR_MAX_CONSEC_FAILS); halting"
     singular_write_status "$iteration" "stopped (circuit breaker $breaker/$SINGULAR_MAX_CONSEC_FAILS)"
     singular_append_event "autonomate.stopped" "stopped by circuit breaker" "{\"iteration\":$iteration,\"consecFails\":$breaker}"
+    autonomate_breaker_open_event "$breaker" "loop-entry"
+    exit_reason="circuit-breaker-open"
     break
   fi
 
@@ -278,6 +297,7 @@ while true; do
   # before any additional mutation.
   if ! autonomate_campaign_verify cycle-boundary "$iteration"; then
     campaign_drifted="yes"
+    exit_reason="campaign-drift"
     break
   fi
 
@@ -325,13 +345,14 @@ PY
         : >"$SINGULAR_STOP_FILE"
         singular_write_status "$iteration" "stopped ($window_label wait budget ${window_budget}s exhausted)"
         singular_append_event "autonomate.stopped" "stopped: $window_label wait budget exhausted" "{\"iteration\":$iteration,\"failureClass\":\"$bo_class\",\"waitedTotal\":$window_waited}"
+        exit_reason="provider-wait-budget-exhausted"
         break
       fi
       nap="$bo_remaining"; [[ "$nap" -gt "$quota_sleep_cap" ]] && nap="$quota_sleep_cap"
       echo "[autonomate] planner $window_label window open (${bo_remaining}s left); sleeping up to ${nap}s WITHOUT breaker increment (waited ${window_waited}s)"
       singular_append_event "autonomate.quota_wait" "sleeping through planner $window_label window" "{\"iteration\":$iteration,\"failureClass\":\"$bo_class\",\"remainingSec\":$bo_remaining,\"napSec\":$nap,\"waitedTotal\":$window_waited}"
       singular_write_status "$iteration" "sleeping through $window_label window (${bo_remaining}s left, waited ${window_waited}s)"
-      [[ "$once" == "yes" ]] && { echo "[autonomate] --once: $window_label wait detected, single iteration done"; break; }
+      [[ "$once" == "yes" ]] && { echo "[autonomate] --once: $window_label wait detected, single iteration done"; exit_reason="once"; break; }
       # Interruptible (0.5.0): STOP mid-nap ends the loop within
       # SINGULAR_SLEEP_POLL_SEC; `singular wake` / clear-backoff end the nap
       # early. Only actually-slept seconds count toward the window's budget.
@@ -343,8 +364,8 @@ PY
       else
         quota_waited_total=$((quota_waited_total + SECONDS - nap_started))
       fi
-      [[ "$nap_rc" -eq 2 ]] && { echo "[autonomate] STOP during $window_label wait; halting"; break; }
-      singular_stop_requested && { echo "[autonomate] STOP during $window_label wait; halting"; break; }
+      [[ "$nap_rc" -eq 2 ]] && { echo "[autonomate] STOP during $window_label wait; halting"; exit_reason="stop-sentinel"; break; }
+      singular_stop_requested && { echo "[autonomate] STOP during $window_label wait; halting"; exit_reason="stop-sentinel"; break; }
       # WAKE means useful completion/control state may be waiting even though
       # the planner provider is still unavailable. Run exactly one control-
       # plane reconcile: import/reap/integrate/promote stay live, while both
@@ -360,7 +381,7 @@ PY
           "$reconcile_script" --actuate 2>&1)" || true
         printf '%s\n' "$control_out" | sed 's/^/  control: /'
         singular_stop_requested \
-          && { echo "[autonomate] STOP after control-plane reconcile; halting"; break; }
+          && { echo "[autonomate] STOP after control-plane reconcile; halting"; exit_reason="stop-sentinel"; break; }
       fi
       iteration=$((iteration - 1))
       continue
@@ -489,6 +510,23 @@ print(kinds.get(d.get("kind"), ""), d.get("resultRef", ""))
       singular_append_event "autonomate.limit_window_detected" "provider window at breaker chokepoint; armed $ev_class backoff instead of tripping" "{\"iteration\":$iteration,\"failureClass\":\"$ev_class\",\"breaker\":$breaker,\"failD\":$faild,\"failI\":$faili,\"plannerFail\":$planner_failures,\"importReject\":$l1_import_rejections,\"evidence\":$limit_evidence}"
     else
       nb="$(singular_breaker_trip)"; echo "  [autonomate] no progress + failure; breaker -> $nb"
+      [[ "$nb" =~ ^[0-9]+$ ]] || nb=$((breaker + 1))
+      # Record the counters in events as well as the log so event consumers
+      # can explain the breaker increment.
+      breaker_reason=""
+      [[ "$faild" -gt 0 ]] && breaker_reason+="failed-dispatches=$faild "
+      [[ "$faili" -gt 0 ]] && breaker_reason+="failed-integrations=$faili "
+      [[ "$planner_failures" -gt 0 ]] && breaker_reason+="planner-failures=$planner_failures "
+      [[ "$l1_import_rejections" -gt 0 ]] && breaker_reason+="l1-import-rejections=$l1_import_rejections "
+      [[ "$new_refusals" -gt 0 ]] && breaker_reason+="new-reservation-refusals=$new_refusals "
+      [[ "${SINGULAR_DETACHED_DISPATCH:-0}" == "1" && "$reaped_failures" -gt 0 ]] && breaker_reason+="reaped-failures=$reaped_failures "
+      breaker_reason="no progress and ${breaker_reason% }"
+      singular_append_event "autonomate.breaker_incremented" \
+        "no durable progress and at least one failure; circuit breaker incremented" \
+        "{\"iteration\":$iteration,\"breaker\":$nb,\"previous\":$breaker,\"threshold\":$SINGULAR_MAX_CONSEC_FAILS,\"reason\":\"$breaker_reason\",\"counters\":{\"failedDispatches\":$faild,\"failedIntegrations\":$faili,\"plannerFailures\":$planner_failures,\"l1ImportRejections\":$l1_import_rejections,\"newRefusals\":$new_refusals,\"parkedRefusals\":$parked_refusals,\"reapedFailures\":$reaped_failures,\"accepted\":$accepted,\"integrated\":$integrated,\"promoted\":$promoted,\"dispatched\":$dispatched}}" || true
+      if [[ "$nb" -ge "$SINGULAR_MAX_CONSEC_FAILS" ]]; then
+        autonomate_breaker_open_event "$nb" "increment"
+      fi
     fi
   fi
 
@@ -518,10 +556,11 @@ print(kinds.get(d.get("kind"), ""), d.get("resultRef", ""))
     echo "[autonomate] DAG exhausted (all areas complete); halting"
     singular_write_status "$iteration" "stopped (DAG complete)"
     singular_append_event "autonomate.stopped" "stopped: DAG complete" "{\"iteration\":$iteration}"
+    exit_reason="dag-complete"
     break
   fi
 
-  [[ "$once" == "yes" ]] && { echo "[autonomate] --once: single iteration done"; break; }
+  [[ "$once" == "yes" ]] && { echo "[autonomate] --once: single iteration done"; exit_reason="once"; break; }
   # Interruptible (0.5.0): STOP is honored mid-nap (0.4.0 checked only at loop
   # top, so a STOP written during the sleep waited out the full nap); WAKE
   # ends it early without killing sleep children (which killed the whole loop
@@ -529,7 +568,10 @@ print(kinds.get(d.get("kind"), ""), d.get("resultRef", ""))
   singular_interruptible_sleep "$sleep_secs" || true
 done
 
-singular_append_event "autonomate.exited" "autonomous loop exited" "{\"iterations\":$iteration}"
+exit_breaker="$(singular_breaker_count 2>/dev/null || echo 0)"
+[[ "$exit_breaker" =~ ^[0-9]+$ ]] || exit_breaker=0
+singular_append_event "autonomate.exited" "autonomous loop exited: $exit_reason" \
+  "{\"iterations\":$iteration,\"reason\":\"$exit_reason\",\"breaker\":$exit_breaker,\"threshold\":$SINGULAR_MAX_CONSEC_FAILS}"
 echo "[autonomate] done after $iteration iteration(s). STATUS: $SINGULAR_STATUS_FILE"
 if [[ "$campaign_drifted" == "yes" ]]; then
   exit 2

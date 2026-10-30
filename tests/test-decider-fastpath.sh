@@ -943,7 +943,7 @@ PY
 
 # rc==0 but empty/prose worker output is worker-no-packet, not infrastructure.
 # A format slip from an otherwise successful worker is not a product signal
-# (field run 2026-09-14: one stray "]" deadlocked the queue). Since 0.23.4 it
+# (an unmatched bracket makes a complete packet invalid). Since 0.23.4 it
 # belongs to the packet-format domain: exactly one read-only re-emission for
 # the frozen candidate, charged to neither product repair nor a review round;
 # when that also fails the task parks (previously the re-emit was a product

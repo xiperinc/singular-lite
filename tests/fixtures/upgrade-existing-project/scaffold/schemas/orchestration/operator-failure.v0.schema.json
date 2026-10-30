@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.operator-failure.v0",
+  "title": "singular Operator Failure v0",
+  "description": "The machine-readable recovery contract: one stable code, one phase, one bounded next action. Emitted on stdout by preflight/setup commands run with --json when they refuse to continue, and persisted as the last outcome under .singular-state/setup/. `safeToActuate` is always false here — a command that failed cannot have proved the repository safe to run. The human-readable block and this object must name the SAME primary failure.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "code",
+    "phase",
+    "state",
+    "safeToActuate",
+    "summary",
+    "recovery"
+  ],
+  "properties": {
+    "schema": { "const": "singular.operator-failure.v0" },
+    "code": {
+      "description": "Stable diagnosis code, e.g. SINGULAR_ENGINE_NOT_INSTALLED. Deliberately NOT an enum: codes are additive, and a consumer pinned to an older bundle must still be able to validate a report carrying a code it has never seen.",
+      "type": "string",
+      "pattern": "^SINGULAR_[A-Z0-9_]+$"
+    },
+    "phase": {
+      "description": "The step that refused, e.g. engine-resolution, gate-verification, doctor.",
+      "type": "string",
+      "minLength": 1
+    },
+    "state": {
+      "description": "Highest state truthfully reached before the failure ('blocked' when nothing was reached). Never a state the run only intended to reach.",
+      "type": "string",
+      "minLength": 1
+    },
+    "safeToActuate": { "const": false },
+    "summary": { "type": "string", "minLength": 1 },
+    "cause": {
+      "description": "Free-form structured detail about this specific failure. Shape varies by code; readers must treat unknown keys as informational.",
+      "type": "object"
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "instruction"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1 },
+        "instruction": { "type": "string", "minLength": 1 }
+      }
+    },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "message"],
+        "properties": {
+          "code": { "type": "string", "pattern": "^SINGULAR_[A-Z0-9_]+$" },
+          "message": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

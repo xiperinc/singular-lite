@@ -4,18 +4,18 @@
 # S5-routing, layer engine_runtime): the strategy-event payload builder
 # `engine/ctx-rehydrate-event.sh` records, ALONGSIDE the durable-artifact
 # manifest, the config-gated authored-knowledge manifest entries — the recorded
-# counterpart of the section TASK-0062 injects into the rehydration prompt.
+# counterpart of the section the driver injects into the rehydration prompt.
 #
 #   singular_ctx_rehydrate_event_data \
 #     <role> <task-id> <run-id> <attempt> <reason> <run_dir> [extra-id=path ...]
 #
 # The builder merges `singular_ctx_rehydrate_authored_config_manifest implement`
-# (the SAME `implement` trigger TASK-0062 injects with) into the event's nested
+# (the SAME `implement` trigger the driver injects with) into the event's nested
 # `manifest` under a distinguishable `authored` key, so the recorded authored
 # entries match the injected authored section (consistency invariant). Each
 # authored entry carries id + sha256 + class=authored-knowledge +
 # authoritative=false and is NEVER recorded as authoritative / host-verified. The
-# config gate (TASK-0061) internally checks SINGULAR_CTX_MANIFEST (default 0) and
+# config gate internally checks SINGULAR_CTX_MANIFEST (default 0) and
 # the OPTIONAL singular.config.json `contextManifest` field, so with either OFF it
 # returns empty and nothing is merged (OFF-parity: byte-identical to the
 # durable-only payload). This OPTIONAL feature is NOT part of the node's
@@ -25,7 +25,7 @@
 #     equal to the config-gated authored manifest for the same `implement`
 #     trigger; every authored entry is {id, sha256, class:"authored-knowledge",
 #     authoritative:false}.
-#   - Durable sources unaffected: manifest.sources (TASK-0055) stay recorded
+#   - Durable sources unaffected: manifest.sources stay recorded
 #     unchanged; authored entries are additive under their own key.
 #   - Never authoritative: no authored entry is host-verified / authoritative.
 #   - OFF-parity: with SINGULAR_CTX_MANIFEST unset, no authored entries merge and

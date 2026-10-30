@@ -13,6 +13,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
+acceptance_mode="$(singular_acceptance_mode)" || exit 2
 
 singular_campaign_verify_or_refuse accept-existing-packet entry || exit 2
 accept_campaign_binding="$(singular_campaign_binding)" || {
@@ -37,6 +38,120 @@ check_original_workspace_on_exit="no"
 accept_campaign_lock_held="no"
 accept_git_lock_held="no"
 audit_candidate=""
+
+# Strict recovery consumes a retained certificate; deterministic reruns cannot
+# create either an independent audit or a completed review round.
+accept_validate_certificate() {
+  local result rc=0 policy_env
+  policy_env="$(python3 -c 'import json,os
+print(json.dumps({k:v for k,v in os.environ.items() if k.startswith("SINGULAR_REVIEW_")}))')" || return 1
+  result="$(python3 "$SINGULAR_LIB_DIR/acceptance_validator.py" \
+      "--red-proof=${SINGULAR_RED_PROOF:-off}" \
+      "--acceptance-mode=$acceptance_mode" "--lease=$lease_path" \
+    "--task=$task_id" "--run=$run_id" "--branch=$branch" "--head=$head_sha" \
+    "--campaign=$accept_campaign_binding" "--run-dir=$run_dir" \
+    "--repo-root=$SINGULAR_ROOT" "--state-dir=$SINGULAR_STATE_DIR" \
+    "--logical-change=$accept_review_unit" "--audit=$audit_record" \
+    "--task-contract=$task_file" "--schema-dir=$SINGULAR_SCHEMA_DIR" \
+    "--config=$SINGULAR_JSON_CONFIG_FILE" "--policy-env-json=$policy_env" \
+    "--legacy-schema-mode=${SINGULAR_LEGACY_SCHEMA_MODE:-warn}" \
+    "--trusted-shell=${SINGULAR_BASH_BIN:-}" \
+    "--require-audit=${SINGULAR_REQUIRE_AUDIT:-1}")" || rc=$?
+  [[ "$rc" -eq 0 ]] && return 0
+  accept_refusal="$(printf '%s' "$result" | python3 -c 'import json,sys
+try:
+    result = json.load(sys.stdin)
+    print(result["conjunct"] + ":" + result["reason"])
+except (ValueError, KeyError, TypeError):
+    print("validator:validator-failed")')"
+  return 1
+}
+
+# Include optional authority inputs as well: adding one during the reruns can
+# change the rule's answer just as replacing an existing file can.
+accept_certificate_inputs() {
+  python3 - "$run_dir" "$audit_record" "$SINGULAR_STATE_DIR" \
+    "$task_file" "$SINGULAR_JSON_CONFIG_FILE" <<'PY'
+import hashlib, json, os, stat, sys
+from pathlib import Path
+run, audit, state, task, config = map(Path, sys.argv[1:])
+paths = {audit, audit.with_name(audit.name + ".pre-normalize.json"),
+         run / "audit-verification.json", run / "evidence-manifest.json",
+         state / "review-policy/ledger.json", task, config}
+try:
+    report = json.loads((run / "audit-verification.json").read_text())
+except (OSError, ValueError):
+    report = {}
+if isinstance(report, dict):
+    for ref in (report.get("logPath") or report.get("logRef"), report.get("baselineRef")):
+        if isinstance(ref, str) and ref:
+            path = Path(ref)
+            paths.add(path if path.is_absolute() else run / path)
+for pattern in ("verification-request-*.json", "verification-task-contract-*.md",
+                "verification-policy-*.json"):
+    paths.update(run.glob(pattern))
+values = []
+for path in sorted(paths):
+    try:
+        mode = path.lstat().st_mode
+        if stat.S_ISREG(mode):
+            value = hashlib.sha256(path.read_bytes()).hexdigest()
+        elif stat.S_ISLNK(mode):
+            value = [os.readlink(path), hashlib.sha256(path.read_bytes()).hexdigest()]
+        else:
+            value = "not-a-file"
+    except FileNotFoundError:
+        value = None
+    values.append([str(path), value])
+print(hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest())
+PY
+}
+
+accept_lock_publication() {
+  if [[ "$accept_git_lock_held" != "yes" ]]; then
+    singular_git_lock_acquire || return $?
+    accept_git_lock_held="yes"
+  fi
+  if [[ "$accept_campaign_lock_held" != "yes" ]]; then
+    singular_campaign_lock_acquire || return $?
+    accept_campaign_lock_held="yes"
+  fi
+  singular_campaign_publication_cas \
+    "$accept_campaign_binding" accept-existing-packet pre-publication
+}
+
+accept_refuse_certificate() {
+  local advice payload marker="$run_dir/accept-existing-packet-refusal.json"
+  advice="acceptance refused ($accept_refusal): an independent accepted audit and a completed review round are required; acceptance evidence is missing, invalid or changed. Operator: repair the named evidence, then run singular drive $task_id --audit-only"
+  printf '%s\n' "$advice" >&2
+  accept_lock_publication || exit 2
+  # A stale recovery may not park a newer lease or a replaced packet.
+  [[ "$(shasum -a 256 "$packet" | awk '{print $1}')" == "$packet_initial_sha" \
+    && "$(shasum -a 256 "$lease_path" | awk '{print $1}')" == "$lease_initial_sha" ]] || exit 2
+  if [[ -f "$marker" \
+      && "$(singular_lease_status "$task_id")" == "blocked" \
+      && "$(singular_task_field "$task_file" status)" == "blocked" ]]; then
+    exit 2
+  fi
+  payload="$(python3 - "$task_id" "$run_id" "$head_sha" "$advice" \
+    "$branch" "$packet_initial_sha" \
+    "$(git -C "$SINGULAR_ROOT" rev-parse --verify "$base_ref^{commit}" 2>/dev/null || true)" <<'PY'
+import json, sys
+print(json.dumps(dict(taskId=sys.argv[1], runId=sys.argv[2], headSha=sys.argv[3],
+                     reason=sys.argv[4], resolutionOwner="operator", published=False,
+                     branch=sys.argv[5], packetSha256=sys.argv[6], baseSha=sys.argv[7])))
+PY
+)" || exit 2
+  singular_append_event "packet.acceptance_refused" "existing packet acceptance refused" "$payload" || exit 2
+  singular_lease_set_status "$task_id" blocked || exit 2
+  singular_task_set_status "$task_file" blocked || exit 2
+  "$SINGULAR_LIB_DIR/record-decision.sh" --task "$task_id" --decision escalate-parked \
+    --rationale "$advice" --run "$run_id" --branch "$branch" --authority origin >/dev/null || exit 2
+  singular_breaker_trip >/dev/null || exit 2
+  singular_append_event "task.acceptance_parked" "task parked after acceptance refusal" "$payload" || exit 2
+  printf '%s\n' "$payload" >"$marker"
+  exit 2
+}
 
 workspace_fingerprint() {
   python3 - "$1" <<'PY'
@@ -158,6 +273,7 @@ fi
 [[ -d "$workspace" ]] || { echo "packet workspace not found: $workspace" >&2; exit 2; }
 [[ -d "$run_dir" ]] || { echo "run dir not found: $run_dir" >&2; exit 2; }
 
+
 if find "$SINGULAR_ORCH_DIR/packets/imported/$task_id" -maxdepth 1 -name '*.json' -not -name '*.audit.json' -type f 2>/dev/null | grep -q .; then
   echo "task already imported: $task_id" >&2
   exit 2
@@ -210,6 +326,20 @@ if [[ -n "$non_generated_dirty" ]]; then
 fi
 original_workspace_fingerprint="$(workspace_fingerprint "$workspace")"
 check_original_workspace_on_exit="yes"
+
+if [[ "$acceptance_mode" == "every-path" ]]; then
+  accept_refusal="D:review-unit-invalid"
+  accept_dag_node="$(singular_task_field "$task_file" dagNode)" || accept_refuse_certificate
+  accept_review_unit="$(python3 "$SINGULAR_LIB_DIR/review_policy.py" \
+    --config "$SINGULAR_JSON_CONFIG_FILE" --state-dir "$SINGULAR_STATE_DIR" \
+    resolve --task "$task_id" --dag-node "$accept_dag_node" \
+    --tasks-dir "$SINGULAR_TASKS_DIR" --dry-run)" || accept_refuse_certificate
+  accept_review_unit="$(printf '%s' "$accept_review_unit" | python3 -c \
+    'import json,sys; print(json.load(sys.stdin)["logicalChange"])')" || accept_refuse_certificate
+  accept_refusal="E:acceptance-inputs-unreadable"
+  accept_inputs_before="$(accept_certificate_inputs)" || accept_refuse_certificate
+  accept_validate_certificate || accept_refuse_certificate
+fi
 
 mapfile -t owned_files < <(python3 - "$packet" <<'PY'
 import json
@@ -336,10 +466,12 @@ fi
 # refuses a committed delta without a passing secret check. Record this
 # verification's own results so a stale or absent worker-run record cannot
 # decide the acceptance.
+if [[ "$acceptance_mode" != "every-path" ]]; then
 if ! singular_check_result_write "$run_dir/scope-check-result.json" scope passed 0 "$scope_log" \
   || ! singular_check_result_write "$run_dir/secret-scan-result.json" secret passed 0 "$secret_log"; then
   echo "could not record deterministic acceptance check results" >&2
   exit 2
+fi
 fi
 
 cmd_list="$run_dir/accept-existing-packet-commands.jsonl"
@@ -596,6 +728,13 @@ finally:
 PY
 
 manifest_log="$run_dir/accept-existing-packet-evidence-manifest.log"
+if [[ "$acceptance_mode" == "every-path" ]]; then
+  # Keep the independent certificate intact throughout the long reruns. Only
+  # extend its manifest after checking its original bytes under the locks.
+  accept_lock_publication || exit 2
+  accept_refusal="E:acceptance-evidence-changed-before-publication"
+  [[ "$(accept_certificate_inputs)" == "$accept_inputs_before" ]] || accept_refuse_certificate
+else
 if ! "$SCRIPT_DIR/evidence-manifest.sh" \
   --run-dir "$run_dir" --task-id "$task_id" \
   --worktree "$verification_worktree" --base-ref "$base_ref" --head-sha "$actual_head" \
@@ -604,10 +743,11 @@ if ! "$SCRIPT_DIR/evidence-manifest.sh" \
   echo "could not generate deterministic acceptance evidence manifest" >&2
   exit 2
 fi
+fi
 evidence_manifest="$run_dir/evidence-manifest.json"
 python3 - "$evidence_manifest" "$run_dir" "$rerun_results" \
   "$scope_log" "$secret_log" "$bootstrap_log" "$storage_guard_log" "$packet_input" \
-  "$verification_setup_log" "$cmd_list" "$rerun_logs" <<'PY'
+  "$verification_setup_log" "$cmd_list" "$rerun_logs" "$acceptance_mode" <<'PY'
 import hashlib
 import json
 import os
@@ -629,6 +769,7 @@ import tempfile
     rerun_logs_raw,
 ) = sys.argv[1:12]
 manifest_path = pathlib.Path(manifest_path_raw)
+strict = sys.argv[12] == "every-path"
 run_dir = pathlib.Path(run_dir_raw).resolve()
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 excerpt_limit = int(manifest["budget"]["excerptLimitBytes"])
@@ -687,7 +828,7 @@ artifact_paths = [
 artifacts = {
     item.get("ref"): item
     for item in manifest.get("artifacts", [])
-    if item.get("ref") not in {"packet.json", "audit.json"}
+    if item.get("ref") not in ({"packet.json"} if strict else {"packet.json", "audit.json"})
 }
 for path in artifact_paths:
     path = path.resolve()
@@ -714,11 +855,12 @@ manifest["checks"]["secret"] = {
     "ref": artifact_ref(secret),
     "sha256": sha256(secret),
 }
-manifest["checks"]["gate"] = {
-    "status": "passed",
-    "ref": artifact_ref(results),
-    "sha256": sha256(results),
-}
+if not strict:
+    manifest["checks"]["gate"] = {
+        "status": "passed",
+        "ref": artifact_ref(results),
+        "sha256": sha256(results),
+    }
 
 for _ in range(3):
     encoded = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
@@ -751,16 +893,20 @@ singular_json_schema_check "$manifest_json" "$manifest_schema" "evidence manifes
 singular_campaign_binding_matches \
   "$accept_campaign_binding" accept-existing-packet pre-audit-publication-checkpoint \
   || exit 2
+if [[ "$accept_git_lock_held" != "yes" ]]; then
 singular_git_lock_acquire || {
   echo "accept-existing-packet: git operation lock unavailable" >&2
   exit 75
 }
 accept_git_lock_held="yes"
+fi
+if [[ "$accept_campaign_lock_held" != "yes" ]]; then
 singular_campaign_lock_acquire || {
   echo "accept-existing-packet: campaign publication lock unavailable" >&2
   exit 75
 }
 accept_campaign_lock_held="yes"
+fi
 singular_campaign_publication_cas \
   "$accept_campaign_binding" accept-existing-packet pre-audit-publication || exit 2
 
@@ -788,6 +934,11 @@ if [[ -z "$current_packet_sha" || "$current_packet_sha" != "$packet_initial_sha"
 fi
 check_original_workspace_on_exit="no"
 
+if [[ "$acceptance_mode" == "every-path" ]]; then
+  accept_refusal="E:acceptance-inputs-unreadable"
+  accept_final_inputs="$(accept_certificate_inputs)" || accept_refuse_certificate
+  accept_validate_certificate || accept_refuse_certificate
+else
 python3 - "$packet" "$audit_candidate" "$scope_log" "$secret_log" "$cmd_list" \
   "$rerun_logs" "$audit_contract" "$evidence_manifest" \
   "$accept_campaign_binding" <<'PY'
@@ -868,6 +1019,12 @@ PY
 SINGULAR_AUDIT_SCHEMA="$audit_schema_path" \
   singular_validate_audit_verdict "$audit_candidate" "$task_id" "$run_id" \
   || { echo "audit schema validation failed for $audit_candidate" >&2; exit 2; }
+fi
+
+if [[ "$acceptance_mode" == "every-path" ]]; then
+  accept_refusal="E:acceptance-evidence-changed-before-publication"
+  [[ "$(accept_certificate_inputs)" == "$accept_final_inputs" ]] || accept_refuse_certificate
+fi
 
 python3 - "$packet" "$run_id" "$accept_campaign_binding" <<'PY'
 import json
@@ -893,7 +1050,9 @@ with open(temporary, "w", encoding="utf-8") as f:
 os.replace(temporary, packet_path)
 PY
 singular_validate_packet_basic "$packet" >/dev/null
-mv "$audit_candidate" "$audit_record"
+if [[ "$acceptance_mode" != "every-path" ]]; then
+  mv "$audit_candidate" "$audit_record"
+fi
 audit_candidate=""
 
 if ! singular_lease_set_status "$task_id" "accepted"; then
@@ -901,10 +1060,16 @@ if ! singular_lease_set_status "$task_id" "accepted"; then
   exit 2
 fi
 singular_task_set_status "$task_file" "accepted"
+accept_rationale="deterministic acceptance of existing stranded packet; branch head matches packet; scope, secret scan, evidence, and rerun commands passed"
+accept_message="existing state packet accepted deterministically"
+if [[ "$acceptance_mode" == "every-path" ]]; then
+  accept_rationale="retained independent audit, completed review round and exact host report validated; deterministic reruns recorded as separate evidence"
+  accept_message="existing state packet accepted with retained independent certificate"
+fi
 "$SCRIPT_DIR/record-decision.sh" --task "$task_id" --decision "accept" \
-  --rationale "deterministic acceptance of existing stranded packet; branch head matches packet; scope, secret scan, evidence, and rerun commands passed" \
+  --rationale "$accept_rationale" \
   --run "$run_id" --branch "$branch" --authority origin >/dev/null
-singular_append_event "packet.accepted_existing" "existing state packet accepted deterministically" \
+singular_append_event "packet.accepted_existing" "$accept_message" \
   "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"branch\":\"$branch\",\"headSha\":\"$head_sha\",\"audit\":\"$audit_record\"}"
 
 singular_campaign_lock_release

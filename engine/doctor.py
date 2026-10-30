@@ -273,7 +273,7 @@ class Doctor:
         # Primary diagnosis, once one is reached. A repo whose schema does not
         # match the engine cannot have its artifacts interpreted by this engine,
         # so every check that reads one afterwards would report a derivative
-        # error about a file the operator was never asked to fix (PMGO-008).
+        # error about a file the operator was never asked to fix.
         self.blocking: dict[str, str] | None = None
         self.repo_pin = ""
         self.repo_pin_source = ""
@@ -560,7 +560,7 @@ class Doctor:
         agent's provider and shell children outlive the kill and keep writing
         to a worktree — and the restricted sandboxes that break it are the same
         ones that deny `ps`, so the fallback is gone too and the failure is
-        silent (PMGO-004). So: probe both, run the real thing rather than
+        silent. So: probe both, run the real thing rather than
         infer from uname, and let the group-kill failure BLOCK rather than warn.
         An operator who cannot prove cleanup must not actuate unattended.
         """
@@ -915,7 +915,7 @@ exec "$2" -c 'import json,os,sys; print(json.dumps({"environment":dict(os.enviro
                 }
 
     def config_source_conflict(self) -> None:
-        """Two configuration sources, one silent winner (AXON-001).
+        """Two configuration sources, one silent winner.
 
         `resources.maxConcurrent: 3` and `env: {"SINGULAR_MAX_CONCURRENT": "2"}`
         both describe the dispatch cap; the env{} map wins and nothing said so,
@@ -1117,7 +1117,7 @@ exec "$2" -c 'import json,os,sys; print(json.dumps({"environment":dict(os.enviro
 
         Doctor never read .singular-version at all: the only pin comparison in
         the product lived in the CLI's legacy bash doctor, which nothing
-        dispatched to (PMGO-008). Mirrors repo_pin() in cli/singular --
+        dispatched to. Mirrors repo_pin() in cli/singular --
         .singular-version is authoritative, singular.config.json engineVersion is
         the fallback, and a disagreement is reported without changing which one
         wins.
@@ -1337,6 +1337,7 @@ exec "$2" -c 'import json,os,sys; print(json.dumps({"environment":dict(os.enviro
 
         consumer_counts: dict[str, int] = {}
         consumer_extensions: dict[str, list[str]] = {}
+        reformatted: list[str] = []
         for label, directory in consumer_dirs:
             if not directory.is_dir():
                 errors.append(f"{label}: schema directory missing ({directory})")
@@ -1376,10 +1377,26 @@ exec "$2" -c 'import json,os,sys; print(json.dumps({"environment":dict(os.enviro
                 if authoritative.is_file():
                     try:
                         if authoritative.read_bytes() != path.read_bytes():
-                            errors.append(
-                                f"{label}/{path.name}: consumer copy differs "
-                                "from authoritative schema"
-                            )
+                            # The engine writes mirrors as byte copies of its
+                            # one bundle, so a copy that still parses to the
+                            # same JSON was rewritten after the fact, in
+                            # practice by a formatter run over the repository
+                            # (`biome check --write .`, prettier, a pre-commit
+                            # hook). Say so: "differs" sends the operator
+                            # looking for a second, stale engine bundle that
+                            # does not exist.
+                            if value == parsed.get(authoritative):
+                                reformatted.append(f"{label}/{path.name}")
+                                errors.append(
+                                    f"{label}/{path.name}: consumer copy was "
+                                    "reformatted (same JSON, different bytes "
+                                    "than the authoritative schema)"
+                                )
+                            else:
+                                errors.append(
+                                    f"{label}/{path.name}: consumer copy differs "
+                                    "from authoritative schema"
+                                )
                     except OSError as exc:
                         errors.append(f"{label}/{path.name}: {exc}")
         if errors:
@@ -1388,11 +1405,23 @@ exec "$2" -c 'import json,os,sys; print(json.dumps({"environment":dict(os.enviro
                 "fail",
                 f"schemas missing, invalid, or drifted: {'; '.join(errors[:8])}",
                 required_for=("all-runs",),
-                remediation="Restore the engine schema bundle and regenerate consumer mirrors.",
+                remediation=(
+                    "Restore the engine schema bundle and regenerate consumer mirrors: "
+                    "`singular init` rewrites schemas/orchestration/ byte-for-byte from "
+                    "the engine bundle."
+                    + (
+                        " The reformatted copies were rewritten by a formatter after the "
+                        "engine wrote them; exclude schemas/orchestration/ from it "
+                        "(formatter ignore list, lint --write, pre-commit hooks) or the "
+                        "drift returns on the next format run."
+                        if reformatted else ""
+                    )
+                ),
                 details={
                     "authoritativeSchemaCount": len(authoritative_paths),
                     "consumerSchemaCounts": consumer_counts,
                     "consumerExtensions": consumer_extensions,
+                    "reformatted": reformatted[:100],
                     "errors": errors[:100],
                 },
             )
@@ -1546,7 +1575,7 @@ exec "$2" -c 'import json,os,sys; print(json.dumps({"environment":dict(os.enviro
         # A pidfile probe has FOUR outcomes, and they are not interchangeable.
         # This loop used to catch `(OSError, ValueError)` as one case and call
         # all of it "stale", so a sandbox that denies process inspection made
-        # doctor report the live console server as a leftover (PMGO-005).
+        # doctor report the live console server as a leftover.
         # `kill(pid, 0)` answering EPERM means "the process may well be there,
         # I am not permitted to look" — the opposite of proof of death. Only
         # ESRCH is that proof, and only that verdict may suggest deleting the
@@ -1661,8 +1690,8 @@ exec "$2" -c 'import json,os,sys; print(json.dumps({"environment":dict(os.enviro
         """alive | stale | unknown-permission | malformed, for the loop above.
 
         The seam exists because EPERM cannot be provoked portably from a test
-        process that owns everything it spawns, and EPERM is the exact case
-        PMGO-005 was about. Both variables are required and the state must be
+        process that owns everything it spawns. Both variables are required,
+        and the state must be
         one this map knows: a lone or misspelled variable falls through to the
         real syscall, so a value inherited from some other run can never
         quietly rewrite an operator's diagnosis. Same discipline, and the same
@@ -3103,6 +3132,19 @@ exec "$2" -c 'import json,os,sys; print(json.dumps({"environment":dict(os.enviro
                 # uses — L1 planners create no worktrees, so they never consume
                 # the worktree budget this check is about.
                 "maxConcurrent": "SINGULAR_MAX_CONCURRENT",
+                # Resource governor tunables, same projection as lib.sh.
+                "autoMaxConcurrent": "SINGULAR_AUTO_MAX_CONCURRENT",
+                "cpuReserveCores": "SINGULAR_CPU_RESERVE_CORES",
+                "workersPerCore": "SINGULAR_WORKERS_PER_CORE",
+                "estimatedWorkerBytes": "SINGULAR_ESTIMATED_WORKER_BYTES",
+                "memoryReserveBytes": "SINGULAR_MEMORY_RESERVE_BYTES",
+                "loadHighWater": "SINGULAR_LOAD_HIGH_WATER",
+                "loadLowWater": "SINGULAR_LOAD_LOW_WATER",
+                "cpuBusyHighWater": "SINGULAR_CPU_BUSY_HIGH_WATER",
+                "cpuBusyLowWater": "SINGULAR_CPU_BUSY_LOW_WATER",
+                "cpuSampleSeconds": "SINGULAR_CPU_SAMPLE_SEC",
+                "plannerFraction": "SINGULAR_L1_AUTO_FRACTION",
+                "progressFloor": "SINGULAR_PROGRESS_FLOOR",
             }
             for source, target in mappings.items():
                 if source in resources and target not in os.environ:
@@ -3142,6 +3184,7 @@ exec "$2" -c 'import json,os,sys; print(json.dumps({"environment":dict(os.enviro
                 ),
                 details=record,
             )
+            self.machine_capacity_check(record)
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             self.add(
                 "resources.adaptive-disk",
@@ -3150,6 +3193,122 @@ exec "$2" -c 'import json,os,sys; print(json.dumps({"environment":dict(os.enviro
                 required_for=("worker-runs",),
                 remediation="Repair engine/resource-plan.sh.",
             )
+
+    def machine_capacity_check(self, record: dict[str, Any]) -> None:
+        """Report what the machine supports next to what the loop will use.
+
+        Uses the very record `resources.adaptive-disk` just evaluated, so both
+        checks describe one measurement. An explicit `maxConcurrent` is the
+        operator's decision and is never a failure here; it is a warning only
+        when it is at least twice, or at most half, what the machine supports,
+        because both of those have been observed in the field: a fixed 3 left
+        a 12-core host idle and a fixed 5 saturated it.
+        """
+        if "cpuSlots" not in record:
+            return
+        mode = record.get("mode")
+        cpu_slots = record.get("cpuSlots")
+        memory_slots = record.get("memorySlots")
+        disk_slots = record.get("diskSlots")
+        configured = int(record["configuredSlots"])
+        effective = int(record["effectiveSlots"])
+        available = record.get("availableMemoryBytes")
+        facts = (
+            f"{record.get('cpuCount') if record.get('cpuCount') is not None else '?'} cores, "
+            + (f"{available / 1024 ** 3:.1f}GiB" if isinstance(available, int) else "?")
+            + " memory available, cpu busy "
+            + (
+                f"{record['cpuBusy'] * 100:.0f}%"
+                if isinstance(record.get("cpuBusy"), (int, float)) and not isinstance(record.get("cpuBusy"), bool)
+                else "?"
+            )
+            + ", load/core "
+            + (str(record.get("loadPerCore")) if record.get("loadPerCore") is not None else "?")
+            + f", pressure signal {record.get('pressureSignal', 'load-average')}"
+            + f"; slots cpu={cpu_slots if cpu_slots is not None else '?'}"
+            + f" memory={memory_slots if memory_slots is not None else '?'}"
+            + f" disk={disk_slots if disk_slots is not None else '?'}"
+        )
+        measured = [
+            value for value in (cpu_slots, memory_slots, disk_slots)
+            if isinstance(value, int) and not isinstance(value, bool)
+        ]
+        supported = min(measured) if len(measured) == 3 else None
+        status = "pass"
+        remediation = ""
+        if record.get("probeFailures") and (cpu_slots is None or memory_slots is None):
+            status = "warn"
+            summary = (
+                f"machine probes unavailable ({', '.join(record['probeFailures'])}); "
+                + (
+                    "auto concurrency fell back to 3 worker slots"
+                    if mode == "auto"
+                    else f"explicit ceiling {configured} cannot be compared with the machine"
+                )
+                + f" ({facts})"
+            )
+            remediation = (
+                "Set resources.maxConcurrent to an integer, or check that vm_stat "
+                "(macOS) or /proc/meminfo (Linux) is readable from this process."
+            )
+        elif mode == "auto":
+            summary = (
+                f"machine-sized worker ceiling: {effective} "
+                f"({record.get('capacityReason', 'unknown')}; {facts})"
+            )
+        else:
+            summary = f"explicit worker ceiling {configured}; machine supports {supported} ({facts})"
+            if supported is not None and supported >= 1 and configured >= 1:
+                if configured * 2 <= supported:
+                    status = "warn"
+                    summary = (
+                        f"explicit worker ceiling {configured} is far below what this "
+                        f"machine supports ({supported}; {facts})"
+                    )
+                    remediation = (
+                        'Set resources.maxConcurrent (or SINGULAR_MAX_CONCURRENT) to "auto" '
+                        "to use the machine, or keep the integer if the limit is deliberate."
+                    )
+                elif configured >= supported * 2:
+                    status = "warn"
+                    summary = (
+                        f"explicit worker ceiling {configured} is far above what this "
+                        f"machine supports ({supported}; {facts})"
+                    )
+                    remediation = (
+                        'Set resources.maxConcurrent (or SINGULAR_MAX_CONCURRENT) to "auto", '
+                        "or lower it; the live-pressure throttle will otherwise hold dispatch "
+                        "whenever the machine saturates."
+                    )
+        if record.get("admission") in ("throttled", "floor"):
+            status = "warn"
+            summary += f"; admission throttled now ({record.get('admissionReason')})"
+            if record.get("progressFloor") is True:
+                summary += ", one unit admitted by the minimum-progress floor"
+            remediation = remediation or (
+                "No action needed: running work continues and new work is admitted "
+                "again once CPU utilisation (or, without a CPU sample, load per core) "
+                "or available memory recovers."
+            )
+        self.add(
+            "resources.machine-capacity",
+            status,
+            summary,
+            required_for=("worker-runs",),
+            remediation=remediation,
+            details={
+                key: record.get(key)
+                for key in (
+                    "mode", "configuredSlots", "effectiveSlots", "cpuSlots", "memorySlots",
+                    "diskSlots", "plannerSlots", "cpuCount", "loadAverage1m", "loadPerCore",
+                    "availableMemoryBytes", "estimatedWorkerBytes", "memoryReserveBytes",
+                    "loadHighWater", "loadLowWater", "cpuBusy", "cpuBusyHighWater",
+                    "cpuBusyLowWater", "pressureSignal", "admission", "admissionReason",
+                    "progressFloor", "activeWorkers", "activePlanners",
+                    "capacityReason", "probeFailures",
+                )
+            },
+        )
 
     def governance_checks(self) -> None:
         if self.blocked("governance.unbound-waivers"):
@@ -3387,7 +3546,7 @@ exec "$2" -c 'import json,os,sys; print(json.dumps({"environment":dict(os.enviro
         shipped = self.engine / "singular-ext/promote-gate.sh"
         if promoter is not None and promoter.resolve() != shipped.resolve():
             # NEVER probe a promoter we did not ship. A consumer promoter takes a
-            # bare NODE argument (tools/promote-gate.sh does), so `--registers X`
+            # bare NODE argument, so `--registers X`
             # could be read as a node id and make it ACT -- a diagnostic must not
             # promote anything. An unintrospectable promoter is reported as such.
             self.add(
@@ -3436,8 +3595,8 @@ exec "$2" -c 'import json,os,sys; print(json.dumps({"environment":dict(os.enviro
             "; ".join(parts) + " — this graph cannot advance unattended",
             remediation=(
                 'Point "promoter" in singular.config.json at a promoter that registers '
-                "these nodes (a bare name resolves to <engine>/singular-ext/<name>.sh; "
-                "tools/promote-gate.sh is a worked example), and/or set "
+                "these nodes (a bare name resolves to <engine>/singular-ext/<name>.sh), "
+                "and/or set "
                 '"authority": "agent-review-allowed" on evaluation nodes you want '
                 "promoted from a gate-review.v0 record instead of by hand."
             ),
@@ -3595,7 +3754,7 @@ exec "$2" -c 'import json,os,sys; print(json.dumps({"environment":dict(os.enviro
         # engine can read this repo at all. Only after that does anything load
         # or interpret a repository artifact -- so an incompatibility is stated
         # once, by the check that found it, instead of a dozen times by the
-        # checks that tripped over it (PMGO-008).
+        # checks that tripped over it.
         self.basic_checks()
         self.process_control_checks()
         self.load_config()

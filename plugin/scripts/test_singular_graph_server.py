@@ -690,7 +690,7 @@ class PlanOverviewTests(unittest.TestCase):
 
 
 class NodeRankAndStageOrderTests(unittest.TestCase):
-    """PMGO-001: rank comes from the dependency edges, and stage order follows
+    """Rank comes from the dependency edges, and stage order follows
     rank — the lexical D-prefix/numeric key survives only as the tie-break."""
 
     def test_ranks_chain_diamond_and_dangling(self) -> None:
@@ -759,7 +759,7 @@ class NodeRankAndStageOrderTests(unittest.TestCase):
 
 
 class GateCohortTests(unittest.TestCase):
-    """PMGO-002: passed gates split into the historical accepted-as-done set and
+    """Passed gates split into the historical accepted-as-done set and
     what the current campaign earned. The combined figures never move."""
 
     def _repo(self) -> Path:
@@ -818,7 +818,7 @@ class GateCohortTests(unittest.TestCase):
         # the same block reaches /api/state + /api/home through the gate summary
         self.assertEqual(srv.collect_gates_summary(repo)["cohorts"], progress["cohorts"])
 
-    def test_axon_shape_every_passed_gate_is_historical(self) -> None:
+    def test_reported_shape_every_passed_gate_is_historical(self) -> None:
         # The reported shape: 2 authoritative grandfathered gates, 2 future nodes
         # with no gate at all, and a loop that has never actuated.
         repo = self._repo()
@@ -1180,8 +1180,8 @@ class NoAdapterSnapshotIdentityTests(unittest.TestCase):
             # non-blocking background peek — see NativeFrontierTests /
             # ValidateDagNativeTests / SnapshotNoSubprocessTests below.
             # /api/overview (includes settings groups). 0.17.0 added three
-            # fields: progress.cohorts (PMGO-002), loop.stopReason (PMGO-003)
-            # and l1Selection (AXON-002). They are dropped from BOTH sides
+            # fields: progress.cohorts, loop.stopReason
+            # and l1Selection. They are dropped from BOTH sides
             # rather than the comparison being dropped — everything else must
             # still be byte-identical, and the new fields have their own
             # assertions below.
@@ -1868,7 +1868,7 @@ class CollectDagViewTests(unittest.TestCase):
 
 
 class NativeL1SelectionTests(unittest.TestCase):
-    """AXON-002: compute_l1_selection_native must reproduce engine/lib.sh
+    """compute_l1_selection_native must reproduce engine/lib.sh
     `singular_select_l1_frontier` — same selection, plus the per-node reason the
     engine computes and discards."""
 
@@ -2032,7 +2032,7 @@ class L1SelectionConfigTests(unittest.TestCase):
 
 
 class StopReasonTests(unittest.TestCase):
-    """PMGO-003: a stopped loop must say WHY, and name the next action when one
+    """A stopped loop must say WHY, and name the next action when one
     exists."""
 
     def _repo(self) -> Path:
@@ -2318,6 +2318,23 @@ class ConfigEndpointTests(unittest.TestCase):
         self.assertEqual(cfg["limits"]["maxConcurrent"], "3")
         self.assertNotIn("secret", json.dumps(cfg))
 
+    def test_claude_defaults_match_provider_spec(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        model = json.loads((root / "engine/providers.json").read_text())["providers"]["claude"]["model"]
+        self.assertEqual(srv._CONFIG_MODEL_FALLBACK["claude"], (model["env"], model["default"]))
+        vocabulary = (root / "plugin/assets/core/models.js").read_text()
+        claude_options = vocabulary.split("claude: Object.freeze([", 1)[1].split("])", 1)[0]
+        self.assertIn(json.dumps(model["default"]), claude_options)
+        repo = self._repo()
+        (repo / "singular.config.json").write_text(json.dumps({"runner": "claude-run.sh", "env": {}}))
+        srv.initialize_configuration(repo, force=True)
+        cfg = srv.collect_config(repo)
+        self.assertEqual(cfg["provider"], "claude")
+        for role in ("implementer", "planner", "auditor", "decider"):
+            with self.subTest(role=role):
+                self.assertEqual(cfg["roles"][role]["model"], model["default"])
+                self.assertEqual(cfg["roles"][role]["source"]["modelTier"], "runner-default")
+
     def test_codex_defaults(self) -> None:
         repo = self._repo()
         (repo / "singular.config.json").write_text(json.dumps({"runner": "codex-run.sh", "env": {}}))
@@ -2333,7 +2350,14 @@ class ConfigEndpointTests(unittest.TestCase):
         cfg = srv.collect_config(repo)
         self.assertEqual(cfg["provider"], "codex")   # engine default runner
         self.assertEqual(cfg["configuration"]["status"], "absent")
-        self.assertIsNone(cfg["limits"]["maxConcurrent"])
+        # No configuration at all: the engine default is the machine-sized
+        # ceiling, and the console reports the engine's resolved value.
+        self.assertEqual(cfg["limits"]["maxConcurrent"], "auto")
+
+
+# SINGULAR_CONSOLE_CONFIG_RELOAD=0: a changed input fails closed until restart
+# or a settings write (the pre-0.23.5 contract, still selectable).
+_strict_configuration = mock.patch.object(srv, "CONFIGURATION_AUTO_RELOAD", False)
 
 
 class NewCollectorsNoSubprocessTests(unittest.TestCase):
@@ -2442,6 +2466,7 @@ class ConfigurationSnapshotContractTests(unittest.TestCase):
                          "explicit-clear")
         self.assertNotIn("do-not-serialize-this", json.dumps(cfg))
 
+    @_strict_configuration
     def test_changed_file_exposes_restart_required_in_every_projection(self) -> None:
         repo = self._repo({"runner": "codex-run.sh", "env": {}})
         srv.initialize_configuration(repo, force=True)
@@ -2456,6 +2481,7 @@ class ConfigurationSnapshotContractTests(unittest.TestCase):
         with self.assertRaises(srv.ConfigurationUnavailable):
             srv.state_path(repo)
 
+    @_strict_configuration
     def test_environment_and_runner_identity_are_bound(self) -> None:
         runner = None
         repo = self._repo()
@@ -2508,6 +2534,7 @@ class ConfigurationSnapshotContractTests(unittest.TestCase):
             self.assertTrue(all(row["status"] == "unknown"
                                 for row in providers["providers"]))
 
+    @_strict_configuration
     def test_complete_collection_pins_one_generation(self) -> None:
         repo = self._repo({"runner": "codex-run.sh", "env": {}})
         initial = srv.initialize_configuration(repo, force=True)
@@ -2522,6 +2549,7 @@ class ConfigurationSnapshotContractTests(unittest.TestCase):
         self.assertEqual(srv.collect_config(repo)["configuration"]["reason"],
                          "configuration-changed")
 
+    @_strict_configuration
     def test_selected_context_policy_change_invalidates_generation(self) -> None:
         repo = self._repo({
             "runner": "codex-run.sh",
@@ -2595,6 +2623,7 @@ class ConfigurationSnapshotContractTests(unittest.TestCase):
         self.assertEqual(config["configuration"]["source"], "default")
         self.assertEqual(config["provider"], "claude")
 
+    @_strict_configuration
     def test_settings_accepts_changed_selector_with_one_refresh(self) -> None:
         repo = self._repo({"runner": "codex-run.sh", "env": {}})
         srv.initialize_configuration(repo, force=True)
@@ -2661,6 +2690,7 @@ class ConfigurationSnapshotContractTests(unittest.TestCase):
         self.assertEqual(calls, [])
         self.assertEqual(before, after)
 
+    @_strict_configuration
     def test_warmed_derived_caches_cannot_bypass_changed_generation(self) -> None:
         repo = self._repo({"runner": "codex-run.sh", "env": {}})
         original_collect_processes = srv.collect_processes
@@ -2788,6 +2818,236 @@ class ConfigurationSnapshotContractTests(unittest.TestCase):
         self.assertEqual(calls, [initial["generation"]["id"],
                                  replacement["generation"]["id"]])
 
+
+    # --- 0.23.5: a changed input reloads in process -------------------------
+
+    def _counted(self):
+        calls: list[Path] = []
+        original = srv._compute_effective_configuration
+
+        def counted(root):
+            calls.append(root)
+            return original(root)
+
+        patcher = mock.patch.object(srv, "_compute_effective_configuration", counted)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return calls
+
+    def test_changed_input_reloads_once_and_serves_the_new_generation(self) -> None:
+        repo = self._repo({"targetBranch": "branch-a", "runner": "codex-run.sh",
+                           "env": {}})
+        initial = srv.initialize_configuration(repo, force=True)
+        self.assertTrue(initial["generation"]["autoReload"])
+        calls = self._counted()
+        (repo / "singular.config.json").write_text(json.dumps({
+            "targetBranch": "branch-b", "runner": "gemini-run.sh",
+            "env": {"SINGULAR_MAX_CONCURRENT": "7"}}))
+        cfg = srv.collect_config(repo)
+        self.assertTrue(cfg["ok"])
+        self.assertEqual(cfg["provider"], "gemini")
+        self.assertEqual(cfg["limits"]["maxConcurrent"], "7")
+        generation = cfg["generation"]
+        self.assertEqual(generation["status"], "current")
+        self.assertFalse(generation["restartRequired"])
+        self.assertNotEqual(generation["id"], initial["generation"]["id"])
+        self.assertEqual(generation["reloadCount"], 1)
+        self.assertEqual(generation["lastReload"]["previousGeneration"],
+                         initial["generation"]["id"])
+        self.assertIn("json", [item["label"]
+                               for item in generation["lastReload"]["changedInputs"]])
+        self.assertEqual(srv.TARGET_BRANCH, "branch-b")
+        self.assertEqual(srv.state_path(repo), (repo / ".singular-state").resolve())
+        # Steady state again: later reads never resolve configuration.
+        srv.collect_config(repo)
+        srv.collect_lifecycle_view(repo)
+        self.assertEqual(len(calls), 1)
+
+    def test_reload_retires_warmed_caches(self) -> None:
+        repo = self._repo({"runner": "codex-run.sh",
+                           "env": {"SINGULAR_STATE_DIR": "state-old"}})
+        for label in ("old", "new"):
+            plans = repo / f"state-{label}" / "plans"
+            plans.mkdir(parents=True)
+            (plans / "index.json").write_text(json.dumps({"plans": [
+                {"id": f"plan-{label}", "name": label,
+                 "archivedAt": "2026-10-05T00:00:00Z"}]}))
+        initial = srv.initialize_configuration(repo, force=True)
+        srv._PLANS_CACHE.invalidate()
+        self.assertEqual([row["id"] for row in srv.load_plans(repo)["plans"]], ["plan-old"])
+        (repo / "singular.config.json").write_text(json.dumps({
+            "runner": "codex-run.sh", "env": {"SINGULAR_STATE_DIR": "state-new"}}))
+        plans = srv.load_plans(repo)
+        self.assertEqual([row["id"] for row in plans["plans"]], ["plan-new"])
+        self.assertNotEqual(plans["generation"]["id"], initial["generation"]["id"])
+
+    def test_unloadable_configuration_fails_closed_then_recovers(self) -> None:
+        repo = self._repo({"runner": "codex-run.sh", "env": {}})
+        initial = srv.initialize_configuration(repo, force=True)
+        calls = self._counted()
+        (repo / "singular.config.json").write_text("{ not json")
+        broken = srv.collect_config(repo)
+        self.assertFalse(broken["ok"])
+        configuration = broken["configuration"]
+        self.assertEqual(configuration["status"], "error")
+        self.assertNotEqual(configuration["reason"], "configuration-changed")
+        self.assertEqual(configuration["reason"], "configuration-load-failed")
+        # Names the file and says what is wrong with it, not just an exit code.
+        self.assertIn(str((repo / "singular.config.json").resolve()),
+                      configuration["message"])
+        self.assertIn("failed to parse", configuration["message"])
+        self.assertIn("JSONDecodeError", configuration["message"])
+        self.assertEqual(broken["generation"]["status"], "unavailable")
+        with self.assertRaises(srv.ConfigurationUnavailable) as raised:
+            srv.state_path(repo)
+        self.assertEqual(raised.exception.configuration["reason"], configuration["reason"])
+        # The broken file is itself bound: no resolution per read while it stays.
+        srv.collect_config(repo)
+        srv.collect_lifecycle_view(repo)
+        self.assertEqual(len(calls), 1)
+        (repo / "singular.config.json").write_text(
+            json.dumps({"runner": "claude-run.sh", "env": {}}))
+        fixed = srv.collect_config(repo)
+        self.assertTrue(fixed["ok"])
+        self.assertEqual(fixed["provider"], "claude")
+        self.assertEqual(fixed["generation"]["status"], "current")
+        self.assertEqual(fixed["generation"]["reloadCount"], 2)
+        self.assertNotEqual(fixed["generation"]["id"], initial["generation"]["id"])
+        self.assertEqual(len(calls), 2)
+
+    def test_pinned_request_finishes_on_its_generation_then_next_reloads(self) -> None:
+        repo = self._repo({"runner": "codex-run.sh", "env": {}})
+        initial = srv.initialize_configuration(repo, force=True)
+        calls = self._counted()
+        with srv._EFFECTIVE_CONFIGURATION_CACHE.pin(repo):
+            (repo / "singular.config.json").write_text(
+                json.dumps({"runner": "gemini-run.sh", "env": {}}))
+            during = srv.collect_config(repo)
+            self.assertEqual(during["generation"]["id"], initial["generation"]["id"])
+            self.assertEqual(during["provider"], "codex")
+            self.assertEqual(calls, [])
+        after = srv.collect_config(repo)
+        self.assertEqual(after["provider"], "gemini")
+        self.assertEqual(len(calls), 1)
+
+    def test_settings_write_after_external_change_keeps_both(self) -> None:
+        repo = self._repo({"runner": "codex-run.sh", "env": {}})
+        srv.initialize_configuration(repo, force=True)
+        calls = self._counted()
+        (repo / "singular.config.json").write_text(json.dumps({
+            "runner": "gemini-run.sh", "env": {"SINGULAR_MAX_REPAIRS": "5"}}))
+        status, response = srv.apply_settings_changes(
+            repo, {"SINGULAR_MAX_CONCURRENT": "4"})
+        self.assertEqual(status, 200)
+        on_disk = json.loads((repo / "singular.config.json").read_text())
+        self.assertEqual(on_disk["runner"], "gemini-run.sh")
+        self.assertEqual(on_disk["env"], {"SINGULAR_MAX_REPAIRS": "5",
+                                          "SINGULAR_MAX_CONCURRENT": "4"})
+        self.assertEqual(response["config"]["provider"], "gemini")
+        self.assertEqual(len(calls), 1)
+        # The write's own refresh is not counted as an external reload.
+        self.assertNotIn("reloadCount", response["config"]["generation"])
+
+    def test_settings_write_is_refused_while_the_file_is_unloadable(self) -> None:
+        repo = self._repo({"runner": "codex-run.sh", "env": {}})
+        srv.initialize_configuration(repo, force=True)
+        (repo / "singular.config.json").write_text("{ not json")
+        status, response = srv.apply_settings_changes(
+            repo, {"SINGULAR_MAX_CONCURRENT": "4"})
+        self.assertEqual(status, 409)
+        self.assertEqual((repo / "singular.config.json").read_text(), "{ not json")
+
+    def test_peek_never_resolves_and_hands_the_reload_to_a_worker(self) -> None:
+        repo = self._repo({"runner": "codex-run.sh", "env": {}})
+        initial = srv.initialize_configuration(repo, force=True)
+        calls = self._counted()
+        cache = srv._EFFECTIVE_CONFIGURATION_CACHE
+        (repo / "singular.config.json").write_text(
+            json.dumps({"runner": "gemini-run.sh", "env": {}}))
+        with mock.patch.object(cache, "_reload_in_background") as kicked:
+            view = cache.get(repo, reload=False)
+            self.assertEqual(view["configuration"]["reason"], "configuration-changed")
+            self.assertFalse(view["configuration"]["restartRequired"])
+            self.assertEqual(view["generation"]["id"], initial["generation"]["id"])
+            kicked.assert_called_once()
+        self.assertEqual(calls, [])
+        # The lock is busy (a reload is running): answer from what is published.
+        held = threading.Event()
+        release = threading.Event()
+
+        def hold() -> None:
+            with srv._CONFIGURATION_LOCK:
+                held.set()
+                release.wait(5)
+
+        worker = threading.Thread(target=hold)
+        worker.start()
+        self.addCleanup(worker.join, 5)
+        self.addCleanup(release.set)
+        self.assertTrue(held.wait(5))
+        with mock.patch.object(srv, "_CONFIGURATION_PEEK_LOCK_SECONDS", 0.05):
+            started = time.monotonic()
+            view = cache.get(repo, reload=False)
+        self.assertLess(time.monotonic() - started, 2.0)
+        self.assertEqual(view["generation"]["id"], initial["generation"]["id"])
+        self.assertEqual(calls, [])
+
+    def test_input_rewritten_during_resolution_is_not_bound_to_the_old_view(self) -> None:
+        repo = self._repo({"runner": "codex-run.sh", "env": {}})
+        original = srv._compute_effective_configuration
+        calls: list[int] = []
+
+        def racing(root):
+            view = original(root)
+            calls.append(1)
+            if len(calls) == 1:   # the plan is regenerated while lib.sh runs
+                time.sleep(0.01)
+                (repo / "singular.config.json").write_text(
+                    json.dumps({"runner": "gemini-run.sh", "env": {}}))
+            return view
+
+        with mock.patch.object(srv, "_compute_effective_configuration", racing):
+            view = srv.initialize_configuration(repo, force=True)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(view["provider"], "gemini")
+        self.assertEqual(srv.collect_config(repo)["provider"], "gemini")
+
+    def test_console_started_on_unloadable_configuration_is_findable(self) -> None:
+        repo = self._repo()
+        (repo / "singular.config.json").write_text("{ not json")
+        view = srv.initialize_configuration(repo, force=True)
+        self.assertEqual(view["generation"]["status"], "unavailable")
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SINGULAR_CONSOLE_NO_STATE", None)
+            srv.initialize_configuration(repo, force=True)
+            written = srv.write_console_state(repo, "http://127.0.0.1:45678")
+        state = repo.resolve() / ".singular-state"
+        self.assertEqual(sorted(path.name for path in written),
+                         ["console.pid", "console.url"])
+        self.assertEqual((state / "console.url").read_text().strip(),
+                         "http://127.0.0.1:45678")
+        self.assertEqual((state / "console.port").read_text().strip(), "45678")
+        srv.remove_console_state(written)
+        self.assertFalse((state / "console.url").exists())
+        self.assertEqual((state / "console.port").read_text().strip(), "45678",
+                         "the port outlives the process so the next start reuses it")
+
+    def test_still_moving_inputs_are_retried_later_but_throttled(self) -> None:
+        repo = self._repo({"runner": "codex-run.sh", "env": {}})
+        calls = self._counted()
+        with mock.patch.object(srv, "_bindings_modified_since", return_value=True):
+            srv.initialize_configuration(repo, force=True)
+            self.assertEqual(len(calls), srv._CONFIGURATION_RELOAD_ATTEMPTS)
+            srv.collect_config(repo)
+            self.assertEqual(len(calls), srv._CONFIGURATION_RELOAD_ATTEMPTS)
+        snapshot = srv._EFFECTIVE_CONFIGURATION_CACHE._snapshots[str(repo.resolve())]
+        self.assertTrue(snapshot["unsettled"])
+        snapshot["boundAt"] -= srv._CONFIGURATION_UNSETTLED_RETRY_SECONDS + 1
+        cfg = srv.collect_config(repo)
+        self.assertTrue(cfg["ok"])
+        self.assertEqual(len(calls), srv._CONFIGURATION_RELOAD_ATTEMPTS + 1)
+        srv.collect_config(repo)
+        self.assertEqual(len(calls), srv._CONFIGURATION_RELOAD_ATTEMPTS + 1)
 
 class AutonomateLogResolutionTests(unittest.TestCase):
     """The engine's --detach loop writes autonomate.log; the legacy name is
@@ -3802,6 +4062,87 @@ class ProvidersRouteTests(unittest.TestCase):
         by = {p["id"]: p for p in prov["providers"]}
         self.assertTrue(by["gemini"]["isDefaultRunner"])
 
+    def test_external_config_change_reloads_over_http(self) -> None:
+        routes = ("/api/home", "/api/state", "/api/dag", "/api/plans", "/api/events",
+                  "/api/sessions", "/api/overview", "/api/timeline", "/api/config")
+        warm = {route: self._req("GET", route) for route in routes}
+        self.assertEqual({route: status for route, (status, _d) in warm.items()},
+                         {route: 200 for route in routes})
+        initial = warm["/api/config"][1]["generation"]["id"]
+        (self.repo / "singular.config.json").write_text(json.dumps({
+            "runner": "gemini-run.sh", "env": {"SINGULAR_MAX_CONCURRENT": "6"}}))
+        calls = 0
+        original = srv._compute_effective_configuration
+
+        def counted(root):
+            nonlocal calls
+            calls += 1
+            return original(root)
+
+        with mock.patch.object(srv, "_compute_effective_configuration", counted):
+            after = {route: self._req("GET", route) for route in routes}
+        self.assertEqual({route: status for route, (status, _d) in after.items()},
+                         {route: 200 for route in routes})
+        self.assertEqual(calls, 1)
+        cfg = after["/api/config"][1]
+        self.assertEqual(cfg["provider"], "gemini")
+        self.assertEqual(cfg["limits"]["maxConcurrent"], "6")
+        self.assertNotEqual(cfg["generation"]["id"], initial)
+        self.assertEqual(cfg["generation"]["status"], "current")
+        for route in ("/api/home", "/api/state", "/api/plans"):
+            self.assertEqual(after[route][1]["generation"]["id"],
+                             cfg["generation"]["id"], route)
+
+    def test_unloadable_config_answers_with_the_reason_then_recovers(self) -> None:
+        self.assertEqual(self._req("GET", "/api/home")[0], 200)
+        (self.repo / "singular.config.json").write_text("{ not json")
+        for route in ("/api/home", "/api/state", "/api/dag", "/api/plans"):
+            status, data = self._req("GET", route)
+            self.assertEqual(status, 409, route)
+            self.assertEqual(data["error"], "configuration unavailable", route)
+            self.assertEqual(data["configuration"]["status"], "error", route)
+            self.assertNotEqual(data["configuration"]["reason"],
+                                "configuration-changed", route)
+            self.assertTrue(data["configuration"]["message"], route)
+            self.assertEqual(data["generation"]["status"], "unavailable", route)
+            self.assertTrue(data["generation"]["autoReload"], route)
+        status, health = self._req("GET", "/api/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(health["lifecycle"]["configuration"]["status"], "error")
+        (self.repo / "singular.config.json").write_text(json.dumps({
+            "runner": "claude-run.sh", "env": {}}))
+        for route in ("/api/home", "/api/state", "/api/dag", "/api/plans"):
+            status, data = self._req("GET", route)
+            self.assertEqual(status, 200, route)
+        status, cfg = self._req("GET", "/api/config")
+        self.assertEqual(cfg["provider"], "claude")
+        self.assertEqual(cfg["generation"]["status"], "current")
+
+    def test_health_and_page_shell_never_run_the_reload(self) -> None:
+        (self.repo / "singular.config.json").write_text(json.dumps({
+            "runner": "gemini-run.sh", "env": {}}))
+
+        def forbidden(_root):
+            raise AssertionError("configuration resolved on a liveness/static route")
+
+        cache = srv._EFFECTIVE_CONFIGURATION_CACHE
+        with mock.patch.object(srv, "_compute_effective_configuration", forbidden), \
+                mock.patch.object(cache, "_reload_in_background") as kicked:
+            status, health = self._req("GET", "/api/health")
+            self.assertEqual(status, 200)
+            self.assertTrue(health["ok"])
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=15)
+            conn.request("GET", "/")
+            response = conn.getresponse()
+            response.read()
+            conn.close()
+            self.assertEqual(response.status, 200)
+            self.assertGreaterEqual(kicked.call_count, 1)
+        status, cfg = self._req("GET", "/api/config")
+        self.assertEqual(status, 200)
+        self.assertEqual(cfg["provider"], "gemini")
+
+    @_strict_configuration
     def test_external_config_change_is_actionable_over_http(self) -> None:
         (self.repo / "singular.config.json").write_text(json.dumps({
             "runner": "gemini-run.sh", "env": {}}))
@@ -3819,6 +4160,7 @@ class ProvidersRouteTests(unittest.TestCase):
         self.assertEqual(status, 409)
         self.assertEqual(data["configuration"]["reason"], "configuration-changed")
 
+    @_strict_configuration
     def test_external_context_policy_change_is_actionable_over_http(self) -> None:
         policy = self.repo / "policy" / "context.json"
         policy.parent.mkdir()
@@ -3853,6 +4195,7 @@ class ProvidersRouteTests(unittest.TestCase):
         self.assertEqual(status, 409)
         self.assertEqual(data["configuration"]["reason"], "configuration-changed")
 
+    @_strict_configuration
     def test_warmed_http_routes_share_invalidation_and_refresh_generation(self) -> None:
         fixtures = (
             ("old", "TASK-4101", "RUN-OLD", "plan-old"),

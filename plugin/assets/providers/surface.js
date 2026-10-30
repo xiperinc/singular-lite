@@ -21,7 +21,8 @@
    wiring, a visibility-gated poll timer, and a 404 feature-probe degradation. */
 
 import { esc, escAttr, icon, relTime, toast } from "../app.js";
-import { apiFetch, isHistorical } from "../core/api.js";
+import { apiFetch, isHistorical, onRecover } from "../core/api.js";
+import { loadingHtml } from "../core/health.js";
 import { MODEL_VOCABULARY, modelOptions } from "../core/models.js";
 
 const POLL_MS = 60000;   // cache-aligned with the server's 60s providers TTL
@@ -330,7 +331,7 @@ function render() {
     return;
   }
   const d = PV.data;
-  if (!d) { host.innerHTML = `<div class="pv-loading">loading providers…</div>`; return; }
+  if (!d) { host.innerHTML = loadingHtml("providers", "pv-loading"); return; }
   host.innerHTML = headHtml(d) + `<div class="pv-grid">${(d.providers || []).map(cardHtml).join("")}</div>`;
   if (PV.pendingScroll) scrollToSelected();
 }
@@ -451,6 +452,8 @@ export function initProviders() {
   mount();
   // Independent 60s poll — only while Providers is visible and the tab is shown.
   PV.timer = setInterval(() => { if (PV.visible && !document.hidden) fetchProviders(false); }, POLL_MS);
+  // A 60s poll is a long wait after an outage: refetch as soon as reads recover.
+  onRecover(() => { if (PV.visible) { fetchProviders(false); fetchConfigEnv(); } });
 }
 
 export function setProvidersActive(on) {

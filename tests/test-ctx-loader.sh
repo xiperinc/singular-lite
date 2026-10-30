@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Covers the context-evolution loader block in lib.sh: the single structural hook
+# Covers the context module loader block in lib.sh: the single structural hook
 # that sources every engine/ctx-*.sh file exactly once, in sorted order, and
 # fails LOUD (never silently skips) when a ctx file fails to source. The generic
 # engine ships zero ctx-*.sh files, so with none present the hook must be a no-op

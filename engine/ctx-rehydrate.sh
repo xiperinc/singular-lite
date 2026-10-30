@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ctx-rehydrate.sh — pure, read-only rehydration packet assembler (stage
 # S5-routing, node `rehydrate-path`, layer engine_runtime). Sourced exactly once
-# by the context-evolution loader block in lib.sh (it matches the ctx-*.sh glob).
+# by the context module loader block in lib.sh (it matches the ctx-*.sh glob).
 # This file DEFINES new helpers and is present-but-uncalled by every existing
 # engine/CLI/driver path, so with it sourced the engine stays byte-identical to
 # prior behavior. The `rehydrate` strategy is already a reserved alphabet slot in

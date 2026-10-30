@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pure prompt-render brick of the per-run assumption ledger (stage S4-context-packets,
-# node assumption-ledger). Sourced exactly once by the context-evolution loader block in
+# node assumption-ledger). Sourced exactly once by the context module loader block in
 # lib.sh (it matches the ctx-*.sh glob). Like engine/ctx-assumptions.sh and
 # engine/ctx-assumptions-transition.sh, this file defines PURE helpers and is
 # present-but-uncalled by every existing engine/CLI/driver path, so with it sourced the
@@ -118,7 +118,8 @@ else:  # audit
     out.append(
         "Verify each assumption below was not silently violated. If one was "
         "violated, raise a finding that cites the assumption's id via the "
-        "`assumptionId` field so the host can resolve it:")
+        "`assumptionId` field so the host can resolve it (in audit-verdict.v1, "
+        "on that finding's `classifiedFindings` item; add no other field):")
     out.extend(_line(e) for e in entries)
 
 sys.stdout.write("\n".join(out))

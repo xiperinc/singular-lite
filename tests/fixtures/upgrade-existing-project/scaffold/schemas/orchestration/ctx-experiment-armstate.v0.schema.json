@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://singular.local/schemas/orchestration/ctx-experiment-armstate.v0.schema.json",
+  "title": "singular.orchestration.ctx-experiment-armstate.v0",
+  "description": "A deterministic, strictly read-only snapshot of the OBSERVED continuity knob-state for one run: the per-arm configuration provenance the experiment-report attributes escape-rate / cost / bias to (control = M0 knob-state with every continuity knob inactive at its documented default; treatment = the continuity knobs set/enabling). Emitted by reading ONLY the engine's own SINGULAR_* continuity knobs from the process environment; it records nothing and gates no node. Keys are sorted and deterministic for a fixed environment. A partial or non-enabling value is carried verbatim with active=false. Additive under the singular.orchestration.*.v0 namespace; validation fails closed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "knobs", "activeCount"],
+  "properties": {
+    "schema": {
+      "const": "singular.orchestration.ctx-experiment-armstate.v0"
+    },
+    "knobs": {
+      "type": "object",
+      "description": "One record per canonical continuity knob that distinguishes treatment from the M0 control baseline, keyed by the knob's canonical SINGULAR_* name. Every knob is always present so the object fully documents either arm.",
+      "additionalProperties": false,
+      "required": [
+        "SINGULAR_CTX_PACKET",
+        "SINGULAR_CTX_ROUTING",
+        "SINGULAR_REHYDRATE",
+        "SINGULAR_PAIRED_AUDIT_PCT",
+        "SINGULAR_CRITIC_RECHECK_PCT",
+        "SINGULAR_CTX_ARTIFACT_SCAN",
+        "SINGULAR_CTX_MANIFEST"
+      ],
+      "properties": {
+        "SINGULAR_CTX_PACKET": { "$ref": "#/definitions/knobRecord" },
+        "SINGULAR_CTX_ROUTING": { "$ref": "#/definitions/knobRecord" },
+        "SINGULAR_REHYDRATE": { "$ref": "#/definitions/knobRecord" },
+        "SINGULAR_PAIRED_AUDIT_PCT": { "$ref": "#/definitions/knobRecord" },
+        "SINGULAR_CRITIC_RECHECK_PCT": { "$ref": "#/definitions/knobRecord" },
+        "SINGULAR_CTX_ARTIFACT_SCAN": { "$ref": "#/definitions/knobRecord" },
+        "SINGULAR_CTX_MANIFEST": { "$ref": "#/definitions/knobRecord" }
+      }
+    },
+    "activeCount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The number of continuity knobs reported active. 0 is the M0 control knob-state."
+    }
+  },
+  "definitions": {
+    "knobRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["knob", "value", "active"],
+      "properties": {
+        "knob": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The knob's canonical SINGULAR_* environment-variable name."
+        },
+        "value": {
+          "type": "string",
+          "description": "The observed environment value, carried verbatim (the documented default when unset)."
+        },
+        "active": {
+          "type": "boolean",
+          "description": "The boolean interpretation the engine itself applies: set-and-enabling versus unset / 0 / empty / non-enabling."
+        }
+      }
+    }
+  }
+}

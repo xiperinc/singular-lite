@@ -7,9 +7,9 @@ root = pathlib.Path(sys.argv[1])
 with tempfile.TemporaryDirectory(prefix='exact-bounds-') as scratch:
     base = pathlib.Path(scratch)
     hostile = base / 'hostile.sh'
-    hostile.write_text('export SINGULAR_TARGET_BRANCH=codex/brain-integration\necho HOSTILE-CONFIG-LOADED >&2\n')
+    hostile.write_text('export SINGULAR_TARGET_BRANCH=fixture/alternate-target\necho HOSTILE-CONFIG-LOADED >&2\n')
     hostile_json = base / 'hostile.json'
-    hostile_json.write_text('{"schemaVersion":"v2","targetBranch":"codex/brain-integration"}')
+    hostile_json.write_text('{"schemaVersion":"v2","targetBranch":"fixture/alternate-target"}')
     # Characterize the causal override directly, without relying on the old log's suspicion.
     clean = {k:v for k,v in os.environ.items() if not k.startswith('SINGULAR_')}
     clean.update(SINGULAR_ROOT=str(base), SINGULAR_ENGINE_HOME=str(root),
@@ -19,9 +19,9 @@ with tempfile.TemporaryDirectory(prefix='exact-bounds-') as scratch:
     probe = subprocess.run([bash, '-c', 'source "$1/engine/lib.sh"; printf "%s\\n" "$SINGULAR_TARGET_BRANCH"',
                             'config-probe', str(root)], env=clean, capture_output=True, text=True, timeout=10)
     assert probe.returncode == 0, probe.stderr
-    assert probe.stdout.strip() == 'codex/brain-integration', probe.stdout
+    assert probe.stdout.strip() == 'fixture/alternate-target', probe.stdout
     assert 'HOSTILE-CONFIG-LOADED' in probe.stderr
-    print('PASS: characterization: inherited config overrides target with codex/brain-integration', flush=True)
+    print('PASS: characterization: inherited config overrides target with fixture/alternate-target', flush=True)
     for case, expected, diagnostic in [('hostile', 0, 'PASS: test-integration-exact-tree'), ('integrator', 37, 'injected integrator failure'), ('watcher', 38, 'injected watcher failure'), ('latch', 1, 'dirt-ready timed out'), ('signal', 143, 'fixture interrupted')]:
         temp = base / case
         temp.mkdir()

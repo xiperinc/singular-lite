@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.runner-result.v0",
+  "title": "singular Provider Runner Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "contractVersion",
+    "provider",
+    "runId",
+    "role",
+    "capabilityProfile",
+    "exitCode",
+    "outcome",
+    "failureClass",
+    "providerErrorRef",
+    "outputRef",
+    "recordedAt"
+  ],
+  "properties": {
+    "schema": { "const": "singular.orchestration.runner-result.v0" },
+    "contractVersion": { "const": 1 },
+    "provider": {
+      "type": "string",
+      "enum": ["codex", "claude", "gemini", "opencode", "cursor", "openrouter", "grok"]
+    },
+    "runId": { "type": "string", "minLength": 1 },
+    "role": { "type": "string", "minLength": 1 },
+    "capabilityProfile": { "type": "string", "minLength": 1 },
+    "exitCode": { "type": "integer" },
+    "outcome": {
+      "type": "string",
+      "enum": ["succeeded", "failed", "timed-out", "provider-error"]
+    },
+    "failureClass": {
+      "type": "string",
+      "enum": ["none", "quota", "provider-overloaded", "timeout", "provider-exit"]
+    },
+    "providerErrorRef": { "type": ["string", "null"] },
+    "outputRef": { "type": ["string", "null"] },
+    "providerEnvelopeRef": { "type": "string", "minLength": 1 },
+    "providerEnvelopeSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "inputTokens": { "type": "integer", "minimum": 0 },
+        "cachedInputTokens": { "type": "integer", "minimum": 0 },
+        "outputTokens": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "recordedAt": { "type": "string", "format": "date-time" }
+  }
+}

@@ -8,6 +8,7 @@ import { bus } from "./core/bus.js";
 import { initRouter, tick as routerTick } from "./core/router.js";
 import { initPlans } from "./core/plans.js";
 import { initSidebar } from "./core/sidebar.js";
+import { initHealth } from "./core/health.js";
 import { initDock, dockTick } from "./core/dock.js";
 import { initWorkbench, setLens, getLens, planTick } from "./plan/workbench.js";
 import { initConsoles, setConsolesActive, consolesRoute, consolesLiveCount } from "./consoles/surface.js";
@@ -15,6 +16,7 @@ import { initAgents, setAgentsActive, agentsRoute, agentsTick } from "./agents/s
 import { initProviders, setProvidersActive, providersRoute, providersTick } from "./providers/surface.js";
 import { initHome, setHomeActive, homeRoute, homeTick } from "./home/surface.js";
 
+initHealth();          // data-health banner + loading/error placeholders (before any fetch)
 initPlans();           // sidebar plan threads + stop reason + historical banner (sets body.historical early)
 initSidebar();         // sidebar collapse state (open|rail, localStorage + viewport default)
 initDock();            // bottom status dock (renders honest cells from the app.js store)

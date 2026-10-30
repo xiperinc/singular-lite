@@ -11,7 +11,7 @@
 
 import { bus } from "./core/bus.js";
 import { startFeed } from "./core/sessions-feed.js";
-import { apiFetch, isHistorical, setExecState } from "./core/api.js";
+import { apiFetch, isHistorical, setExecState, onRecover, onHealth, getHealth, isStale } from "./core/api.js";
 
   const POLL_MS = 10000;
   const $ = (id) => document.getElementById(id);
@@ -148,7 +148,7 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
     }
   }
 
-  // PMGO-003 — the single writer into core/api.js's execution-state store, fed
+  // The single writer into core/api.js's execution-state store, fed
   // from the two payloads app.js already owns: /api/state (snap.loop.alive is
   // the daemon-pidfile authority, snap.stop.present the sentinel) and
   // /api/overview (loop.stopReason — WHY it is stopped, which is the whole
@@ -158,8 +158,7 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
   //
   // Historical mode is a hard no-write: an archived plan's snapshot is a
   // synthetic projection of a finished run (see historicalBoot), and letting it
-  // reach this store would recreate PMGO-003 in the opposite direction — an
-  // archive claiming an execution state it cannot have.
+  // reach this store would let an archive claim an execution state it cannot have.
   function publishExec() {
     if (isHistorical()) return;
     const snap = S.snap || {};
@@ -321,7 +320,7 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
     if (!isHistorical()) {
       const g = (d.orchestration && d.orchestration.gates) || {};
       const val = $("plan-gates-val");
-      // PMGO-002: the readout is the CURRENT campaign when the server splits the
+      // The readout is the CURRENT campaign when the server splits the
       // cohorts; historical accepted-as-done + the combined figure move into the
       // tooltip. Older server (no cohorts) → the combined readout, unchanged.
       const cur = g.cohorts && g.cohorts.current;
@@ -388,10 +387,35 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
       : `<b>${total}</b> tasks · <b>${(S.snap.summary && S.snap.summary.activeAgents) || 0}</b> non-terminal`;
   }
 
+  // The "updated Ns ago" cell. Past STALE_POLLS missed polls it stops being a
+  // quiet counter and becomes a warning, and whatever is on screen is marked as
+  // not current (body[data-stale]) — also whenever reads are failing, since the
+  // data shown is then by definition the last good copy.
+  function fmtAge(s) {
+    if (s < 60) return s + "s";
+    if (s < 3600) return Math.floor(s / 60) + "m " + (s % 60) + "s";
+    return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m";
+  }
   function tickAge() {
-    if (!S.lastOkAt) { $("refresh-age").textContent = "—"; return; }
+    const age = $("refresh-age");
+    const cell = age && age.closest(".dock-conn");
+    if (!S.lastOkAt) {
+      age.textContent = "—";
+      if (cell) cell.dataset.stale = "false";
+      document.body.dataset.stale = "false";
+      return;
+    }
     const s = Math.round((Date.now() - S.lastOkAt) / 1000);
-    $("refresh-age").textContent = s < 1 ? "now" : s + "s ago";
+    const old = isStale(S.lastOkAt, POLL_MS);
+    const failing = getHealth().state !== "ok";
+    age.textContent = (s < 1 ? "now" : fmtAge(s) + " ago") + (old ? " — stale" : "");
+    if (cell) {
+      cell.dataset.stale = String(old);
+      cell.title = old
+        ? "last successful refresh " + new Date(S.lastOkAt).toISOString().slice(11, 19) + " UTC — the data on screen is not current"
+        : "";
+    }
+    document.body.dataset.stale = String(old || failing);
     if (s > POLL_MS / 1000 + 8 && S.connState === "connected") setConn("stale");
   }
 
@@ -1337,7 +1361,7 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
     }).join("");
   }
 
-  // Execution state as a chip INSIDE the progress block (PMGO-002/003): a cohort
+  // Execution state as a chip INSIDE the progress block: a cohort
   // split is only honest beside whether the loop that would move it is running.
   // `stopped` names the reason, because "0 / 31 current campaign · stopped" with
   // no WHY is exactly the reading that made a deliberate operator hold look like
@@ -1373,7 +1397,7 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
         <span class="ph-count" aria-label="${s.passed} of ${s.total} nodes gated">${s.passed}/${s.total}</span>
       </div>`;
     }).join("");
-    // PMGO-002 — the primary number is the CURRENT campaign. The historical
+    // The primary number is the CURRENT campaign. The historical
     // cohort is accepted-as-done evidence (grandfathered gates, green by
     // construction) and can never be a denominator this run is measured against;
     // reporting one blended "13 / 44 DAG nodes gated complete" beside a loop that
@@ -1984,6 +2008,10 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
       load(false);
       setInterval(() => { if (!document.hidden) load(false); }, POLL_MS);
       setInterval(tickAge, 1000);
+      // Reads were failing and just came back (core/api.js re-probes with
+      // backoff): refresh now instead of waiting out the rest of the poll.
+      onRecover(() => { load(false); overlayTick(); });
+      onHealth(() => tickAge());
       // Pause polling in backgrounded tabs; refresh immediately on return so a
       // re-shown dashboard is never stale.
       document.addEventListener("visibilitychange", () => {

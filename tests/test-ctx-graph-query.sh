@@ -18,8 +18,8 @@
 #          resolution (no `supersedes` edge whose target is the contradicted/
 #          invalidated node), deterministically ordered.
 #
-# The lineage walk is defined over the GENERAL edge taxonomy (planner-contract
-# rule 9), so this test builds a self-contained fixture corpus containing the
+# The lineage walk is defined over the GENERAL edge taxonomy, so this test
+# builds a self-contained fixture corpus containing the
 # lineage edges rather than asserting which edges today's mappers emit.
 #
 # Asserts: neighbors returns exactly the incident edges + adjacent node ids,

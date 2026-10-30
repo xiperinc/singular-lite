@@ -1,45 +1,5 @@
 #!/usr/bin/env bash
-# Covers the per-finding critic-recheck CLASSIFIER brick
-# engine/ctx-critic-recheck-classify.sh: the node critic-carryover signature
-# OUTPUT (stage S3-plan-revision, area plancritic, layer engine_runtime). Given a
-# prior plan-critique.v0 record and a resumed critic's recheck self-report, map
-# each prior finding id to a disposition in `addressed | survives | obsolete`, and
-# emit the record-only `ctx.critic_recheck` provenance event verbatim named in the
-# node's requiredCompletion.
-#
-# TASK-0027 integrated the deterministic post-acceptance sampling gate
-# (engine/ctx-critic-recheck.sh, behind default-OFF SINGULAR_CRITIC_RECHECK_PCT)
-# that decides WHETHER an accepted task is sampled; this brick supplies the
-# per-finding disposition set + the ctx.critic_recheck events. It mirrors the
-# classifier/record pairing of engine/ctx-plan-revise-dispositions.sh (TASK-0021).
-#
-# The file defines NEW functions only and is invoked by NO existing engine path,
-# so with it present-but-uncalled the engine is byte-identical to prior behavior.
-# It records/events only; it changes no accept/reject outcome, promotes/quarantines
-# no candidate, invokes no runner, touches no lease.
-#
-# Asserts:
-#   (a) present-but-uncalled: lib.sh auto-sources it (engine/ctx-*.sh) and it
-#       defines the two NEW functions; no existing engine path invokes them.
-#   (b) singular_ctx_critic_recheck_classify <prior_critique_record> <recheck_output>
-#       is PURE and READ-ONLY: prints one TAB-separated `<finding-id>\t<disposition>`
-#       line per PRIOR finding in id-sorted order, appends no events, mutates
-#       nothing, exits 0.
-#   (c) disposition: an explicit `addressed` status -> addressed; `obsolete` ->
-#       obsolete; `survives` -> survives.
-#   (d) conservative fail-closed default = survives, never fabricating
-#       addressed/obsolete: an unknown/ambiguous status, an id ABSENT from the
-#       recheck output, and a missing/unparseable prior record or recheck output
-#       all default to survives (a missing record yields no ids at all).
-#   (e) determinism: byte-stable id-sorted classifier output and disposition
-#       payload for a fixed (prior record, recheck output).
-#   (f) singular_ctx_critic_recheck_record <node> <run_id> <task_id>
-#       <prior_critique_record> <recheck_output> records ONLY: emits EXACTLY ONE
-#       `ctx.critic_recheck` event via singular_append_event carrying node, runId,
-#       taskId, role = plan-critic, and the full id-sorted per-finding disposition
-#       set; mutates nothing else (no lease, no runner, no other state write).
-# The events log is pinned to an isolated SINGULAR_EVENTS_FILE and all inputs to
-# tmp so the suite never mutates real run state.
+# Regression contracts for ctx-critic-recheck-classify.
 set -uo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -285,7 +245,7 @@ d2="$(payload_data "$SINGULAR_EVENTS_FILE")"
 for fn in singular_ctx_critic_recheck_classify singular_ctx_critic_recheck_record; do
   callers="$(grep -rl "$fn" "$ENGINE_HOME/engine" 2>/dev/null \
     | grep -v '/ctx-critic-recheck-classify.sh$' || true)"
-  : # temporal assertion neutralized (planner-contract rule 9: later slices may legitimately call this)
+  : # temporal assertion neutralized (later slices may legitimately call this)
 done
 
 echo "ctx-critic-recheck-classify tests passed"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ctx-artifact-exclude.sh — quarantine-aware exclusion filter for durable context
 # artifacts (stage artifact-secret-scan, layer engine_runtime). Sourced exactly
-# once by the context-evolution loader block in lib.sh (it matches the ctx-*.sh
+# once by the context module loader block in lib.sh (it matches the ctx-*.sh
 # glob). This file defines a PURE, read-only, present-but-uncalled helper: no
 # existing engine/CLI/driver path invokes it, so with it sourced the engine
 # stays byte-identical to prior behavior. The assembly wire-in that applies this

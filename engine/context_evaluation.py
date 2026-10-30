@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""B5 evaluation: a labeled retrieval harness and a campaign analyser.
+"""Context evaluation: a labeled retrieval harness and a campaign analyser.
 
 Two independent, deterministic surfaces live here.
 
-``evaluate_corpus`` replays a declared labeled corpus through the real B2
+``evaluate_corpus`` replays a declared labeled corpus through the real
 context service and reports inclusion/recall inside the byte budget, incorrect
 selections, budget omissions and abstentions, then compares them with the
 metrics the corpus itself declares. Nothing is inferred: a case either matches
@@ -720,7 +720,7 @@ def analyze_campaign(
     bytes_per_accepted_review = (
         round(review_prompt_bytes / accepted_reviews, 6) if accepted_reviews else None
     )
-    # Context bundles were only recorded from B3 onward, so an older accepted
+    # Older engines did not record context bundles, so an accepted
     # review can have no retained bundle at all. Say so instead of dividing
     # partial bytes by a complete review count and calling it a rate.
     review_coverage_complete = accepted_reviews > 0 and review_bundles >= accepted_reviews

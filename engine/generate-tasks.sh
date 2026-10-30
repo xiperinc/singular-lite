@@ -272,7 +272,8 @@ PY
 python3 - "$SINGULAR_ORCH_DIR/prompts/l1-planner.md" "$prompt_file" \
   "$active_area" "$SINGULAR_TARGET_BRANCH" "$next_id" "$next_ids_csv" "$count" "$task_summary" \
   "$active_node" "$active_stage" "$active_layer" "$active_kind" "$active_required" \
-  "$effective_slice_budget" "${SINGULAR_DEFAULT_GATE_CMD:-}" "$area_paths" <<'PY'
+  "$effective_slice_budget" "${SINGULAR_DEFAULT_GATE_CMD:-}" "$area_paths" \
+  "$(singular_red_proof_prompt)" <<'PY'
 import sys
 (
     tmpl_path,
@@ -310,6 +311,8 @@ with open(tmpl_path) as f:
         .replace("[SLICE-BUDGET]", slice_budget)
     )
 t += f"\n\n---\n\n## Executable DAG frontier\n\n- node: `{node}`\n- stage: `{stage}`\n- area: `{area}`\n- layer: `{layer}`\n- kind: `{kind}`\n- required completion: `{required}`\n\n## Existing tasks\n\n{summary}\n"
+if sys.argv[17]:
+    t += sys.argv[17] + "\n"
 with open(out_path, "w") as f:
     f.write(t)
 PY
@@ -566,7 +569,8 @@ PY
 fi
 
 # Strip code fences if any.
-body="$(python3 - "$out" <<'PY'
+planner_strip_output() {
+  python3 - "$1" <<'PY'
 import sys
 t = open(sys.argv[1]).read().strip()
 if t.startswith("```"):
@@ -575,7 +579,8 @@ if t.startswith("```"):
         t = t.rstrip()[:-3]
 print(t.strip())
 PY
-)"
+}
+body="$(planner_strip_output "$out")"
 
 # AREA-COMPLETE sentinel?
 first_line="$(printf '%s\n' "$body" | head -1 | tr -d '[:space:]')"
@@ -596,8 +601,122 @@ batch_expected_json="$(printf '%s\n' "${next_ids[@]}" | python3 -c \
   'import json,sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))')"
 materialized_dir="$run_dir/planner-candidates"
 batch_rc=0
+batch_err="$run_dir/planner-batch.err"
 singular_task_batch_materialize "$body_file" "$batch_file" "$materialized_dir" \
-  "$active_area" "$batch_expected_json" assign "$SINGULAR_TASKBATCH_SCHEMA" || batch_rc=$?
+  "$active_area" "$batch_expected_json" assign "$SINGULAR_TASKBATCH_SCHEMA" 2>"$batch_err" || batch_rc=$?
+[[ ! -s "$batch_err" ]] || cat "$batch_err" >&2
+
+# A recovered JSON object that is not a task-batch envelope at all is the
+# legacy single-task markdown case below, not a malformed batch.
+planner_batch_is_envelope() {
+  ! grep -Eq '^(missing batch field|unsupported task batch schema|task batch must be an object|unexpected batch fields)' "$batch_err" 2>/dev/null
+}
+planner_batch_diagnostic() {
+  tr '\n' ' ' <"$batch_err" 2>/dev/null | sed 's/  */ /g;s/^ //;s/ $//' | head -c 800
+}
+
+# Malformed planner output (0.23.7). A Forbidden-files bullet containing
+# multiple backticked paths fails the parser. The planner gets its output, the
+# exact diagnostic and the rule, ONCE, before a planner failure is counted.
+# SINGULAR_PLANNER_OUTPUT_REPAIR=0 disables the round.
+planner_output_malformed="no"
+planner_output_diagnostic=""
+planner_repair_outcome="not-attempted"
+if [[ "$batch_rc" -eq 2 ]] && planner_batch_is_envelope; then
+  planner_output_malformed="yes"
+  planner_output_diagnostic="$(planner_batch_diagnostic)"
+  [[ -n "$planner_output_diagnostic" ]] || planner_output_diagnostic="the task batch failed host validation"
+  echo "planner output malformed: $planner_output_diagnostic"
+  if [[ "${SINGULAR_PLANNER_OUTPUT_REPAIR:-1}" != "0" ]]; then
+    repair_prompt="$run_dir/planner-repair-prompt.md"
+    repair_out="$run_dir/planner-out-repair.md"
+    repair_log="$run_dir/planner-codex-repair.log"
+    repair_result="$run_dir/planner-runner-result-repair.json"
+    {
+      cat "$prompt_file"
+      printf '\n\n## Output repair (one round)\n\n'
+      printf 'Your previous answer to the request above was REJECTED by the host before any task was created.\n\n'
+      printf 'Exact host diagnostic:\n\n```text\n%s\n```\n\n' "$planner_output_diagnostic"
+      printf 'Rules the host enforces on every task markdown:\n\n'
+      printf -- '- Under `Owned files:` and `Forbidden files:`, each bullet names EXACTLY ONE repository-relative path, in ONE pair of backticks (`- `path/to/file``), optionally followed by a short annotation that contains no other path.\n'
+      printf -- '- Never list several paths in one bullet. Write one bullet per path.\n'
+      printf -- '- A Forbidden-files bullet may instead be one plain sentence with no backticks and no path in it (for example: `- Any file outside the owned scope.`).\n'
+      printf -- '- No globs, no absolute paths, no `..`, no commas or quotes inside a path.\n'
+      printf -- '- The `# TASK-NNNN:` heading id must equal the `taskId` of its batch item; every task is `Status: ready`, `Dispatch mode: canonical`, in the requested area, with at least one owned file, and does not depend on another task of the same batch.\n\n'
+      printf 'Return the COMPLETE corrected answer in the same output format (the whole task-batch JSON object, every task included), changing only what the diagnostic requires. Your previous answer follows.\n\n```text\n'
+      head -c 200000 "$out"
+      printf '\n```\n'
+    } >"$repair_prompt"
+    singular_append_event "planner.output_repair_requested" \
+      "planner output was malformed; re-invoking the planner once with the exact diagnostic" \
+      "$(python3 -c 'import json,sys; print(json.dumps({"node":sys.argv[1],"area":sys.argv[2],"runId":sys.argv[3],"diagnostic":sys.argv[4],"round":1,"maxRounds":1}, separators=(",",":")))' \
+        "$active_node" "$active_area" "$run_id" "$planner_output_diagnostic")" || true
+    rm -f "$repair_out" "$repair_result"
+    repair_exit=0
+    singular_runner_contract_prepare "$codex_runner" planner planner-core "$repair_result"
+    SINGULAR_RUNNER_ROLE=planner \
+    SINGULAR_RUNNER_CAPABILITY_PROFILE=planner-core \
+    SINGULAR_RUNNER_RESULT_FILE="$repair_result" \
+    SINGULAR_RUNNER_RUN_ID="$run_id" \
+      "$codex_runner" "${SINGULAR_RUNNER_CONTRACT_ARGS[@]}" \
+        --level readonly -C "$SINGULAR_ROOT" --run-id "$run_id" \
+        --prompt-file "$repair_prompt" --output-last-message "$repair_out" \
+        >"$repair_log" 2>&1 || repair_exit=$?
+    if [[ "$repair_exit" -ne 0 || ! -s "$repair_out" ]]; then
+      # The repair call itself failed: that is the provider's failure, and it
+      # must not be reported as the planner's malformed output.
+      planner_repair_outcome="provider-failed"
+      repair_failure_class="$(singular_planner_failure_class "$repair_log" "$repair_exit" "$repair_out" "$repair_result" 2>/dev/null || echo codex-exit)"
+      case "$repair_failure_class" in
+        quota|provider-overloaded) singular_planner_backoff_set "$repair_failure_class" "$run_id" "$active_node" "$repair_result" ;;
+      esac
+    else
+      body="$(planner_strip_output "$repair_out")"
+      printf '%s\n' "$body" >"$body_file"
+      batch_rc=0
+      singular_task_batch_materialize "$body_file" "$batch_file" "$materialized_dir" \
+        "$active_area" "$batch_expected_json" assign "$SINGULAR_TASKBATCH_SCHEMA" 2>"$batch_err" || batch_rc=$?
+      [[ ! -s "$batch_err" ]] || cat "$batch_err" >&2
+      if [[ "$batch_rc" -eq 0 || "$batch_rc" -eq 4 ]]; then
+        planner_repair_outcome="repaired"
+        planner_output_malformed="no"
+        out="$repair_out"
+        singular_append_event "planner.output_repaired" \
+          "planner corrected its malformed output in the repair round" \
+          "{\"node\":\"$active_node\",\"area\":\"$active_area\",\"runId\":\"$run_id\",\"round\":1}" || true
+        echo "planner output repaired (round 1)"
+      else
+        planner_repair_outcome="still-malformed"
+        planner_output_diagnostic="$(planner_batch_diagnostic)"
+        [[ -n "$planner_output_diagnostic" ]] || planner_output_diagnostic="the repaired task batch failed host validation"
+        batch_rc=2
+      fi
+    fi
+  else
+    planner_repair_outcome="disabled"
+  fi
+fi
+
+# Still malformed after the one repair round: a planner failure of its own
+# class. Exit 4 so the node driver does not spend its infrastructure retry on
+# an answer the provider delivered intact.
+if [[ "$planner_output_malformed" == "yes" ]]; then
+  if [[ "$planner_repair_outcome" == "provider-failed" ]]; then
+    singular_append_event "planner.failed" "planner output repair call failed" \
+      "$(python3 -c 'import json,sys; print(json.dumps({"node":sys.argv[1],"area":sys.argv[2],"runId":sys.argv[3],"failureClass":sys.argv[4],"stage":"output-repair","diagnostic":sys.argv[5],"logRef":sys.argv[6]}, separators=(",",":")))' \
+        "$active_node" "$active_area" "$run_id" "${repair_failure_class:-codex-exit}" "$planner_output_diagnostic" "$repair_log")"
+    echo "planner-failed (${repair_failure_class:-codex-exit} during output repair; original defect: $planner_output_diagnostic)"
+    exit 1
+  fi
+  singular_append_event "planner.failed" "planner output was malformed" \
+    "$(python3 -c 'import json,sys; print(json.dumps({"node":sys.argv[1],"area":sys.argv[2],"runId":sys.argv[3],"failureClass":"malformed-output","failureDomain":"planner-output","diagnostic":sys.argv[4],"repairOutcome":sys.argv[5],"repairRounds":0 if sys.argv[5] in ("disabled","not-attempted") else 1,"count":int(sys.argv[6]),"logRef":sys.argv[7],"outputRef":sys.argv[8]}, separators=(",",":")))' \
+      "$active_node" "$active_area" "$run_id" "$planner_output_diagnostic" "$planner_repair_outcome" "$count" "$codex_log" "$out")"
+  planner_status_activity="Planner output for $active_node was malformed"
+  planner_status_next_action="Read the diagnostic; correct the planner contract or the task rule it cites"
+  planner_status_outcome="malformed-output"
+  echo "planner-failed (malformed-output: $planner_output_diagnostic)"
+  exit 4
+fi
 
 # Empty batch (rc 4): a valid no-op, NOT a planner failure. 0.4.0 classified
 # {"tasks": []} as invalid-output; the failure then fed the autonomate

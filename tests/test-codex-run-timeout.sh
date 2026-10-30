@@ -143,7 +143,7 @@ if grep -q "semantic completion observed" "$tmp/err.log"; then
   fail "malformed/prose completion mention triggered semantic completion"
 fi
 
-# 6. ps-denied sandbox (PMGO-004). The old cleanup built its target list from
+# 6. ps-denied sandbox. The old cleanup built its target list from
 # `ps -A` and ignored its exit status: where process enumeration is denied the
 # list came back empty, only the direct child was signalled, the provider's
 # descendants survived the timeout — and nothing said so. The provider pipeline

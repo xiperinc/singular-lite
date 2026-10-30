@@ -447,7 +447,10 @@ assert_not_contains "$(events)" '"type":"l1.audit_verification_normalized"' \
   "model failed-product: not normalized"
 assert_contains "$(events)" '"type":"l1.audit_verification_mismatch"' \
   "model failed-product: recorded as a mismatch"
-fp_audit="$(only_run_dir)/audit.json"
+# A refused response is kept, but no longer at audit.json (0.23.6): left there
+# it would be read as a verdict by the next drive.
+fp_audit="$(only_run_dir)/audit-attempt-1.rejected.json"
+[[ ! -e "$(only_run_dir)/audit.json" ]] || fail "model failed-product: refused response left at audit.json"
 assert_eq "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["verificationResults"][0]["status"])' "$fp_audit")" \
   "failed-product" "model failed-product: raw verdict preserved"
 pass "a model failed-product against a host pass is not accepted"

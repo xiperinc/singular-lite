@@ -347,6 +347,6 @@ unset SINGULAR_PLAN_CRITIC_INFRA_MAX
 # ---------------------------------------------------------------------------
 callers="$(grep -rl 'singular_ctx_plan_critic_run\|singular_ctx_plan_critic_session_path' \
   "$ENGINE_HOME/engine" 2>/dev/null | grep -v '/ctx-plan-critic.sh$' || true)"
-: # temporal assertion neutralized (planner-contract rule 9: later slices may legitimately call this)
+: # temporal assertion neutralized (later slices may legitimately call this)
 
 echo "ctx-plan-critic tests passed"

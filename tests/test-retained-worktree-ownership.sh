@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Deadlock #6 (field 2026-09-14, stall 8).
+# Retained-worktree reservation ownership.
 #
 # The retained-worktree guard in engine/l1-drive.sh refused whenever a worktree
 # already existed and the lease status was running|planned|needs-review|
@@ -15,8 +15,6 @@ set -euo pipefail
 # to a live candidate -- an S1 violation -- so ownership is the discriminator,
 # and accepted/integrated still refuse regardless of who owns them.
 #
-# Dedicated test: tests/test-detached-dispatch.sh is recorded red in
-# tests/BASELINE-FAILURES.md and cannot be extended for coverage.
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
   echo "test-retained-worktree-ownership.sh requires bash >= 4" >&2; exit 1

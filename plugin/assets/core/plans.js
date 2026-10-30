@@ -13,12 +13,12 @@
    app.js. The tiny esc/fmtDate helpers are local (kept dependency-free on
    purpose).
 
-   PMGO-003 vocabulary rule: this module describes DATA SOURCES, never execution.
+   Vocabulary rule: this module describes DATA SOURCES, never execution.
    A plan row's meta says "connected" (we are attached to the live tree) or a
    date; the words running / stopped / waiting / blocked belong to execution and
    appear here only in #stop-reason, which is fed from the exec store. */
 
-import { activePlan, isHistorical, apiFetch, switchPlan, onExecState } from "./api.js";
+import { activePlan, isHistorical, apiFetch, switchPlan, onExecState, onRecover } from "./api.js";
 
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -93,7 +93,7 @@ function renderThreads() {
   // Live row: green (success) dot = we are CONNECTED to the live tree (a data
   // source), active (page bg) only when live. The meta used to read "live",
   // which operators read as "the orchestration loop is running" — the dot stays,
-  // the word does not (PMGO-003). Execution state is the top stop chip's job.
+  // the word does not. Execution state is the top stop chip's job.
   let html = threadRow("", "success", live, "Current plan", "connected");
   for (const p of list) {
     const on = p.id === activePlan;
@@ -189,6 +189,9 @@ export function initPlans() {
   renderThreads();   // paints the live row (+ self-heal id) immediately
   paintBanner();     // shows the id fallback immediately; refreshed once plans resolve
   fetchPlans().then(() => { renderThreads(); paintBanner(); paintArchivedGates(); });
+  // The registry is fetched once; if that one read failed, take it again when
+  // reads recover instead of leaving the threads list empty until a reload.
+  onRecover(() => { fetchPlans(true).then(() => { renderThreads(); paintBanner(); paintArchivedGates(); }); });
 }
 
 export { fmtDate };

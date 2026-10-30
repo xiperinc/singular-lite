@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Reserve-before-bind deadlock (field 2026-09-14, stall 7).
+# Reserve-before-bind deadlock.
 #
 # A STOP-frozen or crashed driver leaves its dispatch record `launched`. By the
 # time the reaper sees it, the next reconcile has already reserved the lease for
@@ -15,9 +15,6 @@ set -euo pipefail
 # closure is independent of who owns the lease now. This pins that closure, and
 # pins that it cannot be used to skip lease settlement or to touch a successor.
 #
-# Dedicated test because tests/test-detached-dispatch.sh and
-# tests/test-orphan-continuation.sh -- the two suites that would otherwise cover
-# this path end to end -- are recorded red in tests/BASELINE-FAILURES.md.
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
   echo "test-historical-dispatch-closure.sh requires bash >= 4" >&2; exit 1

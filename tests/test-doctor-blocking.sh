@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PMGO-008: an engine-pin/schema mismatch used to cascade.
+# an engine-pin/schema mismatch used to cascade.
 #
 # A repo on schema v0 examined by a v2 engine produced a dozen derivative
 # failures — an unreadable DAG, absent capability profiles, a drifted schema
@@ -140,7 +140,7 @@ assert next(
 )["status"] == "pass"
 PY
 
-# --- (c) the historical AXON state: repo pinned 0.3.0, operator on 0.16.0 -----
+# --- (c) the historical large graph state: repo pinned 0.3.0, operator on 0.16.0 -----
 # SINGULAR_ENGINE_HOME outranks the pin, which is exactly how an operator ends up
 # probing a repo with an engine the repo never asked for. Doctor has to say that
 # out loud: until now it never read .singular-version at all.
@@ -207,7 +207,7 @@ doctor_broken() { # repo [args...]
   )
 }
 
-# A stale pidfile in each fixture: the four-verdict loop (PMGO-005) lives in the
+# A stale pidfile in each fixture: the four-verdict loop lives in the
 # same method and must survive the same way.
 for variant in matched mismatched; do
   case "$variant" in

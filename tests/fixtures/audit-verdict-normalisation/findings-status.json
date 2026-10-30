@@ -1,0 +1,68 @@
+{
+  "schema": "singular.orchestration.findings-ledger.v0",
+  "taskId": "TASK-0001",
+  "runId": "RUN-fixture-audit",
+  "findings": [
+    {
+      "id": "f-0ec31550d9ba",
+      "text": "F1 (P3) [A3]: the parser mode label is ambiguous",
+      "source": "finding",
+      "status": "open",
+      "firstSeenAttempt": 1,
+      "lastSeenAttempt": 1,
+      "resolvedAttempt": null,
+      "resolvedBy": null
+    },
+    {
+      "id": "f-8583bd880890",
+      "text": "F2 (P2): the parser drops the final token",
+      "source": "finding",
+      "status": "open",
+      "firstSeenAttempt": 1,
+      "lastSeenAttempt": 1,
+      "resolvedAttempt": null,
+      "resolvedBy": null
+    },
+    {
+      "id": "f-d9d05ae8b846",
+      "text": "F3 (P3): the parser help omits the empty-input example",
+      "source": "finding",
+      "status": "open",
+      "firstSeenAttempt": 1,
+      "lastSeenAttempt": 1,
+      "resolvedAttempt": null,
+      "resolvedBy": null
+    },
+    {
+      "id": "f-8569ffc003a3",
+      "text": "F4 (P3): the parser test log has no command heading",
+      "source": "finding",
+      "status": "open",
+      "firstSeenAttempt": 1,
+      "lastSeenAttempt": 1,
+      "resolvedAttempt": null,
+      "resolvedBy": null
+    },
+    {
+      "id": "f-ebe0f3724c9f",
+      "text": "F5 (P3): the parser usage text has inconsistent spacing",
+      "source": "finding",
+      "status": "open",
+      "firstSeenAttempt": 1,
+      "lastSeenAttempt": 1,
+      "resolvedAttempt": null,
+      "resolvedBy": null
+    },
+    {
+      "id": "f-99fa77a5abf6",
+      "text": "F6 (P3): the parser output label is verbose",
+      "source": "finding",
+      "status": "open",
+      "firstSeenAttempt": 1,
+      "lastSeenAttempt": 1,
+      "resolvedAttempt": null,
+      "resolvedBy": null
+    }
+  ],
+  "updatedAt": "2000-01-01T00:00:00Z"
+}

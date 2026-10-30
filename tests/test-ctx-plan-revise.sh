@@ -8,7 +8,7 @@
 #     (so no unbounded revision path can exist).
 #   singular_plan_revise_max — pure helper centralizing the default-1 bound.
 #
-# Contract asserted here (acceptance criteria for TASK-0019):
+# Contract asserted here:
 #   approve                       -> import
 #   revise, done < effectiveMax   -> revise <done+1>
 #   revise, done >= effectiveMax  -> park revise-budget-exhausted

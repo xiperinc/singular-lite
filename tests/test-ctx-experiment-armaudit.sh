@@ -1,43 +1,5 @@
 #!/usr/bin/env bash
-# Covers the read-only experiment arm knob-state AUDIT consumer
-# engine/ctx-experiment-armaudit.sh. TASK-0095's l1-drive.sh hook durably writes
-# per-run knob-state provenance to arm-knob-state.json under each run directory
-# (conforming to singular.orchestration.ctx-experiment-armstate.v0, carrying an
-# activeCount and a per-knob active flag), but nothing reads it. This consumer
-# audits, across the runs corpus, that each arm actually ran with the expected
-# knob-state so the experiment-report's escape/cost/bias attribution rests on
-# validated arm integrity.
-#
-# Given a synthetic runs directory of run dirs — each with its arm-knob-state.json
-# provenance (emitted by the integrated ctx-experiment-armstate emitter) and its
-# attempts index (runs/<runId>/attempts/index.json carrying taskId) — joined per
-# arm via ctx.arm_assigned {taskId, arm in A|B} in the events log, the tooling:
-#   1. per-run knob-state reader: for each run dir read arm-knob-state.json and
-#      extract activeCount + the set of active knob names; a run with no file is
-#      classified unrecorded (fail-safe, not an error).
-#   2. arm-join + per-run classification: resolve each run's taskId (attempts
-#      index) and arm (ctx.arm_assigned), then classify — a control-arm (A) run is
-#      consistent iff activeCount is 0 (M0) else contaminated (active knobs
-#      listed); a treatment-arm (B) run is consistent iff activeCount > 0 else
-#      flagged misconfigured-as-M0.
-#   3. one deterministic, sorted-key JSON artifact carrying per arm the
-#      runsRecorded / runsUnrecorded / consistent / inconsistent counts and the
-#      inconsistent runIds with their offending knob-state; it validates against
-#      the shipped v0 schema.
-#
-# The audit uses ONLY the generic arm boundary (control expects activeCount 0;
-# treatment expects activeCount > 0); it hardcodes NO specific treatment knob-set.
-#
-# Guarantees pinned BEHAVIORALLY over a fixture (no absence greps, planner rule 9):
-#   - strictly read-only: the whole input fixture tree is byte-identical after
-#     every call (no run artifact / index / event / lease / task file created,
-#     moved, or mutated), and engine/l1-drive.sh plus the sibling
-#     engine/ctx-experiment-armstate.sh are byte-unchanged.
-#   - fail-safe: missing / empty inputs yield a well-formed zeroed artifact and a
-#     zero exit, never an error or partial output.
-#   - deterministic: identical inputs -> byte-identical stdout.
-#   - evidence invariance: the audit only MEASURES arm integrity and reclassifies
-#     nothing (consistent + inconsistent + unrecorded partition each arm's runs).
+# Regression contracts for ctx-experiment-armaudit.
 set -uo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

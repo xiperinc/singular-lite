@@ -1,52 +1,6 @@
 #!/usr/bin/env bash
-# ctx-plan-revise-resume.sh — the plan-revision-loop RESUME/FRESH strategy brick.
-# Fourth brick of the executable DAG node `plan-revision-loop` (stage
-# S3-plan-revision, area plancritic, layer engine_runtime, kind runtime).
-#
-# Implements the still-untouched requiredCompletion spine "revise verdict resumes
-# the node planner with structured findings ... fresh fallback recorded": the
-# engine-side revision-round strategy that decides whether a revise round RESUMES
-# the persisted planner node session or runs FRESH, and records both the chosen
-# strategy and the resume-refused (rc-86) fresh fallback.
-#
-# It reuses the integrated fail-closed planner-role decider
-# singular_planner_resume_decide (TASK-0009) VERBATIM so a revision round resumes
-# ONLY the same persisted node session those ordered gates already trust, and it
-# mirrors the strategy-event convention the integrated generate-tasks.sh
-# planner-resume consult hook (TASK-0011) established: a role=planner
-# `context.strategy_selected` event on resume/fresh and a `context.resume_failed`
-# event on the rc-86 fresh fallback. Both events additionally carry `revisesRunId`,
-# marking this as the revision round (so ctx-metrics.sh can distinguish revision
-# routing from the initial planning round).
-#
-# Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines NEW
-# functions only; NO existing engine path invokes them, so with this file
-# present-but-uncalled the engine is byte-identical to prior behavior (mirroring
-# engine/ctx-plan-revise.sh): no events, no state writes. It never owns
-# engine/lib.sh, adds NO driver-file hook, and invokes NO runner.
-#
-# Evidence invariance / advocate-skeptic line: these functions decide and record
-# only. They invoke no runner, promote or quarantine no candidate, never weaken a
-# resume gate (the decision is the integrated decider's verbatim verdict — a
-# `fresh <reason>` or decide-error is NEVER upgraded to `resume`), and never make
-# the fresh implementation auditor bypassable. Events land only in the pinned
-# SINGULAR_EVENTS_FILE.
-#
-# The single SINGULAR_PLAN_CRITIQUE-gated generate-tasks.sh / l1-plan-node.sh
-# driver hook that wires the bounded revise -> (resume|fresh) -> re-critique ->
-# approve -> import loop over a stub runner, and the test-ctx-plan-revision.sh
-# full-walk, are the sanctioned final follow-up slice of this node and are OUT OF
-# SCOPE here.
+# Apply planner session authority checks before resuming a plan revision.
 
-# The revision round's resume-vs-fresh decision. Delegates VERBATIM to the
-# integrated fail-closed planner decider: same ordered gates, same single-line
-# `resume <sessionId>` / `fresh <reason>` contract. Because the verdict is the
-# delegate's own output, a `fresh <reason>` (or any decide-error) is NEVER
-# upgraded to `resume` — a revision round resumes ONLY the same persisted planner
-# node session the gates already trust. Prints EXACTLY one line; never exits
-# non-zero (the delegate is fail-closed and always returns 0).
-#   singular_plan_revise_resume_decide <session_meta> <node> <runner_basename> \
-#                                     <worktree> <lineage_head>
 singular_plan_revise_resume_decide() {
   singular_planner_resume_decide "$@"
 }

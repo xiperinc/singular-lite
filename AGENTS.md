@@ -1,43 +1,59 @@
 # Singular — agent front door
 
-Read this before anything else in this repository.
+Read this before working in the repository, then read [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## What this repo is now
+## What the code does
 
-Singular is a Go orchestration engine (0.23.x, branch `codex/brain-integration`).
-Since decision **D-03 (18 Sep 2026)** it is **not** the product trunk and **not**
-a runtime dependency of the Xiper beta. The trunk is **PMGO**.
+Singular's current engine, called the classic engine, is a Bash and Python
+orchestration engine. The CLI dispatches commands to scripts that plan tasks,
+run workers, check and audit their work, and integrate results. The autonomous
+loop is one way to run it; individual commands are also available. Execution
+requires Bash 4 or newer.
 
-Singular is an **internal tool on probation** (directive 3, Open):
+Start with [cli/singular](cli/singular) for command dispatch,
+[engine/lib.sh](engine/lib.sh) for configuration and shared functions,
+[engine/autonomate.sh](engine/autonomate.sh) for the loop, and
+[engine/l1-drive.sh](engine/l1-drive.sh) for running a task.
 
-- Stopped until the PMGO gate on 25 Sep passes: feature work, resuming the brain
-  campaign, any PMGO-to-Singular seam, `runner-executor-v1`.
-- If the gate passes: 0.23.3 is cut 26 Sep, dogfood sprint 26–28 Sep.
-- Keep-or-shelve is decided 28 Sep from the dogfood ledger.
+## Testing and working rules
 
-Its brain, review/repair policy, recovery machinery and catalogue of failure
-modes remain design input for PMGO. Rights questions under A are open: shared
-script lineage with PMGO, and `vendor/singular-brain` has no licence.
+Run `bash tests/run.sh` for the full regression suite, or
+`bash tests/run.sh <test file>` for one test. The runner accepts test basenames,
+such as `test-readonly-guard.sh`, for focused runs.
 
-## Where the truth lives
+- Every fix lands with a regression test seen to fail on the unfixed code.
+  Record the failing and passing exit statuses; a passing test alone is not
+  proof of a fix.
+- Never use `git restore` or `git checkout` to reset files in place inside a
+  script that mutates them. Use a disposable checkout for mutation checks and
+  preserve existing work.
+- `SINGULAR_ENGINE_DIR` is an overridable lookup directory, not the install
+  path. Tests can point it at selected context scripts. Resolve bundled engine
+  executables from `SINGULAR_LIB_DIR`, which is computed from the location of
+  `engine/lib.sh`. The CLI's engine-home override is `SINGULAR_ENGINE_HOME`.
+- Test fixture repositories must gitignore `.singular-state/`. It holds runtime
+  state, including read-only guard bookkeeping; leaving it unignored makes
+  the guard's own writes appear as project changes.
+- Keep `engine/` generic, Python dependencies in the standard library, and
+  `engine/lib.sh` parseable under Bash 3.2 even though execution uses Bash 4+.
+  Preserve public command names, `SINGULAR_*` variables and the
+  `singular.orchestration.*` schema namespace.
 
-- Decision and context: `claudedocs/d-03-trunk-decision-pointer.md` (this repo),
-  then the full record in the PMGO repo:
-  `~/Desktop/999. PROJECTS/PMGO-launch/docs/core/launch/d-03-trunk-decision-2026-09-18.md`,
-  `d-03-audit-2026-09-19.md`, `directives-2026-09-19.md`.
-- Mission, repo map and direction across both projects:
-  `~/Desktop/999. PROJECTS/PMGO-launch/docs/PROJECT.md`.
-- Sprint plan here: `claudedocs/dogfood-sprint-0.23.3-proposal.md`, kickoff
-  briefs `claudedocs/kickoff-b-*.md`, `kickoff-c-*.md`, `kickoff-d-*.md`.
-- Designed reports on Singular (architecture, brain, token efficiency, research,
-  review/repair): `~/Desktop/999. PROJECTS/pmgo-orchestration-engine/docs/pdf-singular/`.
+## When commands push
 
-## Other checkouts
+`singular auto` and the launchd launcher
+[templates/launchd/run-orchestrator.sh](templates/launchd/run-orchestrator.sh)
+default `SINGULAR_PUSH` to `1` when it is unset or empty. With an `origin`
+remote, the loop can push integrated branches without another confirmation.
+Set `SINGULAR_PUSH=0` to disable pushing, in the project's configuration if it
+sets the variable, because configuration overrides the environment. Direct
+commands such as `singular integrate` and `singular reconcile` default to `0`
+and do not push unless `SINGULAR_PUSH=1` is supplied through their environment
+or configuration.
+These are the shipped defaults, not authorization to push during a task.
+Run loop tests in a disposable project with no remote and `SINGULAR_PUSH=0`,
+with no configuration overriding that value.
 
-`~/Desktop/999. PROJECTS/pmgo-orchestration-engine` is an older clone of this
-same repository, stopped 16 Sep. Reference only; do not develop there.
+## Product direction
 
-## Keeping this current
-
-When the 28 Sep keep-or-shelve decision lands, update the first section here and
-`claudedocs/d-03-trunk-decision-pointer.md` in the same commit.
+The product's direction is under review.

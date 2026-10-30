@@ -93,7 +93,12 @@
           "trigger": { "type": "string" },
           "impact": { "type": "string" },
           "requirement": { "type": "string" },
-          "location": { "type": "string" }
+          "location": { "type": "string" },
+          "assumptionId": {
+            "description": "Assumption-ledger id (A1..An) this finding reports as violated. Optional; the host resolves it against the run's assumption ledger.",
+            "type": "string",
+            "minLength": 1
+          }
         },
         "allOf": [
           {
@@ -113,6 +118,54 @@
             }
           }
         ]
+      }
+    },
+    "hostNormalization": {
+      "description": "Host-owned record of the format normalisation applied to the auditor response before validation. Auditors must not emit it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version"],
+      "properties": {
+        "version": { "type": "integer" },
+        "droppedFields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "fields"],
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "fields": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        },
+        "carriedPriorFindings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "disposition", "classifiedAs"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "disposition": {
+                "type": "string",
+                "enum": ["backlog", "blocking"]
+              },
+              "classifiedAs": { "type": "string", "minLength": 1 },
+              "severity": {
+                "type": "string",
+                "enum": ["P0", "P1", "P2", "P3", "unknown"]
+              },
+              "source": { "type": "string" },
+              "reason": { "type": "string" }
+            }
+          }
+        },
+        "appliedAt": { "type": "string", "minLength": 1 }
       }
     },
     "reviewPolicy": {

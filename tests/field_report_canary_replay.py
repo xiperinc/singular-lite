@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay the captured localization run through public orchestration contracts."""
+"""Replay the synthetic graph through public orchestration contracts."""
 
 from __future__ import annotations
 
@@ -154,6 +154,7 @@ def engine_environment(root: Path, repo: Path, dag_path: Path) -> dict[str, str]
     env.update(
         {
             "SINGULAR_ROOT": str(repo),
+            "SINGULAR_PUSH": "0",
             "SINGULAR_ENGINE_HOME": str(root),
             "SINGULAR_ENGINE_DIR": str(root / "engine"),
             "SINGULAR_SCHEMA_DIR": str(root / "schemas"),
@@ -286,8 +287,8 @@ def write_normal_gate(
             }
         ],
         "decidedBy": "field-report-canary",
-        "rationale": "Equivalent 26-node replay accepted the captured artifact.",
-        "recordedAt": "2026-07-24T20:55:54Z",
+        "rationale": "Equivalent 26-node replay accepted the synthetic artifact.",
+        "recordedAt": "2000-01-01T02:00:00Z",
     }
     path.write_text(
         json.dumps(record, indent=2, sort_keys=True) + "\n",
@@ -324,11 +325,11 @@ def approve_human_gate(
         "--request-ref",
         human["requestRef"],
         "--question",
-        "accept=Approve these exact localization bytes?",
+        "accept=Approve these exact synthetic bytes?",
         "--artifact",
         artifact["ref"],
         "--now",
-        "2026-07-24T20:45:00Z",
+        "2000-01-01T01:45:00Z",
     ]
     for blocked in descendants(dag, node["id"]):
         request.extend(["--blocked-node", blocked])
@@ -356,9 +357,9 @@ def approve_human_gate(
         "--evidence",
         artifact["ref"],
         "--rationale",
-        "Exact captured localization artifact approved for the bounded canary.",
+        "Exact captured synthetic artifact approved for the bounded canary.",
         "--now",
-        "2026-07-24T20:50:00Z",
+        "2000-01-01T01:50:00Z",
     ]
     result = json.loads(run(approval, env=env))
     assert result["state"] == "approved"
@@ -379,7 +380,7 @@ def replay_graph(
 
     initial = json.loads(run(dag_command + ["next-areas"], env=env))
     assert [entry["node"] for entry in initial["frontier"]] == [
-        "loc-00-contract"
+        "node-00"
     ]
 
     replayed: list[str] = []
@@ -404,7 +405,7 @@ def replay_graph(
             )
         else:
             assert node_id in eligible, (
-                f"{node_id} was not eligible during captured replay: {frontier}"
+                f"{node_id} was not eligible during synthetic replay: {frontier}"
             )
             write_normal_gate(repo, node, artifact_by_node[node_id])
         assert run(dag_command + ["area-gate", node_id], env=env) == (
@@ -455,7 +456,7 @@ def assert_health(
         if item["phase"] == "auditing"
     )
     assert auditor["process"]["type"] == "auditor"
-    assert auditor["process"]["pid"] == 4514
+    assert auditor["process"]["pid"] == 900004
 
     human = health["humanGates"]
     assert human["total"] == human["approved"] == 3

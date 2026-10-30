@@ -4,7 +4,10 @@ set -uo pipefail
 # O2 (0.5.0): console CLI lifecycle — one-shot JSON purity (banner must not
 # leak into stdout), idempotent detached start via --ensure (url/pid files,
 # health poll, pid reuse), --status exit codes (+ --json), --stop idempotence
-# with file cleanup, stale-file recovery, and the `singular status` console line.
+# with file cleanup, stale-file recovery, the `singular status` console line, and
+# the stable address (0.23.5): console.port survives --stop, a restart comes back
+# on the same port, a port taken by another process falls back and updates the
+# files, and SINGULAR_CONSOLE_PORT pins it.
 # Hermetic: runs against a mktemp fixture repo with SINGULAR_ENGINE_HOME set to
 # this checkout; every server started here is killed in the trap.
 
@@ -30,8 +33,10 @@ cleanup() {
     [[ -f "$p" ]] || continue
     kill "$(tr -d '[:space:]' < "$p" 2>/dev/null)" 2>/dev/null || true
   done
+  [[ -n "${squatter_pid:-}" ]] && kill "$squatter_pid" 2>/dev/null || true
   rm -rf "$tmp"
 }
+squatter_pid=""
 trap cleanup EXIT
 mkdir -p "$tmp/pids"
 record_pid() { # remember a started server pid for the trap
@@ -81,6 +86,10 @@ record_pid
 [[ -f "$root/.singular-state/console.pid" ]] || fail "console.pid not written"
 pid="$(tr -d '[:space:]' < "$root/.singular-state/console.pid")"
 kill -0 "$pid" 2>/dev/null || fail "console.pid ($pid) is not alive"
+port_file="$root/.singular-state/console.port"
+[[ -f "$port_file" ]] || fail "console.port not written"
+port="$(tr -d '[:space:]' < "$port_file")"
+[[ "$url" == "http://127.0.0.1:$port" ]] || fail "console.port ($port) does not match url $url"
 python3 -c 'import sys, urllib.request
 urllib.request.urlopen(sys.argv[1].rstrip("/") + "/api/health", timeout=3)' "$url" \
   || fail "/api/health not answering at $url"
@@ -109,6 +118,8 @@ assert_contains "$stat" "console: $url" "singular-status-console-line"
 "$SINGULAR" console --stop 2>/dev/null || fail "console --stop exited non-zero"
 [[ ! -f "$root/.singular-state/console.url" ]] || fail "console.url not removed by --stop"
 [[ ! -f "$root/.singular-state/console.pid" ]] || fail "console.pid not removed by --stop"
+[[ "$(tr -d '[:space:]' < "$port_file" 2>/dev/null)" == "$port" ]] \
+  || fail "console.port must survive --stop (it is the address the next start reuses)"
 sleep 0.5
 kill -0 "$pid" 2>/dev/null && fail "server pid $pid still alive after --stop"
 "$SINGULAR" console --stop 2>/dev/null || fail "second --stop (idempotent) exited non-zero"
@@ -127,6 +138,53 @@ record_pid
 [[ "$url3" != "http://127.0.0.1:1" ]] || fail "--ensure reused the stale url"
 pid3="$(tr -d '[:space:]' < "$root/.singular-state/console.pid")"
 kill -0 "$pid3" 2>/dev/null || fail "recovered console pid ($pid3) not alive"
+
+# --- 9. stable address: a restart comes back on the same port ---------------------
+[[ "$url3" == "$url" ]] || fail "restart moved the console ($url -> $url3); console.port was $port"
+# Leave a connection in TIME_WAIT behind, then stop and start again immediately:
+# the port probe must still call it free.
+python3 -c 'import sys, urllib.request
+urllib.request.urlopen(sys.argv[1] + "/api/health", timeout=3).read()' "$url3" \
+  || fail "/api/health not answering at $url3"
+"$SINGULAR" console --stop 2>/dev/null || fail "--stop before restart exited non-zero"
+url4="$("$SINGULAR" console --ensure)" || fail "--ensure after --stop failed"
+record_pid
+[[ "$url4" == "$url" ]] || fail "stop-then-ensure moved the console ($url -> $url4)"
+"$SINGULAR" console --stop 2>/dev/null || fail "--stop exited non-zero"
+
+# --- 10. saved port taken by another process: fall back, update the files ---------
+python3 -c 'import socket, sys, time
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(1)
+print("ready", flush=True); time.sleep(60)' "$port" >"$tmp/squatter.out" 2>&1 &
+squatter_pid=$!
+for _ in $(seq 1 40); do grep -q ready "$tmp/squatter.out" 2>/dev/null && break; sleep 0.1; done
+grep -q ready "$tmp/squatter.out" || fail "could not occupy port $port for the fallback case"
+url5="$("$SINGULAR" console --ensure 2>"$tmp/ensure5.err")" \
+  || fail "--ensure failed while the saved port was taken: $(cat "$tmp/ensure5.err")"
+record_pid
+[[ "$url5" != "$url" ]] || fail "--ensure claimed a port another process holds"
+assert_contains "$(cat "$tmp/ensure5.err")" "in use" "taken-port-notice"
+port5="$(tr -d '[:space:]' < "$port_file")"
+[[ "$url5" == "http://127.0.0.1:$port5" ]] || fail "console.port ($port5) not updated to $url5"
+[[ "$(head -1 "$root/.singular-state/console.url")" == "$url5" ]] || fail "console.url not updated to $url5"
+python3 -c 'import sys, urllib.request
+urllib.request.urlopen(sys.argv[1] + "/api/health", timeout=3)' "$url5" \
+  || fail "/api/health not answering at fallback $url5"
+"$SINGULAR" console --stop 2>/dev/null || fail "--stop exited non-zero"
+kill "$squatter_pid" 2>/dev/null || true; wait "$squatter_pid" 2>/dev/null || true; squatter_pid=""
+
+# --- 11. SINGULAR_CONSOLE_PORT pins the port; garbage is refused -------------------
+pin="$(python3 -c 'import socket
+s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+url6="$(SINGULAR_CONSOLE_PORT="$pin" "$SINGULAR" console --ensure)" || fail "--ensure with SINGULAR_CONSOLE_PORT failed"
+record_pid
+[[ "$url6" == "http://127.0.0.1:$pin" ]] || fail "SINGULAR_CONSOLE_PORT=$pin ignored (got $url6)"
 "$SINGULAR" console --stop 2>/dev/null || fail "final --stop exited non-zero"
+if SINGULAR_CONSOLE_PORT="not-a-port" "$SINGULAR" console --ensure >/dev/null 2>"$tmp/ensure7.err"; then
+  "$SINGULAR" console --stop 2>/dev/null || true
+  fail "--ensure accepted SINGULAR_CONSOLE_PORT=not-a-port"
+fi
+assert_contains "$(cat "$tmp/ensure7.err")" "is not a port" "bad-port-message"
 
 echo "PASS: test-console-cli.sh"

@@ -33,7 +33,7 @@
       "binaryEnv": "",
       "model": {
         "env": "SINGULAR_CLAUDE_MODEL",
-        "default": "claude-opus-4-8",
+        "default": "claude-sonnet-5-5",
         "pattern": "^(?:claude-|sonnet|opus|haiku)",
         "inventory": "none",
         "listing": []

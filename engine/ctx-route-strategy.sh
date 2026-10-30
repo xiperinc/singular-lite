@@ -39,7 +39,7 @@
 #   - a primary-lineage role with a non-continuation step is resume;
 #   - an unrecognized or empty role/step is resume.
 #
-# Fail-closed rationale (planner-contract rule 8): `continue` is untainted and
+# Fail-closed rationale: `continue` is untainted and
 # `resume` is tainted, so defaulting an unknown case to `continue` could let a
 # tainted session appear independence-eligible. Defaulting to the tainted label
 # `resume` upholds the advocate/skeptic line and evidence invariance. This keeps

@@ -653,6 +653,6 @@ wait "$reader_pidK" || fail "K: concurrent reader did not observe only complete 
 # =============================================================================
 callers="$(grep -rl "singular_plan_revise_loop" "$ENGINE_HOME/engine" 2>/dev/null \
   | grep -v '/ctx-plan-revise-loop.sh$' || true)"
-: # temporal assertion neutralized (planner-contract rule 9: later slices may legitimately call this)
+: # temporal assertion neutralized (later slices may legitimately call this)
 
 echo "ctx-plan-revision full-walk tests passed"

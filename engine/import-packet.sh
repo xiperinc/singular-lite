@@ -3,6 +3,137 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
+import_acceptance_mode="$(singular_acceptance_mode)" || exit 2
+import_refusal_reason=""
+
+# Park strict admission failures once, retaining the candidate and the refused
+# queue entry. Removing that entry from the queue prevents reconcile's legacy
+# retry policy from charging the same refusal again on the next cycle.
+import_park_refusal() {
+  [[ "$import_acceptance_mode" == "every-path" && -n "$import_refusal_reason" ]] || return 0
+  if [[ "$import_git_lock_held" != "yes" ]]; then
+    singular_git_lock_acquire || return $?
+    import_git_lock_held="yes"
+  fi
+  if [[ "$import_campaign_lock_held" != "yes" ]]; then
+    singular_campaign_lock_acquire || return $?
+    import_campaign_lock_held="yes"
+  fi
+  singular_campaign_publication_cas "$import_campaign_binding" import-packet refusal || return $?
+  # A stale import must not park newer producer state, even within the same
+  # run. An integrated lease is terminal authority, not a candidate to park.
+  [[ "$lease_status_before" == "accepted" && -f "$lease_path" && ! -L "$lease_path" \
+      && "$(shasum -a 256 "$lease_path" | awk '{print $1}')" == "$lease_sha_before" \
+      && -f "$packet_input" \
+      && "$(shasum -a 256 "$packet_input" | awk '{print $1}')" == "$packet_sha_before" ]] || return 0
+  singular_import_packet_parked "$packet_input" && return 0
+  local advice payload retained
+  advice="$import_refusal_reason; operator must repair the named acceptance evidence, then run singular drive $task_id to retry the retained candidate, or import the packet again"
+  printf '%s\n' "$advice" >&2
+  printf '%s\n' "$advice" >"$import_guard_log"
+  SINGULAR_IMPORT_FAIL_PARK=1 singular_import_failure_note "$packet_input" "$import_guard_log" >/dev/null || return $?
+  singular_lease_set_status "$task_id" blocked || return $?
+  singular_task_set_status "$task_file" blocked || return $?
+  singular_breaker_trip >/dev/null || return $?
+  payload="$(python3 - "$task_id" "$run_id" "$advice" <<'PY'
+import json, sys
+print(json.dumps(dict(taskId=sys.argv[1], runId=sys.argv[2], reason=sys.argv[3],
+                     resolutionOwner="operator"), separators=(",", ":")))
+PY
+)" || return $?
+  singular_append_event "packet.import_refused" "import acceptance refused" "$payload" || return $?
+  singular_append_event "task.import_parked" "task parked after import refusal" "$payload" || return $?
+  # Only dequeue the exact inbox bytes we judged. Caller-owned packets outside
+  # the inbox stay in place; their failure record suppresses duplicate parking.
+  if [[ "$(cd "$(dirname "$packet_input")" && pwd -P)" == "$(cd "$SINGULAR_INBOX_DIR" && pwd -P)" \
+      && "$(shasum -a 256 "$packet_input" | awk '{print $1}')" == "$packet_sha_before" ]]; then
+    mkdir -p "$SINGULAR_STATE_DIR/import-refusals/$run_id"
+    retained="$(mktemp "$SINGULAR_STATE_DIR/import-refusals/$run_id/packet.XXXXXX")" || return $?
+    mv -- "$packet_input" "$retained" || return $?
+  fi
+}
+
+# Pin the inputs read by the shared rule, including optional records whose
+# appearance could change its answer. Include the host's referenced log and
+# baseline, but not unrelated run output. Compare under the publication locks.
+import_acceptance_inputs() {
+  python3 - "$run_dir" "$audit_record" "$SINGULAR_STATE_DIR" \
+    "$task_file" "$SINGULAR_JSON_CONFIG_FILE" <<'PY'
+import hashlib, json, os, stat, sys
+from pathlib import Path
+run, audit, state, task, config = map(Path, sys.argv[1:])
+paths = {audit, audit.with_name(audit.name + ".pre-normalize.json"),
+         run / "audit-verification.json", run / "evidence-manifest.json",
+         state / "review-policy/ledger.json", task, config}
+try:
+    report = json.loads((run / "audit-verification.json").read_text())
+except (OSError, ValueError):
+    report = {}
+if isinstance(report, dict):
+    for ref in (report.get("logPath") or report.get("logRef"), report.get("baselineRef")):
+        if isinstance(ref, str) and ref:
+            path = Path(ref)
+            paths.add(path if path.is_absolute() else run / path)
+for pattern in ("verification-request-*.json", "verification-task-contract-*.md",
+                "verification-policy-*.json"):
+    paths.update(run.glob(pattern))
+values = []
+for path in sorted(paths):
+    try:
+        mode = path.lstat().st_mode
+        if stat.S_ISREG(mode):
+            value = hashlib.sha256(path.read_bytes()).hexdigest()
+        elif stat.S_ISLNK(mode):
+            value = [os.readlink(path), hashlib.sha256(path.read_bytes()).hexdigest()]
+        else:
+            value = "not-a-file"
+    except FileNotFoundError:
+        value = None
+    values.append([str(path), value])
+print(hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest())
+PY
+}
+
+import_validate_acceptance() {
+  local unit dag_node policy_env result rc=0
+  import_refusal_reason="review-unit-invalid"
+  dag_node="$(singular_task_field "$task_file" dagNode)" || return $?
+  unit="$(python3 "$SINGULAR_LIB_DIR/review_policy.py" \
+    --config "$SINGULAR_JSON_CONFIG_FILE" --state-dir "$SINGULAR_STATE_DIR" \
+    resolve --task "$task_id" --dag-node "$dag_node" --tasks-dir "$SINGULAR_TASKS_DIR" --dry-run)" || return $?
+  unit="$(printf '%s' "$unit" | python3 -c 'import json,sys; print(json.load(sys.stdin)["logicalChange"])')" || return $?
+  policy_env="$(python3 -c 'import json,os
+print(json.dumps({k:v for k,v in os.environ.items() if k.startswith("SINGULAR_REVIEW_")}))')" || return $?
+  import_refusal_reason="acceptance-evidence-inputs-invalid"
+  import_acceptance_before="$(import_acceptance_inputs)" || return $?
+  result="$(python3 "$SINGULAR_LIB_DIR/acceptance_validator.py" \
+      "--red-proof=${SINGULAR_RED_PROOF:-off}" \
+      "--acceptance-mode=$import_acceptance_mode" "--lease=$lease_path" \
+    "--task=$task_id" "--run=$run_id" "--branch=$branch" "--head=$head_sha" \
+    "--campaign=$import_campaign_binding" "--run-dir=$run_dir" \
+    "--repo-root=$SINGULAR_ROOT" "--state-dir=$SINGULAR_STATE_DIR" \
+    "--logical-change=$unit" "--audit=$audit_record" "--task-contract=$task_file" \
+    "--schema-dir=$SINGULAR_SCHEMA_DIR" "--config=$SINGULAR_JSON_CONFIG_FILE" \
+    "--policy-env-json=$policy_env" "--legacy-schema-mode=${SINGULAR_LEGACY_SCHEMA_MODE:-warn}" \
+    "--trusted-shell=${SINGULAR_BASH_BIN:-}" "--require-audit=$require_audit")" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    import_refusal_reason="$(printf '%s' "$result" | python3 -c 'import json,sys
+try:
+    value = json.load(sys.stdin)
+    print(value["conjunct"] + ":" + value["reason"])
+except (ValueError, KeyError, TypeError):
+    print("acceptance-validator-failed")')"
+    # Keep the code and name the failed part of the rule in words beside it:
+    # "A:blocking-finding-open (audit)".
+    local subject=""
+    subject="$(python3 "$SINGULAR_LIB_DIR/acceptance_validator.py" \
+      describe-refusal --subject "$import_refusal_reason" 2>/dev/null)" || subject=""
+    [[ -z "$subject" ]] || import_refusal_reason="$import_refusal_reason ($subject)"
+    printf 'import refused: %s\n' "$import_refusal_reason" >&2
+    return "$rc"
+  fi
+  import_refusal_reason="acceptance-evidence-changed-before-publication"
+}
 
 if [[ $# -ne 1 ]]; then
   echo "usage: $0 path/to/state-packet.json" >&2
@@ -10,6 +141,58 @@ if [[ $# -ne 1 ]]; then
 fi
 
 packet_input="$1"
+import_restored_from=""
+# every-path: a refused inbox packet was moved aside (import_park_refusal) so
+# the loop does not judge it again. An operator's explicit re-import of that
+# inbox path restores the newest retained copy for the run and imports it as
+# usual. Reconcile only scans the inbox, so it never restores one by itself.
+import_restore_retained() {
+  [[ "$import_acceptance_mode" == "every-path" ]] || return 0
+  [[ ! -e "$packet_input" && ! -L "$packet_input" ]] || return 0
+  local inbox_real input_dir retained
+  [[ -d "$SINGULAR_INBOX_DIR" ]] || return 0
+  inbox_real="$(cd "$SINGULAR_INBOX_DIR" && pwd -P)" || return 0
+  input_dir="$(dirname "$packet_input")"
+  [[ -d "$input_dir" ]] || return 0
+  [[ "$(cd "$input_dir" && pwd -P)" == "$inbox_real" ]] || return 0
+  retained="$(python3 - "$SINGULAR_STATE_DIR/import-refusals" "$(basename "$packet_input")" <<'PY'
+import os, re, stat, sys
+root, name = sys.argv[1:3]
+match = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9._-]*)\.json", name)
+if not match or match[1] in {".", ".."}:
+    raise SystemExit(0)
+folder = os.path.join(root, match[1])
+try:
+    for path in (root, folder):
+        if not stat.S_ISDIR(os.lstat(path).st_mode):
+            raise SystemExit(0)
+    entries = os.listdir(folder)
+except OSError:
+    raise SystemExit(0)
+best = None
+for entry in entries:
+    if not re.fullmatch(r"packet\.[A-Za-z0-9]+", entry):
+        continue
+    path = os.path.join(folder, entry)
+    value = os.lstat(path)
+    if not stat.S_ISREG(value.st_mode):
+        continue
+    key = (value.st_mtime_ns, entry)
+    if best is None or key > best[0]:
+        best = (key, path)
+if best:
+    print(best[1])
+PY
+)" || return 0
+  [[ -n "$retained" ]] || return 0
+  mv -- "$retained" "$packet_input" || return 0
+  # A fresh judgement: the failure record of the parked bytes no longer
+  # matches, so a still-broken packet is refused and parked again, visibly.
+  touch -- "$packet_input" || true
+  import_restored_from="$retained"
+  echo "import-packet: restored the retained refused packet to $packet_input" >&2
+}
+import_restore_retained
 if [[ ! -f "$packet_input" ]]; then
   echo "packet not found: $packet_input" >&2
   exit 2
@@ -33,6 +216,17 @@ import_lease_snapshot=""
 import_decision_snapshot=""
 import_guard_log=""
 import_cleanup() {
+  local import_exit=$?
+  if [[ "$import_exit" -ne 0 ]]; then
+    import_park_refusal || echo "import-packet: could not finish refusal parking" >&2
+    # A restored packet that was not imported and not parked again goes back
+    # aside, so the loop's inbox scan never judges it on the next cycle.
+    if [[ -n "$import_restored_from" && -f "$packet_input" && ! -L "$packet_input" \
+        && ! -e "$import_restored_from" ]]; then
+      mv -- "$packet_input" "$import_restored_from" 2>/dev/null \
+        || echo "import-packet: could not move the restored packet aside again" >&2
+    fi
+  fi
   rm -f "${import_packet_tmp:-}" "${import_audit_tmp:-}" \
     "${import_packet_snapshot:-}" "${import_audit_snapshot:-}" \
     "${import_lease_snapshot:-}" "${import_decision_snapshot:-}" \
@@ -54,6 +248,13 @@ trap import_cleanup EXIT
 singular_ensure_state_dirs
 import_snapshot_dir="$SINGULAR_STATE_DIR/import-candidates"
 mkdir -p "$import_snapshot_dir"
+# Packets queued by an engine that did not normalise at worker exit can still
+# carry bare-string blockers/evidence. Wrap them in the queued file itself,
+# before the snapshot, so the snapshot and the change check below see the same
+# bytes. Authority-carrying members are not touched.
+singular_packet_normalize_and_record "$packet_input" import \
+  "$(singular_json_field "$packet_input" taskId 2>/dev/null || true)" \
+  "$(singular_json_field "$packet_input" runId 2>/dev/null || true)"
 import_packet_snapshot="$(mktemp "$import_snapshot_dir/.packet.XXXXXX")"
 cp -- "$packet_input" "$import_packet_snapshot"
 packet="$import_packet_snapshot"
@@ -202,6 +403,7 @@ packet_sha_before="$(shasum -a 256 "$packet" | awk '{print $1}')"
 lease_sha_before="$(shasum -a 256 "$import_lease_snapshot" | awk '{print $1}')"
 
 import_guard_log="$(mktemp "$import_snapshot_dir/.guard.XXXXXX")"
+import_refusal_reason="packet-module-or-branch-invalid"
 if ! singular_packet_module_guard "$packet" "$task_file" "$workspace" "$run_dir" >"$import_guard_log" 2>&1; then
   cat "$import_guard_log" >&2
   singular_append_event "packet.import_rejected" "import rejected: module packet guard" \
@@ -225,6 +427,7 @@ fi
 # (operating model section 12). The verdict is the run's durable audit record.
 # Set SINGULAR_REQUIRE_AUDIT=0 only for explicit, documented bootstrap exceptions.
 require_audit="${SINGULAR_REQUIRE_AUDIT:-1}"
+import_refusal_reason="audit-verdict-or-waiver-invalid"
 case "$require_audit" in
   0|1) ;;
   *)
@@ -359,6 +562,10 @@ fi
 dest_dir="$SINGULAR_ORCH_DIR/packets/imported/$task_id"
 dest="$dest_dir/$run_id.json"
 audit_dest="$dest_dir/$run_id.audit.json"
+import_acceptance_before=""
+if [[ "$import_acceptance_mode" == "every-path" && ! -e "$dest" ]]; then
+  import_validate_acceptance || exit $?
+fi
 
 import_prepare_destination_dir() {
   python3 - "$SINGULAR_ORCH_DIR" "$task_id" <<'PY'
@@ -485,6 +692,15 @@ fi
 if [[ "$audit_present_before" != "yes" && -e "$audit_dest" ]]; then
   echo "unexpected imported audit sidecar without a validated source audit: $audit_dest" >&2
   exit 2
+fi
+
+if [[ "$import_acceptance_mode" == "every-path" ]]; then
+  [[ -n "$import_acceptance_before" \
+      && "$(import_acceptance_inputs)" == "$import_acceptance_before" ]] \
+    || { echo "acceptance evidence changed while import was being validated" >&2; exit 2; }
+  if [[ "${SINGULAR_RED_PROOF:-off}" == enforce ]]; then
+    import_validate_acceptance || exit $?
+  fi
 fi
 
 # Atomic authority publish: stage complete bytes, install the audit first, and

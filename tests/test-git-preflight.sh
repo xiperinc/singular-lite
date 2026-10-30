@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# PMGO-010: the regression suite needs a real Git working tree — history and
+# The regression suite needs a real Git working tree — history and
 # disposable worktrees. Run it from a `git archive` extraction and every
 # dependent test used to fail on its own; the operator got a wall of noise
 # instead of one diagnosis. engine/git-preflight.sh rejects that source once,

@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.dag.v0",
+  "title": "singular Planning DAG",
+  "description": "Layer/kind vocabularies are project-defined: any non-empty string is valid unless the optional top-level `layers`/`kinds` allowlists are present (this matches engine/dag.sh's validator; the 0.4.0 schema file hardcoded one project's enums and would have rejected the engine's own starter DAG). `authority` (0.5.0) governs evaluation-gate promotion: absent/operator = operator-only; agent-review-allowed = a valid gate-review.v0 evidence file may promote.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "nodes"
+  ],
+  "properties": {
+    "schema": {
+      "const": "singular.orchestration.dag.v0"
+    },
+    "layers": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "kinds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "requiredNodes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "stage",
+          "area",
+          "layer",
+          "kind",
+          "dependsOn",
+          "requiredCompletion"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "stage": {
+            "type": "string",
+            "minLength": 1
+          },
+          "area": {
+            "type": "string",
+            "minLength": 1
+          },
+          "layer": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "type": "string",
+            "minLength": 1
+          },
+          "authority": {
+            "type": "string",
+            "enum": [
+              "operator",
+              "agent-review-allowed"
+            ]
+          },
+          "humanGate": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "requestRef",
+              "approvalRef"
+            ],
+            "properties": {
+              "requestRef": {
+                "type": "string",
+                "minLength": 1
+              },
+              "approvalRef": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "dependsOn": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "requiredCompletion": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

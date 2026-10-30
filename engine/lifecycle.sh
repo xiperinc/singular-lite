@@ -30,7 +30,7 @@ singular_lifecycle_dispatch_record_write() {
   campaign_binding="$(singular_lease_field "$task_id" campaignBinding 2>/dev/null || echo legacy)"
   pgid="$(singular_pgid_of "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
   [[ "$pgid" =~ ^[0-9]+$ ]] || pgid=0
-  # Q-OPEN-2 (claudedocs/design-pgid-fencing.md): reconcile swallows OSError
+  # Process fencing: reconcile swallows OSError
   # from os.setsid(), so a child that failed to become a session leader was
   # recorded as if it were detached and its recorded pgid was the scheduler own
   # group -- which the fence then correctly refuses, turning a containment
@@ -182,7 +182,7 @@ singular_lifecycle_close_dispatch() {
 singular_lifecycle_reap_dispatches() {
   local run_id="$1" reaped_ok=0 reaped_failures=0 reaped_refused=0 reaped_terminal=0 workers_running=0
   local record tid state pid pid_start pgid rec_run ec owner generation batch outcome exit_data
-  local exit_file archived_exit
+  local exit_file archived_exit refused_log
   local finish_reason finish_next
   if [[ -d "$SINGULAR_DISPATCH_DIR" ]]; then
     for record in "$SINGULAR_DISPATCH_DIR"/*.json; do
@@ -272,7 +272,7 @@ singular_lifecycle_reap_dispatches() {
           # bookkeeping for a dead generation: close it independently, retaining
           # its exit evidence inside the closed record, so the successor can
           # bind. Counting it as a running worker instead was the
-          # reserve-before-bind deadlock (field 2026-09-14).
+          # reserve-before-bind deadlock.
           if singular_lifecycle_close_dispatch "$tid" "$ec" "$outcome" \
               "$owner" "$generation" "$finish_reason" >/dev/null 2>&1; then
             case "$ec" in
@@ -291,6 +291,7 @@ singular_lifecycle_reap_dispatches() {
           fi
           continue
         fi
+        refused_log="$(singular_json_field "$record" log 2>/dev/null || true)"
         singular_lifecycle_dispatch_finalize "$tid" "$ec" "$outcome" "$owner" "$generation" || {
           workers_running=$((workers_running + 1))
           continue
@@ -301,6 +302,13 @@ singular_lifecycle_reap_dispatches() {
           3) reaped_terminal=$((reaped_terminal + 1)) ;;
           *) reaped_failures=$((reaped_failures + 1)) ;;
         esac
+        # A refusal that repeats for the same reason parks the task (0.23.7);
+        # any other outcome means the driver got past its preconditions.
+        if [[ "$ec" -eq 2 ]]; then
+          singular_dispatch_refusal_account "$tid" "$run_id" "$refused_log" || true
+        else
+          singular_dispatch_refusal_clear "$tid"
+        fi
         singular_append_event "origin.dispatch_reaped" "dispatch reaped" \
           "{\"runId\":\"$run_id\",\"taskId\":\"$tid\",\"exitCode\":$ec,\"outcome\":\"$outcome\",\"reservationOwner\":\"$owner\",\"reservationGeneration\":$generation}"
         continue

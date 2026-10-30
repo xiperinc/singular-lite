@@ -158,7 +158,7 @@ assert 'kill "$dispatch_pid"' not in src, "a bare single-pid kill survives in re
 PY
 pass "quarantined has a public exit verb and the producer names it"
 
-# --- 6. Q-OPEN-2: the session-leader outcome is recorded at bind -------------
+# --- 6. process fencing: the session-leader outcome is recorded at bind -------------
 setsid_leader
 leader2=$!
 singular_lifecycle_dispatch_record_write TASK-7003 RUN-F "$leader2" x "$tmp/l.log" b B o 1 >/dev/null

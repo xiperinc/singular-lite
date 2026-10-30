@@ -188,7 +188,17 @@ P0/P1 findings require nonblank trigger, impact, and requirement.
 Missing support never downgrades a finding or authorizes acceptance.
 
 Use accepted when there are no blocking findings, including reviews with
-only P2/P3 backlog items. Do not emit reviewPolicy; it is host-owned.'''
+only P2/P3 backlog items. Do not emit reviewPolicy or hostNormalization;
+they are host-owned.
+
+Add no member the schema does not define, at the top level or inside a
+classifiedFindings[] or verificationResults[] item. A classifiedFindings
+item may carry only id, severity, summary, trigger, impact, requirement,
+location, and assumptionId.
+
+An accepted verdict that reports a prior finding "still-open" must repeat
+that finding's text verbatim in findings and classify it (P2/P3 backlog).
+A prior P0/P1 finding that is still open means needs-fix, not accepted.'''
 assert sys.argv[1] == expected, sys.argv[1]
 PY
 count_fragment() {

@@ -1,0 +1,62 @@
+{
+  "schema": "singular.orchestration.audit-verdict.v1",
+  "taskId": "TASK-0001",
+  "runId": "RUN-fixture-audit",
+  "branch": "agent/parser/TASK-0001-parser",
+  "verdict": "accepted",
+  "evidenceReviewed": [
+    "packet.json",
+    "audit-verification.json"
+  ],
+  "verificationResults": [
+    {
+      "status": "not-rerun-evidence-verified",
+      "command": "python3 -m unittest",
+      "exitCode": 0,
+      "evidenceRefs": [
+        "gate-check.log"
+      ],
+      "rationale": "Synthetic host-verified test evidence."
+    }
+  ],
+  "commandsRun": [],
+  "findings": [
+    "F1 (P3): Still open: the parser mode label is ambiguous",
+    "F3 (P3): Still open: the parser help omits the empty-input example",
+    "F5 (P3): Still open: the parser usage text has inconsistent spacing",
+    "F6 (P3): Still open: the parser output label is verbose"
+  ],
+  "requiredFixes": [],
+  "rationale": "The blocking parser defect is fixed; documentation findings remain backlog.",
+  "classifiedFindings": [
+    {
+      "id": "F1",
+      "severity": "P3",
+      "summary": "Still open: the parser mode label is ambiguous",
+      "assumptionId": "A3"
+    },
+    {
+      "id": "F3",
+      "severity": "P3",
+      "summary": "Still open: the parser help omits the empty-input example"
+    },
+    {
+      "id": "F5",
+      "severity": "P3",
+      "summary": "Still open: the parser usage text has inconsistent spacing"
+    },
+    {
+      "id": "F6",
+      "severity": "P3",
+      "summary": "Still open: the parser output label is verbose"
+    }
+  ],
+  "findingsStatus": {
+    "f-0ec31550d9ba": "still-open",
+    "f-8583bd880890": "resolved",
+    "f-d9d05ae8b846": "still-open",
+    "f-8569ffc003a3": "resolved",
+    "f-ebe0f3724c9f": "still-open",
+    "f-99fa77a5abf6": "still-open"
+  }
+}

@@ -1,27 +1,5 @@
 #!/usr/bin/env bash
-# Covers the THIRD slice of the OPTIONAL authored-knowledge manifest ingestion
-# leaf (stage S5-routing, node `rehydrate-path`, layer engine_runtime).
-# `engine/ctx-rehydrate-authored-packet.sh` ships a PURE, read-only,
-# present-but-uncalled composer over the integrated `select` (TASK-0058) and
-# `eligible` (TASK-0059) leaves:
-#
-#   singular_ctx_rehydrate_authored_render   <manifest-path> [trigger ...]
-#   singular_ctx_rehydrate_authored_manifest <manifest-path> [trigger ...]
-#
-#   - render composes `select | eligible` and renders each eligible entry into a
-#     labeled `=== authored:<id> ===` section headed by an explicit
-#     authored-knowledge / not-authoritative marker, followed by the entry body
-#     (inline `body`, or the contents of a `path`-backed entry read READ-ONLY),
-#     each section capped at SINGULAR_CONTEXT_SECTION_MAX_CHARS (default 4000) with
-#     a stable truncation marker. Deterministic, id-sorted.
-#   - manifest emits, for exactly the injected authored ids, a deterministic JSON
-#     sources list of {id, sha256, class:"authored-knowledge", authoritative:false}
-#     over the rendered body.
-#   - quarantine, description_unverified, stale-freshness, and trigger-mismatch
-#     exclusions are inherited from the integrated select/eligible leaves.
-#   - pure / read-only / deterministic / fail-soft: an absent, empty, or malformed
-#     manifest yields an empty section and empty manifest sources; it mutates
-#     nothing on disk and never exits non-zero on well-formed input.
+# Regression contracts for ctx-rehydrate-authored-packet.
 set -uo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

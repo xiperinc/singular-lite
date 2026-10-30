@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Packet extraction tolerates bounded structural LLM quirks (field run
-# 2026-09-14: a successful worker closed the `nextAction` string with `"]`,
-# the engine saw "no packet", parked the unchanged candidate and the queue
-# deadlocked). Values are never invented; a real non-packet still fails.
+# Packet extraction tolerates an unmatched bracket after nextAction. Values
+# are never invented; a real non-packet still fails.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
@@ -11,23 +9,23 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 export SINGULAR_ROOT="$tmp" SINGULAR_STATE_DIR="$tmp/.singular-state"
 source "$ROOT/engine/lib.sh" >/dev/null
 
-fixture="$ROOT/tests/fixtures/worker-packet/stray-bracket-field-run.json"
+fixture="$ROOT/tests/fixtures/worker-packet/stray-bracket.json"
 python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$fixture" 2>/dev/null \
   && fail "fixture unexpectedly parses as JSON; the test would prove nothing"
 
-# 1. The field-run packet is recovered, with every value intact.
-singular_extract_json "$fixture" "$tmp/out.json" 2>"$tmp/err" || fail "field-run packet not recovered: $(cat "$tmp/err")"
+# 1. The synthetic packet is recovered, with every value intact.
+singular_extract_json "$fixture" "$tmp/out.json" 2>"$tmp/err" || fail "synthetic packet not recovered: $(cat "$tmp/err")"
 grep -q "packet repaired: dropped unmatched ']'" "$tmp/err" || fail "repair not logged: $(cat "$tmp/err")"
 python3 - "$tmp/out.json" <<'PY' || exit 1
 import json, sys
 d = json.load(open(sys.argv[1]))
 assert d["schema"] == "singular.orchestration.state-packet.v0", d["schema"]
-assert d["taskId"] == "TASK-1117" and d["runId"] == "RUN-20260914T151954Z-17409"
-assert isinstance(d["nextAction"], str) and d["nextAction"].startswith("Hand the exact preserved source")
+assert d["taskId"] == "TASK-0001" and d["runId"] == "RUN-fixture-bracket"
+assert isinstance(d["nextAction"], str) and d["nextAction"].startswith("Review the synthetic parser packet.")
 assert d["status"] == "needs-review" and d["changedFiles"] == []
-assert d["createdAt"] == "2026-09-14T15:28:23Z"
+assert d["createdAt"] == "2000-01-01T00:00:00Z"
 PY
-pass "field-run packet with a stray ']' is recovered unchanged"
+pass "synthetic packet with a stray ']' is recovered unchanged"
 
 # 2. A valid packet is untouched (no repair log line).
 printf '{"schema":"x","nextAction":"a","n":[1,2]}\n' >"$tmp/valid.json"

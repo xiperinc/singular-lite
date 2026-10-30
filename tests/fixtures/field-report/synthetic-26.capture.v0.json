@@ -1,0 +1,301 @@
+{
+  "schema": "singular.orchestration.field-report-capture.v0",
+  "capturedAt": "2000-01-01T02:00:00Z",
+  "source": {
+    "kind": "synthetic",
+    "engineVersion": "fixture",
+    "runId": "RUN-fixture-canary",
+    "workload": "Constructed graph; no consumer capture",
+    "observationWindow": "Synthetic lifecycle and diagnostic coverage"
+  },
+  "dag": {
+    "ref": "synthetic-26.dag.v0.json",
+    "sha256": "f73c9759048d34db8edd36748d932d3581e0ef94786c02111505af3f476365c9",
+    "nodeCount": 26
+  },
+  "events": {
+    "ref": "synthetic-26.events.ndjson",
+    "sha256": "84a4c15ac9f69fd4a21f1453f998497a27de9c9157d5cbab4c44c95c09f9e3c7",
+    "recordCount": 10,
+    "diagnosticCounts": {
+      "info": 2,
+      "orchestration-failure": 2,
+      "optional-dependency-warning": 2,
+      "infrastructure-inconclusive": 1,
+      "product-failure": 1,
+      "acknowledged-baseline": 1,
+      "provider-failure": 1
+    },
+    "diagnosticGroups": 9
+  },
+  "artifacts": [
+    {
+      "node": "node-00",
+      "ref": "artifacts/node-00.txt",
+      "sha256": "9f3d2fe8cb0f8b6b0517e167246650685d000a2cf6badad76e9f21fa7e5be94e",
+      "content": "node-00: synthetic artifact 0\n"
+    },
+    {
+      "node": "node-01",
+      "ref": "artifacts/node-01.txt",
+      "sha256": "229262b3f4d10684b885bd5f46d78118896e0e6bae2d03129dfddd2b9729dfe7",
+      "content": "node-01: synthetic artifact 1\n"
+    },
+    {
+      "node": "node-02",
+      "ref": "artifacts/node-02.txt",
+      "sha256": "42bcc208ae886132f39bcb4be1e8f5e5c9eeddfb9bf5f808a69261dce3763f89",
+      "content": "node-02: synthetic artifact 2\n"
+    },
+    {
+      "node": "node-03",
+      "ref": "artifacts/node-03.txt",
+      "sha256": "01fd21da260801ca75119ee179239e64f303ca6921fa5eba4a6c44d2c2c3d122",
+      "content": "node-03: synthetic artifact 3\n"
+    },
+    {
+      "node": "node-04",
+      "ref": "artifacts/node-04.txt",
+      "sha256": "2d5f876b25db90b73c302ce40cfb6a87c849fa4a22014f9131588adc029c3cf4",
+      "content": "node-04: synthetic artifact 4\n"
+    },
+    {
+      "node": "node-05",
+      "ref": "artifacts/node-05.txt",
+      "sha256": "07188d7ca5296e10c67d319df2f1fdc796482b2822f73e48236ae8791fd70a49",
+      "content": "node-05: synthetic artifact 5\n"
+    },
+    {
+      "node": "node-06",
+      "ref": "artifacts/node-06.txt",
+      "sha256": "0f85db26922d9cf947a7423b3fb3f55e88a3d8bba3e6d17e706f862b0ecebd20",
+      "content": "node-06: synthetic artifact 6\n"
+    },
+    {
+      "node": "node-07",
+      "ref": "artifacts/node-07.txt",
+      "sha256": "a970a05716cc76cf3a2a708c4f5dbac008e8becdf38b46dd7fe9179a51a0e7c8",
+      "content": "node-07: synthetic artifact 7\n"
+    },
+    {
+      "node": "node-08",
+      "ref": "artifacts/node-08.txt",
+      "sha256": "6a7e65417889971be21cd0ac367725055b9894501a3a1cf25ac29ae5f4f88004",
+      "content": "node-08: synthetic artifact 8\n"
+    },
+    {
+      "node": "node-09",
+      "ref": "artifacts/node-09.txt",
+      "sha256": "82ea90003690a775db9008c7806e3b4869bc06e3c251edb59cc3aee13453100b",
+      "content": "node-09: synthetic artifact 9\n"
+    },
+    {
+      "node": "node-10",
+      "ref": "artifacts/node-10.txt",
+      "sha256": "6cd6e18a3fefd7c41c52f4046f5f54f245cc0e4077b099105d8cb7c0141b0ffb",
+      "content": "node-10: synthetic artifact 10\n"
+    },
+    {
+      "node": "node-11",
+      "ref": "artifacts/node-11.txt",
+      "sha256": "85873884540858cc1b51d831079c9a8b1b1dc52273c94c1f79f7a035e6610203",
+      "content": "node-11: synthetic artifact 11\n"
+    },
+    {
+      "node": "node-12",
+      "ref": "artifacts/node-12.txt",
+      "sha256": "637e3ff56aac644b30b6bbdcf3b3b8e9262c668eadaf497f9bd641d95d9d3dd6",
+      "content": "node-12: synthetic artifact 12\n"
+    },
+    {
+      "node": "node-13",
+      "ref": "artifacts/node-13.txt",
+      "sha256": "eab406889db8a9f077b79cec010a9b13dcd9482a3538ee4a37e2de1283ac3d4b",
+      "content": "node-13: synthetic artifact 13\n"
+    },
+    {
+      "node": "node-14",
+      "ref": "artifacts/node-14.txt",
+      "sha256": "d754874d2bb9234d5c2bc9a195d7875cbdf1252c3b28146b394301837082887b",
+      "content": "node-14: synthetic artifact 14\n"
+    },
+    {
+      "node": "node-15",
+      "ref": "artifacts/node-15.txt",
+      "sha256": "e3cb254f4f70a54a25a2e6a49979a2deac664d53701317a834af72aca93047c0",
+      "content": "node-15: synthetic artifact 15\n"
+    },
+    {
+      "node": "node-16",
+      "ref": "artifacts/node-16.txt",
+      "sha256": "95f96556bb7b1bae6f4838f7acc3f51cdd8814e2619affd536ed80465e07d30b",
+      "content": "node-16: synthetic artifact 16\n"
+    },
+    {
+      "node": "node-17",
+      "ref": "artifacts/node-17.txt",
+      "sha256": "dd985104abb053e62e2cc3e2a476c68b1b7c349ad141e3be154de14bd88492b8",
+      "content": "node-17: synthetic artifact 17\n"
+    },
+    {
+      "node": "node-18",
+      "ref": "artifacts/node-18.txt",
+      "sha256": "90ecf9275cd24f2586caa87580e721d7f6ac9be6dfc877ac5f7577e2f262d059",
+      "content": "node-18: synthetic artifact 18\n"
+    },
+    {
+      "node": "node-19",
+      "ref": "artifacts/node-19.txt",
+      "sha256": "1217cce3e3833bba9e33be9ee6f2009f30dd91c31a224cf8c0d202f0cd72dbee",
+      "content": "node-19: synthetic artifact 19\n"
+    },
+    {
+      "node": "node-20",
+      "ref": "artifacts/node-20.txt",
+      "sha256": "77248925faac96d7b913e300a6dd9c62ae7720c2f719649c3ef6fee3df939984",
+      "content": "node-20: synthetic artifact 20\n"
+    },
+    {
+      "node": "node-21",
+      "ref": "artifacts/node-21.txt",
+      "sha256": "589284530bfede0003829e493c8e4697f53818349c2c9ec9e58da6a6ce0ea37b",
+      "content": "node-21: synthetic artifact 21\n"
+    },
+    {
+      "node": "node-22",
+      "ref": "artifacts/node-22.txt",
+      "sha256": "153401e5a5948aab0e50f8f0462c02ace1f91e586d4005874ca6ad9e2b10772c",
+      "content": "node-22: synthetic artifact 22\n"
+    },
+    {
+      "node": "node-23",
+      "ref": "artifacts/node-23.txt",
+      "sha256": "8412b29c88f9cd6ec029427c7e012c7c58186759a4aa5b3832aeab06f08f9884",
+      "content": "node-23: synthetic artifact 23\n"
+    },
+    {
+      "node": "node-24",
+      "ref": "artifacts/node-24.txt",
+      "sha256": "2af4a572f47481e7def0c3af8ef080cbedbdb679671216d6ab2cba12ae1613ed",
+      "content": "node-24: synthetic artifact 24\n"
+    },
+    {
+      "node": "node-25",
+      "ref": "artifacts/node-25.txt",
+      "sha256": "653c4c766410180e54f60a364cf87f72fc5b2363f25d43c7d1328a773631356b",
+      "content": "node-25: synthetic artifact 25\n"
+    }
+  ],
+  "runStatuses": [
+    {
+      "runId": "RUN-fixture-planning",
+      "taskId": "TASK-0000",
+      "node": "node-00",
+      "phase": "planning",
+      "state": "active",
+      "activity": "Synthetic planning activity",
+      "safeCancel": true,
+      "nextAction": "Verify the next synthetic step",
+      "at": "2000-01-01T01:00:00Z",
+      "processType": "planner",
+      "pid": 900001,
+      "pgid": 900001
+    },
+    {
+      "runId": "RUN-fixture-implementing",
+      "taskId": "TASK-0001",
+      "node": "node-01",
+      "phase": "implementing",
+      "state": "active",
+      "activity": "Synthetic implementing activity",
+      "safeCancel": false,
+      "nextAction": "Verify the next synthetic step",
+      "at": "2000-01-01T01:01:00Z",
+      "processType": "worker",
+      "pid": 900002,
+      "pgid": 900002
+    },
+    {
+      "runId": "RUN-fixture-gating",
+      "taskId": "TASK-0002",
+      "node": "node-02",
+      "phase": "gating",
+      "state": "active",
+      "activity": "Synthetic gating activity",
+      "safeCancel": false,
+      "nextAction": "Verify the next synthetic step",
+      "at": "2000-01-01T01:02:00Z",
+      "processType": "gate",
+      "pid": 900003,
+      "pgid": 900003
+    },
+    {
+      "runId": "RUN-fixture-auditing",
+      "taskId": "TASK-0003",
+      "node": "node-03",
+      "phase": "auditing",
+      "state": "active",
+      "activity": "Synthetic auditing activity",
+      "safeCancel": true,
+      "nextAction": "Verify the next synthetic step",
+      "at": "2000-01-01T01:03:00Z",
+      "processType": "auditor",
+      "pid": 900004,
+      "pgid": 900004
+    },
+    {
+      "runId": "RUN-fixture-deciding",
+      "taskId": "TASK-0004",
+      "node": "node-04",
+      "phase": "deciding",
+      "state": "active",
+      "activity": "Synthetic deciding activity",
+      "safeCancel": true,
+      "nextAction": "Verify the next synthetic step",
+      "at": "2000-01-01T01:04:00Z",
+      "processType": "decider",
+      "pid": 900005,
+      "pgid": 900005
+    },
+    {
+      "runId": "RUN-fixture-integrating",
+      "taskId": "TASK-0005",
+      "node": "node-05",
+      "phase": "integrating",
+      "state": "active",
+      "activity": "Synthetic integrating activity",
+      "safeCancel": false,
+      "nextAction": "Verify the next synthetic step",
+      "at": "2000-01-01T01:05:00Z",
+      "processType": "integrator",
+      "pid": 900006,
+      "pgid": 900006
+    },
+    {
+      "runId": "RUN-fixture-awaiting-human",
+      "taskId": "TASK-0006",
+      "node": "node-08",
+      "phase": "awaiting-human",
+      "state": "waiting",
+      "activity": "Synthetic awaiting-human activity",
+      "safeCancel": true,
+      "nextAction": "Verify the next synthetic step",
+      "at": "2000-01-01T01:06:00Z",
+      "processType": "human-gate",
+      "pid": 900007,
+      "pgid": 900007
+    },
+    {
+      "runId": "RUN-fixture-terminal",
+      "taskId": "TASK-0007",
+      "node": "node-25",
+      "phase": "terminal",
+      "state": "completed",
+      "activity": "Synthetic terminal activity",
+      "safeCancel": true,
+      "nextAction": "Verify the next synthetic step",
+      "at": "2000-01-01T01:07:00Z",
+      "outcome": "passed"
+    }
+  ]
+}

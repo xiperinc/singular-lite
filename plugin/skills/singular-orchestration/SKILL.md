@@ -1,38 +1,42 @@
 ---
 name: singular-orchestration
-description: Operate Singular (repo "singular-lite"; CLI command `singular`) — an autonomous multi-agent orchestration engine that drives parallel AI coding agents against a git repo through a three-tier L0/L1/L2 model with DAG plans, durable leases, gate pipelines, and worktree isolation. Use whenever the user wants to orchestrate agents on a repo, set up Singular in a repo, create or edit an orchestration plan or DAG, decompose a project into parallel tasks, run/resume/stop an orchestration, drive a single task end-to-end, check what orchestration agents are doing, or open the orchestration console/dashboard/viewer/visualization UI — even if they just say "singular", "orchestrate this", "run agents in parallel on this repo", "show me the dashboard", or "show me the agent graph" without naming a command.
+description: Operate Singular (repo "singular-lite"; CLI command `singular`) through individual task commands or its optional autonomous loop. Use for Singular setup, DAG and task authoring, execution, recovery, and its orchestration console.
 ---
 
 # Singular orchestration (`singular`)
 
-Singular (repo `singular-lite`) is a bash + Python engine
-that runs autonomous AI coding agents in parallel against a repository. You —
-the agent reading this — are its operator: you author the plan, launch the
-loop, keep parallelism high, and verify completion through gates. The CLI
-command is `singular`; the engine installs once per machine under `~/.singular`
-and each consumer repo pins a version in `.singular-version`.
+This skill describes engine 0.24.0's Bash and Python implementation. Singular
+runs coding agents in isolated worktrees, with DAG planning, durable leases,
+audits and integration gates. Operate it within the user's chosen scope:
+individual commands and the autonomous loop are both available. Product
+direction and the future of the loop remain open decisions; this skill does
+not choose a default operating mode. Each consumer repo pins its engine in
+`.singular-version`.
 
 | Tier | Role |
 | --- | --- |
 | **L0 origin** | The single scheduler. Each reconcile cycle: import staged L1 proposals → recover stale leases → integrate finished branches → dispatch frontier tasks → snapshot. |
-| **L1 area planners** | One planner per ready DAG node. Reads the node's context, plans a batch of L2 tasks, stages them as proposals for L0 to import. |
+| **L1 orchestration** | Shell orchestration invokes planners for ready DAG nodes and drives individual tasks through worker, gate and audit phases. Planners stage task proposals for L0 to import. |
 | **L2 workers** | Each executes one task in an isolated git worktree on a per-task branch, then writes a state packet. An auditor reviews it; a decider routes retry/escalate/park. |
 
-Operating defaults — apply these unless the user says otherwise:
+Operating choices:
 
-- **Run autonomously.** Launch `singular auto` (or a supervised
-  `reconcile --actuate` loop) and monitor; do not hand-drive tasks one at a
-  time or ask permission between cycles.
-- **Maximize parallelism.** Enable concurrent L1 planners
-  (`SINGULAR_ENABLE_L1_PARALLEL=1`), size `SINGULAR_MAX_CONCURRENT` /
-  `SINGULAR_MAX_DISPATCH` to the machine, and design the DAG for a wide
-  frontier (section 2). Detached dispatch is already ON by default.
-- **The installed pin drives.** Always run `~/.singular/bin/singular` (on
-  `PATH`), never `engine/*.sh` scripts from a checkout — tree scripts bypass
-  the version pin and config loading.
+- **Choose the execution scope.** Use `singular drive` for one task,
+  `singular reconcile --actuate` for one scheduler cycle, or `singular auto`
+  for an unattended loop when the user wants one.
+- **Size concurrency to the work.** Worker concurrency defaults to `auto`;
+  parallel L1 planning is opt-in (`SINGULAR_ENABLE_L1_PARALLEL=0` in the
+  engine). Enable it only when independent scopes and available capacity
+  justify it. Detached worker dispatch defaults to `1`.
+- **Use the CLI's version resolution.** For consumer operation, invoke
+  `singular` so the repo pin selects the engine. Checkout-based engine
+  development and tests use the checkout's CLI and an explicit engine home.
 - **Gates are the only completion authority.** A DAG node is done when
   `docs/orchestration/gates/<node>.gate-result.json` says so — never because
   a dashboard, task file, or planner claims it.
+
+The [command reference](references/operations.md#current-command-reference)
+lists every current top-level command, including optional context and review tools.
 
 ## 1. Orient, install, set up
 
@@ -47,7 +51,7 @@ ls docs/orchestration/dag.v0.json         # is there a plan?
 If `singular` is missing, install the engine:
 
 ```bash
-git clone https://github.com/alex-reysa/singular-lite /path/to/singular-lite
+git clone https://github.com/xiperinc/singular-lite /path/to/singular-lite
 cd /path/to/singular-lite && bash install.sh
 export PATH="$HOME/.singular/bin:$PATH"
 ```
@@ -83,7 +87,8 @@ State: stopped-ready (STOP active; no workers dispatched)
 Next: singular resume
 ```
 
-Do what that line says and nothing else. Setup never removes STOP: lifting it
+Treat that line as the next available action within the requested scope.
+Setup never removes STOP: lifting it
 is the separate, explicit actuation step, and when a human gate is pending the
 one next action is that gate instead. Full step order, failure codes, and the
 `singular test` contract: [references/operations.md](references/operations.md).
@@ -100,34 +105,21 @@ Either way, edit `singular.config.json` before anything will run:
   `bash tests/run.sh`, `npm test`). The scaffold ships `false` on purpose so
   an unconfigured repo fails closed — replace it.
 - `runner` — which agent CLI drives the roles: `claude-run.sh`,
-  `codex-run.sh`, `gemini-run.sh`, `opencode-run.sh`, `cursor-run.sh`, or
-  `grok-run.sh` (0.9.0; switchable later, e.g. on provider quota walls —
+  `codex-run.sh`, `gemini-run.sh`, `opencode-run.sh`, `cursor-run.sh`,
+  `openrouter-run.sh`, or `grok-run.sh` (switchable later, e.g. on provider quota walls —
   from the console's Providers tab, or by writing `SINGULAR_RUNNER` to config
   `env{}`, which overrides the top-level key). Check install/auth status per
-  provider with `singular doctor` or `singular console --providers`; the
-  claude/codex runners keep per-role model+effort knobs, the others take a
-  flat `SINGULAR_<PROVIDER>_MODEL` (unset = the CLI's own default) and have
-  no session affinity yet.
+  provider with `singular doctor` or `singular console --providers`.
+  `engine/providers.json` records provider identities, model defaults and
+  executable requirements; OpenRouter uses the OpenCode executable.
 - `areas{}` — named file-scope groups: each key maps to an array of path
   prefixes, e.g. `"areas": {"api": ["src/api/", "tests/api/"], "core":
   ["src/core/", "tests/core/"]}`. DAG nodes reference an area by key and
   worker owned-file scopes are checked against its prefixes.
-- `env{}` — pin the parallelism and context knobs here so every entry point
-  gets them (recommended production set):
-
-```json
-"env": {
-  "SINGULAR_ENABLE_L1_PARALLEL": "1",
-  "SINGULAR_MAX_CONCURRENT": "5",
-  "SINGULAR_MAX_DISPATCH": "5",
-  "SINGULAR_PLANNER_SESSION": "1",
-  "SINGULAR_PLAN_CRITIQUE": "1",
-  "SINGULAR_CTX_PACKET": "1",
-  "SINGULAR_CTX_ROUTING": "1",
-  "SINGULAR_CTX_ARTIFACT_SCAN": "1",
-  "SINGULAR_PAIRED_AUDIT_PCT": "25"
-}
-```
+- `env{}` — record deliberate setting overrides here. See the default and
+  effect tables in [references/operations.md](references/operations.md).
+  JSON config overrides incoming shell values; shell config and then local
+  config can override JSON. Check these layers when setting `SINGULAR_PUSH=0`.
 
 Also rewrite the scaffolded role prompts in `docs/orchestration/prompts/`
 for the repo's stack, and customize `docs/orchestration/planner-contract.md`
@@ -186,9 +178,9 @@ starter node — replace that with your real graph. Each node needs `id`,
 }
 ```
 
-Design the graph for parallelism — the dispatch frontier is every node whose
-dependencies have all gate-passed, and with L1 fanout enabled every frontier
-node plans concurrently:
+Represent real dependencies in the graph. The dispatch frontier contains
+ready nodes; parallel planners, when enabled, are bounded by planner and
+resource limits:
 
 - **Minimal, honest `dependsOn`.** Every edge you add narrows the frontier.
   Depend on a node only when its output is genuinely consumed.
@@ -208,58 +200,84 @@ singular validate-dag
 singular next-areas       # every currently-ready node
 ```
 
-**Tasks are normally authored by L1 planners, not by you.** The planner for
-each frontier node decomposes it into small strict-test-first tasks under
+Tasks can be hand-authored or generated by L1 planners. A planner for a
+frontier node decomposes it into tasks under
 `docs/orchestration/tasks/TASK-XXXX.md` and stages them for L0 import. Your
 lever over task quality is `docs/orchestration/planner-contract.md` — binding
 rules the planners must follow (file conventions, scope discipline,
-test-first policy, bundling of small dependent slices). To hand-author a task
-(rare — hotfixes, seeding), copy `docs/orchestration/tasks/TEMPLATE.md`.
+test-first policy, bundling of small dependent slices). To hand-author a task,
+copy `docs/orchestration/tasks/TEMPLATE.md`.
 
 For the full DAG field semantics, task-file format, planner-contract
-patterns, and a parallelism design checklist, read
+patterns, and a checklist before first actuate, read
 [references/plan-authoring.md](references/plan-authoring.md).
 
-## 3. Run — autonomous by default
+## 3. Choose how to run
 
-The default way to run is the self-driving loop, `singular auto` — it loops
-reconcile cycles until DAG exhaustion, the wall-clock budget
-(`SINGULAR_MAX_HOURS`), a STOP sentinel, or the consecutive-no-progress
-breaker, and it sets `SINGULAR_AUTO_INTEGRATE=1` and `SINGULAR_PUSH=1` by
-default. Launch it detached so it survives your shell, then monitor
-(section 4) instead of blocking on it:
-
-```bash
-# normal terminal:
-nohup singular auto >> .singular-state/autonomate.out.log 2>&1 & disown
-# agent harness that kills its process group at turn end — detach into a new session:
-python3 -c 'import os,subprocess
-if os.fork()==0:
-    os.setsid()
-    out=open(".singular-state/autonomate.out.log","ab")
-    subprocess.Popen(["singular","auto"],stdout=out,stderr=out)
-    os._exit(0)'
-```
-
-For finer control, run cycles yourself — with detached dispatch (the
-default) each cycle returns in seconds while workers run in background
-sessions, so a supervisor loop is just:
+Direct commands let the operator select one task or one cycle:
 
 ```bash
 singular reconcile --actuate    # one cycle: import → recover → integrate → dispatch
-singular reconcile --drain      # block until all detached workers exit
-singular drive TASK-0042        # exception path: one task through L1→L2→audit
+singular reconcile --drain      # wait for detached workers to exit
+singular drive TASK-0042        # one task through worker, gate and audit
 ```
+
+The optional `singular auto` loop repeats reconcile cycles until DAG
+exhaustion, the wall-clock budget, STOP or the no-progress breaker.
+`singular auto` and the launchd launcher default `SINGULAR_PUSH` to `1`:
+integration pushes the target and worker branches to `origin`, and reconcile
+also pushes the target branch after a control-state commit. Set
+`SINGULAR_PUSH=0` in the effective configuration to disable those pushes.
+Direct commands such as `singular reconcile --actuate` and `singular integrate`
+default to no push (`0`); they can push if explicitly configured with `1`.
+Automatic integration defaults to `1` on all these entry points.
+
+For a requested unattended run with pushing disabled (ensure config does
+not override the shell value):
+
+```bash
+SINGULAR_PUSH=0 singular auto --detach
+```
+
+This supported detached launch writes `.singular-state/autonomate.log` and
+tracks loop liveness with a pidfile. Use section 4 to monitor it.
+
+### launchd defaults (macOS)
+
+`templates/launchd/run-orchestrator.sh` defaults to `--watchdog`, which
+runs the auto loop; the plist invokes it every 1800 seconds. It requires
+Git, Go, Bash >=4, a runnable Codex executable and a readable Codex auth file,
+even if the repo selects another runner. Its fallback target branch is
+`codex/singular-bootstrap-target`. Configure the consumer root and engine
+home when installing the LaunchAgent. The wrapper reads local settings from
+`SINGULAR_ENV_FILE`, defaulting to `.singular-state/.env` in that consumer.
+
+The launchd launcher supplies these defaults before the engine loads repo
+configuration; existing values or later config layers can override them:
+
+| Setting | Launcher default |
+| --- | --- |
+| `SINGULAR_PUSH` | `1` (set `0` to disable pushing) |
+| `SINGULAR_AUTO_INTEGRATE`, `SINGULAR_GENERATE`, `SINGULAR_AUTO_PROMOTE_GATES` | `1` each |
+| `SINGULAR_L2_SANDBOX` | `danger-full-access` (Codex worker sandbox) |
+| `SINGULAR_ENABLE_L1_PARALLEL`, `SINGULAR_DETACHED_DISPATCH` | `1` each |
+| `SINGULAR_MAX_CONCURRENT`, `SINGULAR_MAX_DISPATCH`, `SINGULAR_MAX_L1_CONCURRENT` | `auto` each |
+| `SINGULAR_L1_TASKS_PER_NODE`, `SINGULAR_L2_SLICE_BUDGET` | `1` each |
+| `SINGULAR_L2_SLICE_BUDGET_MAX` | `3` |
+| `SINGULAR_MAX_HOURS` | `12` (launchd launcher) |
 
 Control and safety:
 
-- **Stop:** `touch .singular-state/STOP` — reconcile cycles observe it and
-  skip dispatch (running workers finish), and a live `singular auto` loop
-  exits on it. To resume: remove the file, then relaunch `singular auto` if
-  it had exited. Never remove a STOP file you didn't create without asking
-  the user.
+- **Stop:** `singular stop --wait` writes STOP and waits up to 300 seconds
+  for the auto loop to exit (`--wait=SECONDS` sets the bound). STOP suppresses
+  new dispatch; it does not kill running workers.
+  `singular resume` removes STOP but does not restart an exited loop.
+  Never remove a STOP file you did not create without asking the user.
+  This also applies to `singular resume` and `singular wake`; use
+  `singular wake --keep-stop` to preserve STOP when ending a nap.
 - **Budget:** `SINGULAR_MAX_HOURS` caps the auto loop's wall-clock (default
-  12h); the breaker trips after `SINGULAR_MAX_CONSEC_FAILS` (default 5)
+  20h in the engine; launchd supplies 12h). The breaker trips after
+  `SINGULAR_MAX_CONSEC_FAILS` (default 5)
   consecutive no-progress cycles.
 - **Throughput check:** effective batch width is
   `SINGULAR_MAX_CONCURRENT − active leases`. If parallelism looks pinned at 1,
@@ -305,8 +323,9 @@ The console is a web UI over orchestration state — an app shell whose left
 sidebar lists plan threads (live + archived) plus an app-level Providers nav,
 with Home/Plan/Consoles/Agents as thread-scoped tabs; Home also carries the
 supervisor briefing/chat and provider quota gauges. Orchestration state stays
-read-only (the sole write path is the whitelisted settings knobs). Start/reuse
-it with `singular console --ensure` (URL persists in
+read-only for tasks, leases and gates. Settings POSTs change whitelisted
+config knobs; ask/report POSTs launch supervisor runs and write their artifacts.
+Start/reuse it with `singular console --ensure` (URL persists in
 `.singular-state/console.url`; `--status`/`--stop` manage it). Ground rules:
 durable state is authoritative, "active" is derived from live facts (pids,
 active leases, worktrees) — never from markdown claims or bare lease-file

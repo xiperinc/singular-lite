@@ -1,0 +1,31 @@
+{
+  "taskDocument": "# TASK-4242: Proof field contract\n\nStatus: ready\nArea: widget\nTarget branch: `target`\nWorker branch: `worker/TASK-4242`\nTest policy: `strict_test_first`\nGate command: `true`\nDispatch mode: canonical\nDepends on: []\n\n## Objective\n\nVerify the widget with declared proof tests.\n\n## Scope\n\nOwned files:\n\n- `src/widget.py`\n- `tests/proof/`\n- `tests/single.py`\n\nForbidden files:\n\n- `private/`\n- Any file outside the owned scope.\n\n## Acceptance Criteria\n\n- The widget satisfies its contract.\n  Keep this continuation and `literal text` intact.\n- Existing tasks still dispatch.\n",
+  "taskId": "TASK-4242",
+  "title": "Proof field contract",
+  "status": "ready",
+  "area": "widget",
+  "targetBranch": "target",
+  "workerBranch": "worker/TASK-4242",
+  "testPolicy": "strict_test_first",
+  "gateCommand": "true",
+  "dispatchMode": "canonical",
+  "dagNode": "",
+  "supersedes": [],
+  "supersededBy": [],
+  "dependsOn": [],
+  "objective": "Verify the widget with declared proof tests.",
+  "ownedFiles": [
+    "src/widget.py",
+    "tests/proof/",
+    "tests/single.py"
+  ],
+  "forbiddenFiles": [
+    "private/"
+  ],
+  "prerequisites": [],
+  "acceptanceCriteria": [
+    "The widget satisfies its contract.\nKeep this continuation and `literal text` intact.",
+    "Existing tasks still dispatch."
+  ],
+  "planCritique": []
+}

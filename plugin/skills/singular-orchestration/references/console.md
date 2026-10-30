@@ -32,7 +32,7 @@ archived read-only threads) and holds an app-level Providers nav, and a slim
   role's prompt template, and **editable settings** (see below).
 - **Providers** (0.9.0; moved into the sidebar app-nav in 0.10.0) —
   runtime/provider status cards for every supported
-  agent CLI (Claude Code, Codex, Gemini, OpenCode, Cursor, Grok): installed
+  provider (Claude Code, Codex, Gemini, OpenCode, Cursor, OpenRouter, Grok): installed
   + version, auth status probed via each CLI's own status command or
   credential-file/env inference (email · plan shown when the CLI prints
   them; never any secret values), env-key presence, the provider's runner
@@ -45,14 +45,38 @@ archived read-only threads) and holds an app-level Providers nav, and a slim
   from its own local session data; tier-only or not-exposed for the rest).
   Live-only (disabled when viewing an archived plan).
 
-**Write scope (0.7.0):** the console's only write path is
-`POST /api/settings`, which edits whitelisted `SINGULAR_*` knobs in
-`singular.config.json` `env{}` (atomic; secrets and unknown keys untouched).
+**Write scope:** `POST /api/settings` edits whitelisted `SINGULAR_*` knobs
+in `singular.config.json` `env{}` (atomic; secrets and unknown keys untouched).
+`POST /api/ask` and `POST /api/report` start supervisor runs and write their
+questions, answers and briefing artifacts. Those runners are read-only with
+respect to the project and propose settings for an operator to apply.
 Most changes apply on the next loop cycle; `SINGULAR_SLEEP`/`SINGULAR_MAX_HOURS`
 need a loop restart (the UI labels each). Orchestration state — tasks,
 leases, gates, STOP, worktrees — remains read-only from the console.
 Developer primitives: `{}` view-source buttons open the raw durable file
 behind any entity in the inspector.
+
+**Configuration reload (0.23.5):** the console binds a *generation* to the
+inputs its configuration was resolved from (`singular.config.json`, the shell
+and local layers, the selected context policy, the runner, the engine files).
+When one of them changes on disk — the plan was regenerated, a knob was edited
+by hand — the next data request re-resolves once in process, drops every
+derived cache and serves the new generation (`generation.id` changes,
+`generation.reloadCount` / `generation.lastReload.changedInputs` say why; the
+console log prints one `configuration reloaded (…)` line). No restart, same URL.
+If the new configuration cannot be loaded (for example invalid JSON), data
+routes answer `409 {"error":"configuration unavailable","configuration":{"reason":…,"message":…}}`
+and the page shows that message; fixing the file is itself a detected change
+and recovers the same way. `/api/health`, the page shell and static assets never
+run a reload and never wait behind one. A request already in flight finishes on
+the generation it started with. `POST /api/settings` reads the file as it is on
+disk under the same lock, so it never overwrites an external edit with stale
+values, and it is refused (409) while the file is not valid JSON.
+The reload runs the same `lib.sh` resolution as startup (it sources
+`singular.config.sh`), once per detected change and never on a steady-state
+read. To keep the strict earlier contract — reads never resolve configuration,
+a change answers 409 `configuration-changed` until restart or a settings write —
+start the console with `SINGULAR_CONSOLE_CONFIG_RELOAD=0`.
 
 ## Start it
 
@@ -67,16 +91,40 @@ singular console --stop       # terminate and clean up
 
 While serving, the URL and pid persist at `.singular-state/console.url` /
 `console.pid` (removed on exit), and `singular status` prints the live URL.
-The default port is **8765** (free-port fallback; pin with
-`SINGULAR_CONSOLE_PORT`). Foreground mode is still `singular console` — its
-banner goes to **stderr**, so one-shot JSON modes are pipe-pure. If you must
-run the server directly, use the installed engine's copy (never a source
-checkout — respect the version pin):
 
-```bash
-python3 ~/.singular/current/plugin/scripts/singular_graph_server.py \
-  --repo /path/to/repo --host 127.0.0.1 --port 8765
-```
+**Stable address (0.23.5):** the port the console binds is also written to
+`.singular-state/console.port`, and that file is *not* removed on exit. The
+next start (`--stop` then `--ensure`, a crash, a reboot) binds the same port
+again, so an open tab or a bookmark keeps working. Candidates, first free one
+wins: `SINGULAR_CONSOLE_PORT` (operator pin, 1-65535) → the saved
+`console.port` → **8765** → an ephemeral free port. If a candidate is held by
+another process the CLI says so on stderr, takes the next one, and
+`console.port` / `console.url` are updated to the new address. Delete
+`console.port` to let the console choose again.
+
+Foreground mode is still `singular console` — its
+banner goes to **stderr**, so one-shot JSON modes are pipe-pure. Use the CLI
+to resolve the consumer's selected engine version.
+
+**When data stops arriving (0.23.5):** the page says so instead of sitting on
+"loading…" or on old numbers. Every read goes through `core/api.js`, which
+records per route whether it succeeded, got an HTTP error (409 / 5xx) or got
+no answer at all:
+
+- a persistent strip under the top bar — "Refresh failed since HH:MM:SS UTC",
+  the failing route and the server's own `message` / `reason`, the time of the
+  data still on screen, a retry countdown and a **Retry now** button. It stays
+  until the next success;
+- when the server does not answer: "Console server is not running — run
+  `singular console --ensure`". The page keeps retrying (1s, 2s, 4s, 8s, then
+  every 10s) and resumes by itself when the console is back on the same
+  address — no reload;
+- a surface with no data yet shows the error and a **Retry** button in place of
+  its "loading …" line, and the header chips read `unavailable` / `offline` and
+  `stop unknown` instead of `loading` / `stop —`;
+- the last good data stays on screen, desaturated, and the dock's "updated"
+  cell turns into a warning ("42s ago — stale") once the last successful
+  refresh is older than three poll intervals (30s), whatever the cause.
 
 The page auto-refreshes every 10 seconds without losing selection, pin,
 filters, or lane expansion. Deep links (0.6.0 grammar
@@ -116,9 +164,8 @@ terminal-only context.
 
 ## Read-only rules
 
-The console (and any agent using it for monitoring) observes; it never
-steers. The single exception since 0.7.0 is the settings write path above
-(whitelisted config env{} knobs). Everything else:
+The console reads task, lease and gate state. Its three POST routes change
+settings or request supervisor work as described above. When monitoring:
 
 - Treat Singular durable state as authoritative.
 - Do not mutate the repo, `.singular-state`, worktrees, leases, tasks,
@@ -142,9 +189,11 @@ steers. The single exception since 0.7.0 is the settings write path above
 - `docs/orchestration/tasks/*.md`, `docs/orchestration/areas/*/state.md`,
   `docs/orchestration/gates/*.gate-result.json`
 - `.singular-state/origin-state.json`, `.singular-state/events.ndjson`,
-  `.singular-state/autonomate.out.log`, `.singular-state/leases/*.json`,
+  `.singular-state/leases/*.json`,
   `.singular-state/l1-leases/*.json`, `.singular-state/inbox/*.json`
   (state packets), `.singular-state/runs/*` (run/audit artifacts)
+- The newer existing loop log: `.singular-state/autonomate.log` (supported
+  detached launch) or `.singular-state/autonomate.out.log` (legacy/adapter).
 - `.worktrees/`
 
 ## L1 parallelism surfacing
@@ -164,7 +213,11 @@ registry): the L0 inspector `roles` tab shows the declared role catalog, and
 each task's `work` tab shows the roles that touched it and the
 commands/tools they actually ran.
 
-## JSON API (all GET, read-only)
+## JSON API (GET reads and three POST routes)
+
+Routes below use GET unless POST is named. Settings supports both methods;
+ask/report POSTs start work and create artifacts. The route inventory is
+implemented in `plugin/scripts/singular_graph_server.py`.
 
 ```text
 /                       → console UI
@@ -179,6 +232,7 @@ commands/tools they actually ran.
                           command-log evidence summaries, agentsInvolved, toolsUsed)
 /api/roles              → declared role/skill catalog (static, cached)
 /api/health             → liveness
+/api/lifecycle          → repository lifecycle state
 /api/overview           → plan overview (DAG stages/nodes with gate status)
 /api/node/<node-id>     → single DAG node detail (requiredCompletion, gate result,
                           tasks attributed to the node)
@@ -206,8 +260,7 @@ commands/tools they actually ran.
                           supervisor report), supervisor {intervalMin,enabled} (0.10.0)
 /api/settings           → GET: all knob rows (config env{} overlaid) + appliesAt;
                           POST {"changes":{KEY:value}} writes whitelisted keys
-                          into singular.config.json env{} (the console's ONLY
-                          write path; ""-value deletes a key)
+                          into singular.config.json env{} (""-value deletes a key)
 /api/prompts            → role prompt library listing (0.7.0)
 /api/prompt/<name>      → one prompt template's content
 /api/raw/<root>/<name>  → raw durable file (roots: task, gate, gate-review,

@@ -4,7 +4,7 @@ set -euo pipefail
 # E7 (0.5.0): a retry whose content was already committed by a PRIOR attempt
 # (empty staged diff, owned files differ from base, gate green) proceeds as a
 # valid empty-diff attempt instead of failing `no-changes`. 0.4.0 parked fully
-# green work here (field audit: TASK-0052/0053).
+# green work here.
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi

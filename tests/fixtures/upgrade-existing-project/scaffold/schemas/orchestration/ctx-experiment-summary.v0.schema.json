@@ -1,0 +1,261 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://singular.local/schemas/orchestration/ctx-experiment-summary.v0.schema.json",
+  "title": "singular.orchestration.ctx-experiment-summary.v0",
+  "description": "Capstone record-merge: the SINGLE composed raw-metrics bundle the operator's experiment-report.md points at, unifying the three integrated per-family aggregators. It ships no metric of its own — it DELEGATES to singular_ctx_experiment_report_json, singular_ctx_experiment_strategy_json, and singular_ctx_experiment_attempts_json and nests their outputs VERBATIM (loss-preserving) under the stable keys report / strategy / attempts. Emitted read-only from the runs directory attempts indexes, the events log, and an optional precomputed ctx-metrics JSON. Keys are sorted and deterministic for a fixed input set; validation fails closed. Each nested sub-object conforms to its own family schema (ctx-experiment-report.v0, ctx-experiment-strategy.v0, ctx-experiment-attempts.v0), inlined here so the bundle validates without external $ref.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "report", "strategy", "attempts"],
+  "properties": {
+    "schema": {
+      "const": "singular.orchestration.ctx-experiment-summary.v0"
+    },
+    "report": {
+      "type": "object",
+      "description": "Nested verbatim singular.orchestration.ctx-experiment-report.v0 sub-artifact: per-arm escape rate, per-arm cost rollup, and the bias directional-disagreement rate.",
+      "additionalProperties": false,
+      "required": ["schema", "arms", "bias"],
+      "properties": {
+        "schema": { "const": "singular.orchestration.ctx-experiment-report.v0" },
+        "arms": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["A", "B"],
+          "properties": {
+            "A": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["escapeRate", "accepted", "flagged", "cost"],
+              "properties": {
+                "escapeRate": { "type": "number", "minimum": 0 },
+                "accepted": { "type": "integer", "minimum": 0 },
+                "flagged": { "type": "integer", "minimum": 0 },
+                "cost": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["tasks", "tokensTotal", "wallClockMsTotal", "tokensPerTask", "wallClockMsPerTask"],
+                  "properties": {
+                    "tasks": { "type": "integer", "minimum": 0 },
+                    "tokensTotal": { "type": "integer", "minimum": 0 },
+                    "wallClockMsTotal": { "type": "integer", "minimum": 0 },
+                    "tokensPerTask": { "type": "number", "minimum": 0 },
+                    "wallClockMsPerTask": { "type": "number", "minimum": 0 }
+                  }
+                }
+              }
+            },
+            "B": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["escapeRate", "accepted", "flagged", "cost"],
+              "properties": {
+                "escapeRate": { "type": "number", "minimum": 0 },
+                "accepted": { "type": "integer", "minimum": 0 },
+                "flagged": { "type": "integer", "minimum": 0 },
+                "cost": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["tasks", "tokensTotal", "wallClockMsTotal", "tokensPerTask", "wallClockMsPerTask"],
+                  "properties": {
+                    "tasks": { "type": "integer", "minimum": 0 },
+                    "tokensTotal": { "type": "integer", "minimum": 0 },
+                    "wallClockMsTotal": { "type": "integer", "minimum": 0 },
+                    "tokensPerTask": { "type": "number", "minimum": 0 },
+                    "wallClockMsPerTask": { "type": "number", "minimum": 0 }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "bias": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["flaggedFindings", "directionalDisagreements", "directionalDisagreementRate"],
+          "properties": {
+            "flaggedFindings": { "type": "integer", "minimum": 0 },
+            "directionalDisagreements": { "type": "integer", "minimum": 0 },
+            "directionalDisagreementRate": { "type": "number", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "strategy": {
+      "type": "object",
+      "description": "Nested verbatim singular.orchestration.ctx-experiment-strategy.v0 sub-artifact: resume/rehydrate hit rates (overall, per arm, per role) and the gate-refusal reason mix.",
+      "additionalProperties": false,
+      "required": ["schema", "hitRates", "refusalMix"],
+      "properties": {
+        "schema": { "const": "singular.orchestration.ctx-experiment-strategy.v0" },
+        "hitRates": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["overall", "byArm", "byRole"],
+          "properties": {
+            "overall": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["total", "resume", "rehydrate", "resumeHitRate", "rehydrateHitRate"],
+              "properties": {
+                "total": { "type": "integer", "minimum": 0 },
+                "resume": { "type": "integer", "minimum": 0 },
+                "rehydrate": { "type": "integer", "minimum": 0 },
+                "resumeHitRate": { "type": "number", "minimum": 0 },
+                "rehydrateHitRate": { "type": "number", "minimum": 0 }
+              }
+            },
+            "byArm": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["A", "B"],
+              "properties": {
+                "A": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["total", "resume", "rehydrate", "resumeHitRate", "rehydrateHitRate"],
+                  "properties": {
+                    "total": { "type": "integer", "minimum": 0 },
+                    "resume": { "type": "integer", "minimum": 0 },
+                    "rehydrate": { "type": "integer", "minimum": 0 },
+                    "resumeHitRate": { "type": "number", "minimum": 0 },
+                    "rehydrateHitRate": { "type": "number", "minimum": 0 }
+                  }
+                },
+                "B": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["total", "resume", "rehydrate", "resumeHitRate", "rehydrateHitRate"],
+                  "properties": {
+                    "total": { "type": "integer", "minimum": 0 },
+                    "resume": { "type": "integer", "minimum": 0 },
+                    "rehydrate": { "type": "integer", "minimum": 0 },
+                    "resumeHitRate": { "type": "number", "minimum": 0 },
+                    "rehydrateHitRate": { "type": "number", "minimum": 0 }
+                  }
+                }
+              }
+            },
+            "byRole": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["implementer", "planner", "reviewer"],
+              "properties": {
+                "implementer": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["total", "resume", "rehydrate", "resumeHitRate", "rehydrateHitRate"],
+                  "properties": {
+                    "total": { "type": "integer", "minimum": 0 },
+                    "resume": { "type": "integer", "minimum": 0 },
+                    "rehydrate": { "type": "integer", "minimum": 0 },
+                    "resumeHitRate": { "type": "number", "minimum": 0 },
+                    "rehydrateHitRate": { "type": "number", "minimum": 0 }
+                  }
+                },
+                "planner": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["total", "resume", "rehydrate", "resumeHitRate", "rehydrateHitRate"],
+                  "properties": {
+                    "total": { "type": "integer", "minimum": 0 },
+                    "resume": { "type": "integer", "minimum": 0 },
+                    "rehydrate": { "type": "integer", "minimum": 0 },
+                    "resumeHitRate": { "type": "number", "minimum": 0 },
+                    "rehydrateHitRate": { "type": "number", "minimum": 0 }
+                  }
+                },
+                "reviewer": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["total", "resume", "rehydrate", "resumeHitRate", "rehydrateHitRate"],
+                  "properties": {
+                    "total": { "type": "integer", "minimum": 0 },
+                    "resume": { "type": "integer", "minimum": 0 },
+                    "rehydrate": { "type": "integer", "minimum": 0 },
+                    "resumeHitRate": { "type": "number", "minimum": 0 },
+                    "rehydrateHitRate": { "type": "number", "minimum": 0 }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "refusalMix": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reasonMix", "resumeFailed"],
+          "properties": {
+            "reasonMix": {
+              "type": "object",
+              "additionalProperties": { "type": "integer", "minimum": 0 }
+            },
+            "resumeFailed": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "attempts": {
+      "type": "object",
+      "description": "Nested verbatim singular.orchestration.ctx-experiment-attempts.v0 sub-artifact: per-arm attempts-to-accept and findings-per-attempt.",
+      "additionalProperties": false,
+      "required": ["schema", "attemptsToAccept", "findingsPerAttempt"],
+      "properties": {
+        "schema": { "const": "singular.orchestration.ctx-experiment-attempts.v0" },
+        "attemptsToAccept": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["A", "B"],
+          "properties": {
+            "A": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["acceptedTasks", "attemptsToAcceptSum", "attemptsToAcceptMean"],
+              "properties": {
+                "acceptedTasks": { "type": "integer", "minimum": 0 },
+                "attemptsToAcceptSum": { "type": "integer", "minimum": 0 },
+                "attemptsToAcceptMean": { "type": "number", "minimum": 0 }
+              }
+            },
+            "B": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["acceptedTasks", "attemptsToAcceptSum", "attemptsToAcceptMean"],
+              "properties": {
+                "acceptedTasks": { "type": "integer", "minimum": 0 },
+                "attemptsToAcceptSum": { "type": "integer", "minimum": 0 },
+                "attemptsToAcceptMean": { "type": "number", "minimum": 0 }
+              }
+            }
+          }
+        },
+        "findingsPerAttempt": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["A", "B"],
+          "properties": {
+            "A": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["attempts", "findingsTotal", "findingsPerAttemptMean"],
+              "properties": {
+                "attempts": { "type": "integer", "minimum": 0 },
+                "findingsTotal": { "type": "integer", "minimum": 0 },
+                "findingsPerAttemptMean": { "type": "number", "minimum": 0 }
+              }
+            },
+            "B": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["attempts", "findingsTotal", "findingsPerAttemptMean"],
+              "properties": {
+                "attempts": { "type": "integer", "minimum": 0 },
+                "findingsTotal": { "type": "integer", "minimum": 0 },
+                "findingsPerAttemptMean": { "type": "number", "minimum": 0 }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

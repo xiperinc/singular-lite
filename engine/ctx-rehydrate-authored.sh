@@ -2,7 +2,7 @@
 # ctx-rehydrate-authored.sh — pure, read-only authored-knowledge manifest
 # selector (stage S5-routing, node `rehydrate-path`, layer engine_runtime;
 # singular-brain integration point 3). Sourced exactly once by the
-# context-evolution loader block in lib.sh (it matches the ctx-*.sh glob). This
+# context module loader block in lib.sh (it matches the ctx-*.sh glob). This
 # file DEFINES new functions only and is present-but-uncalled by every existing
 # engine/CLI/driver path, so with it sourced the engine stays byte-identical to
 # prior behavior.

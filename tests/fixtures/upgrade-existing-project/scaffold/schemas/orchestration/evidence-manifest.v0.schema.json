@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.evidence-manifest.v0",
+  "title": "singular Audit Evidence Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "taskId",
+    "runId",
+    "headSha",
+    "diffSha256",
+    "files",
+    "commands",
+    "expectedFailureCount",
+    "unexpectedFailureCount",
+    "checks",
+    "artifacts",
+    "budget",
+    "createdAt"
+  ],
+  "properties": {
+    "campaignBinding": { "type": "string", "minLength": 1 },
+    "schema": { "const": "singular.orchestration.evidence-manifest.v0" },
+    "taskId": { "type": "string", "pattern": "^TASK-[0-9]{4,}$" },
+    "runId": { "type": "string", "minLength": 1 },
+    "headSha": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "diffSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "command",
+          "exitCode",
+          "status",
+          "durationMs",
+          "logRef",
+          "logSha256"
+        ],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "command": { "type": "string", "minLength": 1 },
+          "exitCode": { "type": "integer" },
+          "status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed-product",
+              "inconclusive-infrastructure",
+              "not-run"
+            ]
+          },
+          "durationMs": { "type": "integer", "minimum": 0 },
+          "logRef": { "type": "string", "minLength": 1 },
+          "logSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "excerpt": { "type": "string", "maxLength": 2048 }
+        }
+      }
+    },
+    "expectedFailureCount": { "type": "integer", "minimum": 0 },
+    "unexpectedFailureCount": { "type": "integer", "minimum": 0 },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "secret", "gate"],
+      "properties": {
+        "scope": { "$ref": "#/$defs/check" },
+        "secret": { "$ref": "#/$defs/check" },
+        "gate": { "$ref": "#/$defs/check" }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref", "sha256", "bytes"],
+        "properties": {
+          "ref": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "bytes": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "limitBytes",
+        "composedBytes",
+        "excerptLimitBytes",
+        "retrievalLimitBytes",
+        "auditInputTokenCanary",
+        "actualAuditInputTokens"
+      ],
+      "properties": {
+        "limitBytes": { "type": "integer", "minimum": 1, "maximum": 262144 },
+        "composedBytes": { "type": "integer", "minimum": 0, "maximum": 262144 },
+        "excerptLimitBytes": { "type": "integer", "minimum": 1, "maximum": 2048 },
+        "retrievalLimitBytes": { "type": "integer", "minimum": 0, "maximum": 262144 },
+        "auditInputTokenCanary": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "actualAuditInputTokens": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "providerUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "inputTokens": { "type": "integer", "minimum": 0 },
+        "cachedInputTokens": { "type": "integer", "minimum": 0 },
+        "outputTokens": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "createdAt": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["passed", "failed", "not-run", "inconclusive"]
+        },
+        "ref": { "type": "string" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    }
+  }
+}

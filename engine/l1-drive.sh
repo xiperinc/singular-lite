@@ -38,6 +38,7 @@ audit_runner="$(singular_role_runner auditor "$SINGULAR_RUNNER_BIN")" || exit 78
 task_id=""
 dry_run="no"
 reset="no"
+audit_only="no"
 require_audit="${SINGULAR_REQUIRE_AUDIT:-1}"
 
 while [[ $# -gt 0 ]]; do
@@ -46,14 +47,21 @@ while [[ $# -gt 0 ]]; do
     --reset) reset="yes"; shift ;;
     # Diagnostic only since 0.23.4: never publishes an accepted packet.
     --no-audit) require_audit="0"; shift ;;
+    # Re-run only the audit of a candidate parked as awaiting-audit (0.23.6):
+    # the retained worker packet is replayed by the host, no implementer runs.
+    --audit-only) audit_only="yes"; shift ;;
     --task) task_id="$2"; shift 2 ;;
     TASK-*) task_id="$1"; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
 
+if [[ "$audit_only" == "yes" && ( "$reset" == "yes" || "$require_audit" != "1" ) ]]; then
+  echo "l1-drive: --audit-only cannot be combined with --reset or --no-audit" >&2
+  exit 2
+fi
 if [[ -z "$task_id" ]]; then
-  echo "usage: $0 TASK-XXXX [--dry-run] [--reset] [--no-audit]" >&2
+  echo "usage: $0 TASK-XXXX [--dry-run] [--reset] [--no-audit] [--audit-only]" >&2
   exit 2
 fi
 
@@ -340,6 +348,115 @@ PY
     fi
   fi
 fi
+# A strict acceptance refusal retains the candidate and its history. Explicit
+# audit-only re-entry earns a new certificate through the existing gate/audit
+# path, even when the refused packet or audit still says accepted.
+if [[ "$audit_only" == "yes" && -n "${retained_lease_run:-}" \
+    && "$(singular_acceptance_mode)" == "every-path" ]]; then
+  if refused_recheck_json="$(python3 - "$SINGULAR_RUNS_DIR/$retained_lease_run" \
+      "$lease_path" "$task_id" "$worker_branch" <<'PY'
+import hashlib, json, sys
+from pathlib import Path
+run, lease_path, task, branch = sys.argv[1:]
+run = Path(run)
+try:
+    refusal = json.loads((run / "accept-existing-packet-refusal.json").read_text())
+    lease = json.loads(Path(lease_path).read_text())
+    raw = (run / "packet.json").read_bytes()
+    packet = json.loads(raw)
+    if not (
+        lease.get("status") in ("blocked", "ready")
+        and lease.get("branch") == branch and lease.get("runId") == run.name
+        and refusal.get("taskId") == packet.get("taskId") == task
+        and refusal.get("runId") == packet.get("runId") == run.name
+        and refusal.get("branch") == packet.get("branch") == branch
+        and refusal.get("headSha") == packet.get("headSha")
+        and refusal.get("packetSha256") == hashlib.sha256(raw).hexdigest()
+        and (run / "last-message.json").is_file()
+    ):
+        raise ValueError("refusal no longer identifies the retained candidate")
+except (OSError, ValueError, TypeError, AttributeError):
+    raise SystemExit(1)
+print(json.dumps({
+    "schema": "singular.orchestration.audit-recheck.v0",
+    "taskId": task, "runId": run.name, "branch": branch,
+    "headSha": refusal["headSha"], "baseSha": refusal["baseSha"],
+    "reason": "acceptance-refused", "consumesProductRepairBudget": False,
+    "recoveryCommand": f"singular drive {task} --audit-only",
+}))
+PY
+  )" && singular_lease_record_audit_recheck "$task_id" "$refused_recheck_json"; then
+    accepted_checkpoint_mode=""
+    accepted_checkpoint_run=""
+    accepted_checkpoint_recognition=""
+  fi
+fi
+
+# Adopt a park written before 0.23.6 (audit-only re-entry only). Until then an
+# exhausted auditor-format failure ended as escalate-infra and left the refused
+# response in audit.json. When that response says "accepted" the recognition
+# above reads it as an invalid retained checkpoint and refuses every later
+# drive, unpark or not, so the finished candidate could only be thrown away.
+# The host can prove the bytes were refused: the driver copied each rejected
+# response to audit.json.invalid.json, and the run ended escalate-infra. Such
+# a response is moved off the authority path and the candidate is recorded as
+# awaiting-audit; the audit then runs again from nothing.
+if [[ "$audit_only" == "yes" && "$accepted_checkpoint_mode" == "invalid-retained" \
+    && "$retained_lease_status" != "accepted" && -n "${retained_lease_run:-}" ]]; then
+  if adopted_recheck_json="$(python3 - "$SINGULAR_RUNS_DIR/$retained_lease_run" \
+      "$lease_path" "$task_id" "$worker_branch" <<'PY'
+import filecmp
+import json
+import os
+import sys
+
+run_dir, lease_path, task_id, branch = sys.argv[1:5]
+
+def load(path):
+    with open(path, encoding="utf-8") as handle:
+        value = json.load(handle)
+    if not isinstance(value, dict):
+        raise ValueError(path)
+    return value
+
+try:
+    lease = load(lease_path)
+    status = load(os.path.join(run_dir, "run-status.json"))
+    packet = load(os.path.join(run_dir, "packet.json"))
+    audit = os.path.join(run_dir, "audit.json")
+    refused = audit + ".invalid.json"
+    assert lease.get("status") in ("blocked", "ready") and "auditRecheck" not in lease
+    assert lease.get("branch") == branch and lease.get("runId") == os.path.basename(run_dir)
+    assert status.get("taskId") == task_id and status.get("phase") == "terminal"
+    assert status.get("outcome") == "escalate-infra"
+    assert packet.get("taskId") == task_id and packet.get("branch") == branch
+    assert packet.get("status") != "accepted" and packet.get("headSha")
+    assert os.path.isfile(os.path.join(run_dir, "last-message.json"))
+    assert os.path.isfile(refused) and filecmp.cmp(audit, refused, shallow=False)
+except Exception:
+    raise SystemExit(1)
+os.replace(audit, os.path.join(run_dir, "audit-legacy.rejected.json"))
+print(json.dumps({
+    "schema": "singular.orchestration.audit-recheck.v0",
+    "taskId": task_id, "runId": os.path.basename(run_dir), "branch": branch,
+    "headSha": packet["headSha"], "baseSha": lease.get("baseSha") or "",
+    "worktree": lease.get("worktree") or "", "attempt": 0,
+    "reason": "adopted-pre-0.23.6-audit-infra",
+    "detail": "refused auditor response moved to audit-legacy.rejected.json",
+    "errorRef": "audit-legacy.rejected.json",
+    "recoveryCommand": f"singular drive {task_id} --audit-only",
+    "consumesProductRepairBudget": False,
+}, separators=(",", ":")))
+PY
+  )" && singular_lease_record_audit_recheck "$task_id" "$adopted_recheck_json"; then
+    singular_append_event "l1.audit_recheck_adopted" \
+      "pre-0.23.6 audit-infra park adopted as awaiting-audit; refused response moved off audit.json" \
+      "{\"taskId\":\"$task_id\",\"retainedRunId\":\"$retained_lease_run\"}" || true
+    accepted_checkpoint_mode=""
+    accepted_checkpoint_run=""
+    accepted_checkpoint_recognition=""
+  fi
+fi
 if [[ -n "$accepted_checkpoint_mode" ]]; then
   [[ "${#authorized_continuation[@]}" -ne 10 ]] \
     || l1_refuse_recognized_accepted_checkpoint \
@@ -394,6 +511,71 @@ if [[ -n "$accepted_checkpoint_mode" ]]; then
   fi
 fi
 
+# ---- Audit-only re-entry (0.23.6) --------------------------------------------
+# A candidate whose auditor response could not be read is parked as
+# awaiting-audit with a lease auditRecheck record. `--audit-only` resumes that
+# exact candidate: same branch head, same admitted base, the retained worker
+# packet replayed by the host instead of a paid implementer pass. The gate and
+# the audit run again for real; nothing about the earlier unreadable response
+# is trusted. Any mismatch refuses before a run directory or lease is touched.
+audit_only_run=""
+audit_only_run_dir=""
+audit_only_head=""
+audit_only_base=""
+audit_only_keep_worktree="no"
+if [[ "$audit_only" == "yes" ]]; then
+  if [[ "${#authorized_repair[@]}" -eq 7 || "${#authorized_continuation[@]}" -eq 10 \
+      || -n "$accepted_checkpoint_mode" ]]; then
+    echo "l1-drive: --audit-only refused: $task_id holds a repair, continuation or accepted checkpoint" >&2
+    exit 2
+  fi
+  audit_only_fields="$(python3 - "$lease_path" "$task_id" "$worker_branch" <<'PY'
+import json
+import re
+import sys
+
+path, task_id, branch = sys.argv[1:4]
+try:
+    lease = json.load(open(path, encoding="utf-8"))
+except Exception:
+    raise SystemExit("no readable lease")
+record = lease.get("auditRecheck") if isinstance(lease, dict) else None
+if not isinstance(record, dict):
+    raise SystemExit("no candidate is awaiting an audit")
+if lease.get("status") not in ("blocked", "ready"):
+    raise SystemExit("lease is %r, not parked" % lease.get("status"))
+run, head, base = (str(record.get(key) or "") for key in ("runId", "headSha", "baseSha"))
+if record.get("taskId") != task_id or record.get("branch") != branch \
+        or lease.get("branch") != branch:
+    raise SystemExit("retained audit record does not match this task and branch")
+if not re.fullmatch(r"[A-Za-z0-9._-]+", run) or ".." in run:
+    raise SystemExit("retained audit record names no usable run")
+if not re.fullmatch(r"[0-9a-f]{40,64}", head) or not re.fullmatch(r"[0-9a-f]{40,64}", base):
+    raise SystemExit("retained audit record lacks an exact head and base")
+print("\t".join((run, head, base)))
+PY
+)" || {
+    echo "l1-drive: --audit-only refused for $task_id (see above); use a normal drive" >&2
+    exit 2
+  }
+  IFS=$'\t' read -r audit_only_run audit_only_head audit_only_base <<<"$audit_only_fields"
+  audit_only_run_dir="$(singular_run_dir "$audit_only_run")"
+  if [[ ! -f "$audit_only_run_dir/last-message.json" ]]; then
+    echo "l1-drive: --audit-only refused: the retained worker packet of $audit_only_run is gone" >&2
+    exit 2
+  fi
+  if [[ "$(git -C "$SINGULAR_ROOT" rev-parse --verify "$worker_branch^{commit}" 2>/dev/null || true)" \
+      != "$audit_only_head" ]]; then
+    echo "l1-drive: --audit-only refused: $worker_branch is no longer at the retained head $audit_only_head" >&2
+    exit 2
+  fi
+  if ! git -C "$SINGULAR_ROOT" merge-base --is-ancestor "$audit_only_base" "$audit_only_head" \
+      >/dev/null 2>&1; then
+    echo "l1-drive: --audit-only refused: retained base is not an ancestor of the retained head" >&2
+    exit 2
+  fi
+fi
+
 # Resolve the product base exactly once, before run publication, cleanup, pass
 # accounting, or provider work. Scheduler reservation and integration targets
 # remain separate lifecycle identities; neither may replace the candidate base.
@@ -412,6 +594,10 @@ elif [[ "${#authorized_continuation[@]}" -eq 10 ]]; then
   }
 elif [[ -n "$accepted_checkpoint_mode" ]]; then
   requested_candidate_base="$accepted_checkpoint_base"
+elif [[ "$audit_only" == "yes" ]]; then
+  # The retained candidate keeps the base it was admitted on. Re-basing it on
+  # an advanced target would change the head the retained packet describes.
+  requested_candidate_base="$audit_only_base"
 fi
 [[ -n "$requested_candidate_base" ]] || requested_candidate_base="$target_branch"
 packet_base_ref="$(git -C "$SINGULAR_ROOT" rev-parse --verify \
@@ -450,6 +636,26 @@ elif [[ "${#authorized_repair[@]}" -ne 7 && -z "$accepted_checkpoint_mode" ]]; t
       # The stderr capture lives under state/tmp, which a fresh state tree may
       # not have yet; a failed redirection would skip the refresh entirely.
       mkdir -p "$SINGULAR_STATE_DIR/tmp" 2>/dev/null || true
+      # A task parked before its first engine commit (red gate, park) keeps the
+      # worker's work uncommitted in the retained checkout, and a dirty
+      # checkout cannot be merged. Commit it on the worker branch first, as a
+      # labelled engine WIP commit restricted to the owned scope; dirt outside
+      # it is a refusal that says which paths.
+      wip_rc=0
+      wip_head="$(singular_retained_wip_commit "$SINGULAR_ROOT" "$worker_branch" "$task_id" \
+        "$SINGULAR_WORKTREES_DIR/$task_id" "$(printf '%s\n' "${owned_files[@]}")" \
+        "$(printf '%s\n' ${forbidden_files[@]+"${forbidden_files[@]}"})" \
+        2>"$SINGULAR_STATE_DIR/tmp/base-refresh-wip-$task_id.err")" || wip_rc=$?
+      if [[ "$wip_rc" -ne 0 ]]; then
+        echo "l1-drive: retained work could not be preserved before the base refresh: $(head -c 500 "$SINGULAR_STATE_DIR/tmp/base-refresh-wip-$task_id.err" 2>/dev/null)" >&2
+        exit 2
+      fi
+      if [[ -n "$wip_head" ]]; then
+        singular_append_event "l1.retained_wip_committed" \
+          "uncommitted worker work in the retained checkout committed as an engine WIP commit before the base refresh" \
+          "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"branch\":\"$worker_branch\",\"before\":\"$retained_branch_head\",\"after\":\"$wip_head\",\"gated\":false,\"audited\":false}" || true
+        retained_branch_head="$wip_head"
+      fi
       refreshed_head="$(singular_refresh_retained_branch "$SINGULAR_ROOT" "$worker_branch" \
         "$packet_base_ref" "$SINGULAR_WORKTREES_DIR/$task_id" 2>"$SINGULAR_STATE_DIR/tmp/base-refresh-$task_id.err" || true)"
       if [[ -n "$refreshed_head" ]]; then
@@ -576,10 +782,26 @@ if ! review_policy_json="$(python3 "$SCRIPT_DIR/review_policy.py" effective 2>"$
   exit 2
 fi
 review_max_rounds="$(printf '%s' "$review_policy_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["maxReviewRounds"])')"
-review_logical_change="$(tf dagNode 2>/dev/null || true)"
-review_logical_change="${review_logical_change#\"}"
-review_logical_change="${review_logical_change%\"}"
-[[ -n "$review_logical_change" && "$review_logical_change" != "null" ]] || review_logical_change="$task_id"
+# Review unit (0.23.7): the supersession chain, keyed by its root task, not the
+# DAG node. Sibling tasks of one node no longer close or charge each other; a
+# planner-issued successor (`Supersedes:`) shares its predecessor's budget,
+# extended by a fixed bounded amount. A node-keyed entry from an older engine
+# keeps bounding the chain that already has rounds in it.
+review_dag_node="$(tf dagNode 2>/dev/null || true)"
+review_dag_node="${review_dag_node#\"}"
+review_dag_node="${review_dag_node%\"}"
+[[ "$review_dag_node" != "null" ]] || review_dag_node=""
+review_unit_err="$run_dir/review-policy-resolve.err"
+if ! python3 "$SCRIPT_DIR/review_policy.py" resolve --task "$task_id" \
+    --dag-node "$review_dag_node" --tasks-dir "$SINGULAR_TASKS_DIR" \
+    >"$run_dir/review-policy-resolve.json" 2>"$review_unit_err"; then
+  echo "l1-drive: review unit could not be resolved; refusing to run paid work" >&2
+  [[ -s "$review_unit_err" ]] && cat "$review_unit_err" >&2
+  exit 2
+fi
+review_logical_change="$(singular_json_field "$run_dir/review-policy-resolve.json" logicalChange 2>/dev/null || true)"
+[[ -n "$review_logical_change" ]] || review_logical_change="$task_id"
+review_unit_kind="$(singular_json_field "$run_dir/review-policy-resolve.json" unit 2>/dev/null || echo task)"
 # R_max = min(risk-tier repairs, explicit lowering cap); it is no longer
 # clamped to maxReviewRounds - 1. A correction pass and a completed audit
 # round are different things: a high-risk task may spend its second repair on
@@ -588,7 +810,7 @@ review_logical_change="${review_logical_change%\"}"
 # reviewed is not started.
 singular_append_event "l1.review_policy_bound" \
   "review capacity is admitted before product work; repair ceiling is risk-derived" \
-  "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"logicalChange\":\"$review_logical_change\",\"maxReviewRounds\":$review_max_rounds,\"productRepairMax\":$product_repair_max}" \
+  "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"logicalChange\":\"$review_logical_change\",\"reviewUnit\":\"$review_unit_kind\",\"dagNode\":\"$review_dag_node\",\"maxReviewRounds\":$review_max_rounds,\"productRepairMax\":$product_repair_max}" \
   || true
 bounded_infra_budget() {
   local requested="${1:-1}"
@@ -636,6 +858,12 @@ if [[ "${#authorized_continuation[@]}" -eq 10 ]]; then
   # This authority contributes exactly one visible worker invocation through
   # its own durable allowance. Preserve every predecessor product counter and
   # suppress the otherwise automatic worker-infrastructure retry.
+  product_passes_remaining=1
+  worker_infra_max=0
+fi
+if [[ "$audit_only" == "yes" ]]; then
+  # No product work happens: exactly one pass through the host steps and the
+  # audit, no implementer launch, and no repair is charged for re-entering.
   product_passes_remaining=1
   worker_infra_max=0
 fi
@@ -718,7 +946,8 @@ export SINGULAR_WORKER_CONTRACT_EXTRA="$(singular_worker_contract_extra "$task_f
 # (generic: empty -> the prompt keeps its default red log path).
 export SINGULAR_WORKER_RED_LOG="$(singular_worker_red_log "$task_file" "$task_id" 2>/dev/null || true)"
 l2_prompt="$run_dir/l2-prompt.md"
-python3 - "$SINGULAR_ORCH_DIR/prompts/l2-test-first-developer.md" "$l2_prompt" "$task_json" "$run_id" "$packet_base_ref" <<'PY'
+python3 - "$SINGULAR_ORCH_DIR/prompts/l2-test-first-developer.md" "$l2_prompt" "$task_json" "$run_id" "$packet_base_ref" \
+  "$(singular_red_proof_prompt)" <<'PY'
 import json
 import sys
 
@@ -775,8 +1004,14 @@ cmd may be "bun test path/to/test.ts"; it must not be
 "bun test path/to/test.ts (attempt-2 green: 40 pass, 0 fail)".
 No additional top-level fields are permitted. Do not emit `risks`; put any
 unresolved blocking condition in blockers[] and any non-blocking note in
-nextAction. Emit ONLY that JSON object.
+nextAction. Every blockers[] entry is a JSON object such as
+{{"summary": "...", "blocksThisTask": true}} and every evidence[] entry is
+{{"kind": "...", "ref": "..."}}; never a bare string. Emit ONLY that JSON object.
 """
+if sys.argv[6] and (t.get("proofCommand") or t.get("proofTests")):
+    contract += sys.argv[6] + "\n\nDeclared proof for this task:\n\n"
+    contract += "Proof command: " + t.get("proofCommand", "") + "\n"
+    contract += "Proof tests: " + json.dumps(t.get("proofTests") or []) + "\n"
 advisory = t.get("planCritique") or []
 if advisory:
     contract += (
@@ -830,7 +1065,9 @@ P2 is a non-blocking defect. P3 is a nit, style note, or suggestion. P0/P1
 items MUST also carry non-blank trigger, impact, and requirement. findings[]
 and requiredFixes[] strings MUST correspond to classified items. The host
 records P2/P3 as non-blocking backlog. No additional top-level fields are
-permitted except optional findingsStatus and classifiedFindings.
+permitted except optional findingsStatus and classifiedFindings. A
+classifiedFindings item MAY also carry location and assumptionId; no other
+member is permitted inside it.
 
 {findings_status_contract}
 
@@ -1132,72 +1369,101 @@ PY
 #   D  the review ledger durably holds this run/attempt/head round as accepted;
 #   E  the evidence manifest binds this exact verdict and host report.
 # Budgets are not inputs. Waivers and --no-audit cannot satisfy A. The
-# structural schema checks are lib.sh's; the predicate is
-# acceptance_validator.py. On refusal it records l1.acceptance_refused, leaves
+# structural schema checks and the predicate are in acceptance_validator.py.
+# On refusal it records l1.acceptance_refused, leaves
 # l1_acceptance_refusal="<conjunct>:<reason>" and returns 1.
-# args: publication-path run run-dir head [attempt]
+# args: publication-path run run-dir head [attempt] [require-audit]
 l1_acceptance_refusal=""
 l1_note_acceptance_refused() {
   local path="$1" check_run="$2" check_head="$3"
+  if [[ "$path" == retained-checkpoint && "$l1_acceptance_refusal" == V:* \
+      && -f "$SINGULAR_RUNS_DIR/$check_run/proof-publication-refusal.txt" \
+      && "$(singular_lease_status "$task_id")" == blocked ]]; then
+    echo "l1-drive: acceptance remains refused for $task_id: $l1_acceptance_refusal" >&2
+    return 0
+  fi
   singular_append_event "l1.acceptance_refused" \
     "acceptance predicate refused accepted-packet publication" \
     "{\"taskId\":\"$task_id\",\"runId\":\"$check_run\",\"driverRunId\":\"$run_id\",\"headSha\":\"$check_head\",\"path\":\"$path\",\"conjunct\":\"${l1_acceptance_refusal%%:*}\",\"reason\":\"${l1_acceptance_refusal#*:}\",\"waiver\":\"${waiver:-no}\",\"published\":false}" \
     || true
   echo "l1-drive: acceptance refused for $task_id ($path): $l1_acceptance_refusal" >&2
 }
+# A replayed worker packet may already say accepted. V refusal must revoke
+# that current-run projection and preserve the ordinary audit-only retry route.
+l1_block_proof_refused_packet() {
+  python3 - "$packet" "$task_id" "$run_id" "$head_sha" \
+    "$l1_acceptance_refusal" "$SINGULAR_ROOT" <<'PYBLOCK'
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+path = Path(sys.argv[1])
+task, run, head, reason, root = sys.argv[2:]
+value = json.loads(path.read_text())
+if any(value.get(key) != expected for key, expected in (
+        ("taskId", task), ("runId", run), ("headSha", head))):
+    raise SystemExit("refused packet no longer identifies the current candidate")
+base = subprocess.check_output(["git", "-C", root, "rev-parse", "--verify",
+                               "--end-of-options", value["baseRef"] + "^{commit}"],
+                              text=True).strip()
+value["status"] = "blocked"
+value["nextAction"] = (f"Operator: repair the proof evidence, explicitly reopen a closed review series "
+                       f"with singular review-policy reopen, then run singular drive {task} --audit-only")
+blocker = {"class": "blocked-external", "reason": reason, "resolutionOwner": "operator"}
+if blocker not in value["blockers"]:
+    value["blockers"].append(blocker)
+encoded = (json.dumps(value, indent=2) + "\n").encode()
+temporary = path.with_suffix(".proof-refused.tmp")
+temporary.write_bytes(encoded)
+os.replace(temporary, path)
+marker = dict(taskId=task, runId=run, headSha=head, branch=value["branch"],
+              baseSha=base, packetSha256=hashlib.sha256(encoded).hexdigest(),
+              reason=reason, resolutionOwner="operator", published=False)
+path = path.parent / "accept-existing-packet-refusal.json"
+temporary = path.with_suffix(".tmp")
+temporary.write_text(json.dumps(marker) + "\n")
+os.replace(temporary, path)
+PYBLOCK
+}
+
 l1_validate_acceptance() {
   local path="$1" check_run="$2" check_run_dir="$3" check_head="$4" check_attempt="${5:-}"
-  local check_audit check_schema="" check_audit_schema="" check_manifest check_json check_out=""
+  local check_audit check_out="" check_rc=0 check_policy_env
   local -a check_attempt_args=()
   check_audit="$(singular_audit_record_path "$check_run")"
-  check_manifest="$check_run_dir/evidence-manifest.json"
   l1_acceptance_refusal=""
-  [[ -f "$check_audit" ]] \
-    && check_schema="$(singular_json_field "$check_audit" schema 2>/dev/null || true)"
-  case "$check_schema" in
-    singular.orchestration.audit-verdict.v1)
-      check_audit_schema="$SINGULAR_SCHEMA_DIR/audit-verdict.v1.schema.json" ;;
-    singular.orchestration.audit-verdict.v0|pmgo.orchestration.audit-verdict.v0)
-      check_audit_schema="$SINGULAR_SCHEMA_DIR/audit-verdict.v0.schema.json" ;;
-  esac
-  if [[ ! -f "$check_audit" ]]; then
-    l1_acceptance_refusal="A:audit-missing"
-  # Strict regardless of SINGULAR_AUDIT_VERDICT_VALIDATE: a legacy verdict
-  # that only passed in warn mode never participates in acceptance.
-  elif [[ -z "$check_audit_schema" ]] \
-      || ! SINGULAR_AUDIT_SCHEMA="$check_audit_schema" \
-        singular_validate_audit_verdict "$check_audit" "$task_id" "$check_run" \
-        >/dev/null 2>&1; then
-    l1_acceptance_refusal="A:audit-schema-invalid"
-  elif [[ ! -f "$check_manifest" ]]; then
-    l1_acceptance_refusal="E:evidence-manifest-missing"
-  elif ! check_json="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1], encoding="utf-8")), separators=(",", ":")))' "$check_manifest" 2>/dev/null)" \
-      || ! singular_json_schema_check "$check_json" \
-        "$SINGULAR_SCHEMA_DIR/evidence-manifest.v0.schema.json" "evidence manifest" \
-        >/dev/null 2>&1; then
-    l1_acceptance_refusal="E:evidence-manifest-schema-invalid"
-  else
-    [[ -n "$check_attempt" ]] && check_attempt_args=(--attempt "$check_attempt")
-    if check_out="$(python3 "$SCRIPT_DIR/acceptance_validator.py" \
-        --task "$task_id" --run "$check_run" --branch "$worker_branch" \
-        --head "$check_head" --campaign "$l1_campaign_binding" \
-        --run-dir "$check_run_dir" --repo-root "$SINGULAR_ROOT" \
-        --state-dir "$SINGULAR_STATE_DIR" --logical-change "$review_logical_change" \
-        --task-contract "$task_file" \
-        ${check_attempt_args[@]+"${check_attempt_args[@]}"} \
-        2>"$check_run_dir/acceptance-check.err")"; then
-      printf '%s\n' "$check_out" >"$check_run_dir/acceptance-check.json"
-      return 0
-    fi
-    printf '%s\n' "$check_out" >"$check_run_dir/acceptance-check.json"
-    l1_acceptance_refusal="$(python3 -c 'import json,sys
+  [[ -n "$check_attempt" ]] && check_attempt_args=("--attempt=$check_attempt")
+  check_policy_env="$(python3 -c 'import json,os
+print(json.dumps({k:v for k,v in os.environ.items() if k.startswith("SINGULAR_REVIEW_")}))')"
+  check_out="$(python3 "$SINGULAR_LIB_DIR/acceptance_validator.py" \
+      "--red-proof=${SINGULAR_RED_PROOF:-off}" \
+      "--acceptance-mode=$(singular_acceptance_mode)" "--lease=$(singular_lease_path "$task_id")" \
+      "--task=$task_id" "--run=$check_run" "--branch=$worker_branch" \
+      "--head=$check_head" "--campaign=$l1_campaign_binding" \
+      "--run-dir=$check_run_dir" "--repo-root=$SINGULAR_ROOT" \
+      "--state-dir=$SINGULAR_STATE_DIR" "--logical-change=$review_logical_change" \
+      "--audit=$check_audit" "--task-contract=$task_file" \
+      "--schema-dir=$SINGULAR_SCHEMA_DIR" "--config=$SINGULAR_JSON_CONFIG_FILE" \
+      "--policy-env-json=$check_policy_env" \
+      "--legacy-schema-mode=${SINGULAR_LEGACY_SCHEMA_MODE:-warn}" \
+      "--trusted-shell=${SINGULAR_BASH_BIN:-}" \
+      "--require-audit=${6:-1}" --driver-records \
+      ${check_attempt_args[@]+"${check_attempt_args[@]}"})" || check_rc=$?
+  if [[ "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("legacyAudit", False))' \
+      "$check_out" 2>/dev/null)" == "True" ]]; then
+    singular_append_event "schema.legacy_id_tolerated" "legacy pmgo schema id tolerated" \
+      "{\"file\":\"$check_audit\",\"label\":\"audit verdict\"}" 2>/dev/null || true
+  fi
+  [[ "$check_rc" -eq 0 ]] && return 0
+  l1_acceptance_refusal="$(python3 -c 'import json,sys
 try:
     value = json.loads(sys.argv[1])
     print(value["conjunct"] + ":" + value["reason"])
 except Exception:
     print("validator:validator-failed")' "$check_out" 2>/dev/null)"
-    [[ -n "$l1_acceptance_refusal" ]] || l1_acceptance_refusal="validator:validator-failed"
-  fi
+  [[ -n "$l1_acceptance_refusal" ]] || l1_acceptance_refusal="validator:validator-failed"
   l1_note_acceptance_refused "$path" "$check_run" "$check_head"
   return 1
 }
@@ -1281,6 +1547,20 @@ PY
         "campaign identity changed while refusing an evidence checkpoint"
     fi
     _l1_outcome="terminal"
+    if [[ "$reason" == acceptance-predicate-V-* ]]; then
+      local advice="Operator: repair the proof evidence, then run singular drive $task_id."
+      local marker="$accepted_run_dir/proof-publication-refusal.txt"
+      printf 'Acceptance refused (%s). %s\n' "$reason" "$advice" >&2
+      if [[ -f "$marker" && "$(singular_lease_status "$task_id")" == blocked ]]; then
+        exit 3
+      fi
+      singular_lease_set_status "$task_id" blocked || exit 3
+      singular_task_set_status "$task_file" blocked || exit 3
+      "$SINGULAR_LIB_DIR/record-decision.sh" --task "$task_id" --decision escalate-parked \
+        --rationale "$reason. $advice" --run "$accepted_run" --branch "$worker_branch" \
+        --authority policy >/dev/null || exit 3
+      printf '%s\n' "$reason. $advice" >"$marker" || exit 3
+    fi
     singular_append_event "l1.accepted_evidence_resume_refused" \
       "accepted evidence checkpoint failed closed and was preserved" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$accepted_run\",\"resumeRunId\":\"$run_id\",\"reason\":\"$reason\",\"productAccepted\":true,\"published\":false,\"consumesProductRepairBudget\":false}" \
@@ -1688,7 +1968,7 @@ l1_note_refusal_and_maybe_park() {
 # dispatch the scheduler publishes a `planned` lease before l1-drive starts, so
 # a status-only retained-worktree guard refused the driver its own reservation
 # and the task could only proceed after an operator removed the worktree by hand
-# (field 2026-09-14, stall 8). dispatch-wrap.sh exports the owning identity;
+# after each refusal. dispatch-wrap.sh exports the owning identity;
 # compare it with the lease.
 #
 # Fails closed: if this invocation cannot prove its own reservation, or the
@@ -1742,11 +2022,15 @@ PY
     l1_campaign_mismatch_exit \
       "stranded accepted packet belongs to a different or unbound campaign"
   fi
-  # accept-existing-packet re-verifies deterministically and then replaces the
-  # audit record with a host-authored one. That is not a fresh independent
-  # audit, so the predicate is checked on the original certificate first.
-  l1_validate_acceptance stranded-packet "$prev_run" "$SINGULAR_RUNS_DIR/$prev_run" \
-    "$(singular_json_field "$cand" headSha 2>/dev/null || true)" || return 1
+  # Strict accept-packet validates and preserves the independent certificate,
+  # and owns the one-time refusal/park transition. Legacy recovery still
+  # checks before its deterministic acceptance replaces the audit record.
+  local recovery_acceptance_mode
+  recovery_acceptance_mode="$(singular_acceptance_mode)" || return 1
+  if [[ "$recovery_acceptance_mode" != "every-path" ]]; then
+    l1_validate_acceptance stranded-packet "$prev_run" "$SINGULAR_RUNS_DIR/$prev_run" \
+      "$(singular_json_field "$cand" headSha 2>/dev/null || true)" || return 1
+  fi
   if "$SCRIPT_DIR/accept-existing-packet.sh" "$cand"; then
     if ! l1_campaign_publication_begin \
         "$cand_binding" pre-resumed-packet-publication; then
@@ -1764,6 +2048,10 @@ PY
     l1_status terminal completed "Recovered and queued an existing accepted packet" true \
       "Continue origin reconciliation" "accepted-existing"
     exit 0
+  fi
+  if [[ "$recovery_acceptance_mode" == "every-path" ]]; then
+    _l1_outcome="terminal"
+    exit 2
   fi
   return 1
 }
@@ -1821,6 +2109,29 @@ if [[ "${#authorized_continuation[@]}" -eq 10 ]]; then
     echo "l1-drive: authorized continuation failed candidate admission; checkout preserved" >&2
     exit 3
   fi
+elif [[ "$audit_only" == "yes" && -d "$worktree" \
+    && "$(git -C "$worktree" rev-parse HEAD 2>/dev/null || true)" == "$audit_only_head" \
+    && "$(git -C "$worktree" branch --show-current 2>/dev/null || true)" == "$worker_branch" ]]; then
+  # The retained checkout is still the exact candidate: audit it in place
+  # (its ignored evidence and bootstrap are part of what the worker left).
+  # A checkout that moved or went missing falls through to the ordinary
+  # retained-worktree assessment below and is rebuilt from the branch.
+  if ! l1_candidate_inspect "$worktree"; then
+    echo "l1-drive: retained candidate Git/lineage inspection failed before the audit-only pass" >&2
+    exit 2
+  fi
+  if [[ "$L1_CANDIDATE_DIRTY" == yes ]]; then
+    echo "l1-drive: --audit-only refused: the retained checkout has uncommitted changes" >&2
+    exit 3
+  fi
+  if ! l1_candidate_admission_checks "$worktree"; then
+    singular_append_event "l1.candidate_admission_refused" \
+      "retained candidate failed scope or secret admission before the audit-only pass" \
+      "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"admittedBaseSha\":\"$packet_base_ref\",\"consumesProductRepairBudget\":false}" || true
+    echo "l1-drive: retained candidate failed admission; checkout preserved" >&2
+    exit 3
+  fi
+  audit_only_keep_worktree="yes"
 elif singular_worktree_registered "$worktree" || [[ -e "$worktree" ]]; then
   existing_lease="$(singular_lease_status "$task_id" 2>/dev/null || echo none)"
   assess_existing=no
@@ -1930,6 +2241,9 @@ if continuation == "yes":
 else:
     lease["maxRetries"] = int(maximum)
 lease["campaignBinding"] = campaign_binding
+# Any new drive supersedes a retained awaiting-audit record: an audit-only
+# pass has read it already, an ordinary pass replaces the candidate.
+lease.pop("auditRecheck", None)
 temporary = path + ".retry-budget.tmp"
 with open(temporary, "w", encoding="utf-8") as handle:
     json.dump(lease, handle, indent=2)
@@ -1940,6 +2254,11 @@ _l1_lease_written="yes"
 rm -f "$l1_refusals_file" 2>/dev/null || true  # a successful dispatch clears refusal history
 singular_append_event "l1.dispatch_started" "l1 dispatch started" \
   "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"branch\":\"$worker_branch\",\"baseSha\":\"$packet_base_ref\",\"batchId\":\"$dispatch_batch_id\",\"riskTier\":\"$risk_tier\",\"productRepairMax\":$max_retries}"
+if [[ "$audit_only" == "yes" ]]; then
+  singular_append_event "l1.audit_only_started" \
+    "audit-only pass started for a retained candidate; no implementer will run" \
+    "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"retainedRunId\":\"$audit_only_run\",\"headSha\":\"$audit_only_head\",\"baseSha\":\"$audit_only_base\",\"workerRerun\":false,\"consumesProductRepairBudget\":false}" || true
+fi
 l1_campaign_publication_end
 if ! l1_git_campaign_publication_begin \
     "$l1_campaign_binding" pre-worktree-creation; then
@@ -1950,6 +2269,8 @@ git_ec=0
 set +e
 if [[ "${#authorized_continuation[@]}" -eq 10 ]]; then
   : # Authorization preserves this exact worktree; the claim follows preparation.
+elif [[ "$audit_only_keep_worktree" == "yes" ]]; then
+  : # The audit-only pass reviews the retained checkout in place.
 else
   if ! git -C "$SINGULAR_ROOT" rev-parse --verify --quiet "$worker_branch" >/dev/null; then
     git -C "$SINGULAR_ROOT" branch "$worker_branch" "$branch_base"
@@ -2250,12 +2571,12 @@ rehydrate_inject_packet() {
   # requiredCompletion). AFTER the durable packet, ALSO append the eligible
   # authored-knowledge entries under a reference-only / NOT-authoritative wrapper.
   # The hook is a minimal delegating append into the integrated config-gated
-  # render (TASK-0058–0061); no config/selection/render logic is inlined here.
+  # render; no config/selection/render logic is inlined here.
   # The render internally gates on SINGULAR_CTX_MANIFEST (default 0) and the
   # OPTIONAL singular.config.json `contextManifest` field, so with either OFF it
   # returns empty and nothing is appended — the durable-only injection is
   # byte-identical. The trigger set comes from the pure builder
-  # singular_ctx_rehydrate_authored_triggers (TASK-0064): the run's deterministic,
+  # singular_ctx_rehydrate_authored_triggers: the run's deterministic,
   # de-duplicated `load-when` tokens (role `implementer`, step `implement`, task
   # id) rather than the bare literal `implement`, so authored entries scoped to a
   # role or task — not only the literal step — become eligible. The enriched set
@@ -2266,7 +2587,7 @@ rehydrate_inject_packet() {
   # computed and passed expanded; no selection/render logic is inlined here.
   # Legacy failures remain non-fatal; strict brain descriptor failures propagate.
   #
-  # NODE dimension (TASK-0066 -> TASK-0067): resolve the run's executable DAG node
+  # NODE dimension: resolve the run's executable DAG node
   # via the pure read-only resolver singular_ctx_rehydrate_authored_node "$task_id"
   # and thread it into the builder's position-3 [node] slot so node-scoped
   # `load-when` entries (e.g. ["rehydrate-path"]) become eligible. The resolver
@@ -2393,6 +2714,27 @@ l1_release_review_operation() {
     --reason "$reason" \
     >"$run_dir/review-policy-release-attempt-${n:-0}.json" \
     2>"$run_dir/review-policy-release-attempt-${n:-0}.err" || true
+}
+
+# Void a recorded review round whose outcome was infrastructure, not the
+# product (0.23.7): the verdict could not be applied, the evidence writer
+# failed, or host verification was inconclusive. The row stays in the ledger;
+# it no longer counts toward the budget and cannot close the change. A no-op
+# when the operation recorded no round. Never fails the caller.
+l1_void_review_round() {
+  local reason="$1" out
+  [[ -n "${review_operation_id:-}" ]] || return 0
+  out="$run_dir/review-policy-void-attempt-${n:-0}.json"
+  python3 "$SCRIPT_DIR/review_policy.py" void \
+    --logical-change "$review_logical_change" --operation "$review_operation_id" \
+    --reason "$reason" >"$out" 2>"$run_dir/review-policy-void-attempt-${n:-0}.err" || return 0
+  if [[ "$(singular_json_field "$out" voided 2>/dev/null || true)" =~ ^([Tt]rue|1)$ ]]; then
+    singular_append_event "review.round_voided" \
+      "review round voided as an infrastructure outcome; it does not count against the budget" \
+      "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":${n:-0},\"logicalChange\":\"$review_logical_change\",\"operationId\":\"$review_operation_id\",\"reason\":\"$(printf '%s' "$reason" | tr '"\\' "''" | head -c 200)\"}" \
+      || true
+  fi
+  return 0
 }
 
 # Clear a result path before the launch that will write it, so a sidecar left by
@@ -2912,6 +3254,28 @@ run_worker_phase() {
   for ((worker_try=0; worker_try<=worker_infra_max; worker_try++)); do
     worker_try_log="$run_dir/worker-attempt-${n}-try-${worker_try}.log"
     worker_classification_log="$worker_try_log"
+    if [[ "${audit_only:-no}" == "yes" ]]; then
+      # Audit-only pass: the implementer already did this work in the retained
+      # run. Replay its packet as the worker result; every host step below
+      # (packet validation, scope, gate, secret scan, identity stamping, audit)
+      # runs for real against the unchanged candidate.
+      if ! cp "$audit_only_run_dir/last-message.json" "$run_dir/last-message.json"; then
+        attempt_failure="worker-infra"; attempt_ctx="$audit_only_run_dir/last-message.json"
+        return 1
+      fi
+      if [[ ! -d "$worktree/.singular-evidence" && -d "$audit_only_run_dir/worker-evidence" ]]; then
+        cp -R "$audit_only_run_dir/worker-evidence" "$worktree/.singular-evidence" || true
+      fi
+      printf 'audit-only pass: worker packet replayed from %s; no implementer launched\n' \
+        "$audit_only_run" >"$worker_try_log"
+      cat "$worker_try_log" >>"$run_dir/worker-codex.log" 2>/dev/null || true
+      worker_rc=0
+      worker_fc="replayed"
+      singular_append_event "l1.worker_replayed" \
+        "retained worker packet replayed by the host; no implementer launched" \
+        "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"retainedRunId\":\"$audit_only_run\",\"workerRerun\":false}" || true
+      break
+    fi
     # Provider window first: a closed window launches nothing, so it is checked
     # before the retry is announced and before a one-shot continuation is claimed.
     if l1_provider_window_preflight implementer "$l2_runner" implement "$n"; then
@@ -3100,8 +3464,9 @@ run_worker_phase() {
       *) break ;;                               # codex-exit-with-output / clean: stop retrying
     esac
   done
-  singular_append_event "l1.worker_completed" "l2 worker completed" \
-    "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\"}"
+  [[ "$worker_fc" == "replayed" ]] \
+    || singular_append_event "l1.worker_completed" "l2 worker completed" \
+      "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\"}"
   # Persisted worker infra failure (still timeout/empty after the retry budget):
   # surface worker-infra so the fast-path decider parks it; retryCount untouched.
   if [[ "$worker_fc" == "timeout" || "$worker_fc" == "empty-output" \
@@ -3223,9 +3588,8 @@ run_worker_phase() {
     # base — a PRIOR attempt committed the content — and the gate above just
     # passed, this is a valid empty-diff retry, not a failure. 0.4.0 raised
     # `no-changes` here, the decider's revalidate-evidence could not audit a
-    # no-change replay, and fully green work terminally parked (field audit:
-    # TASK-0052/0053). Truly-no-content (HEAD == base on owned paths) still
-    # fails as before.
+    # no-change replay, and fully green work was terminally parked.
+    # Truly-no-content (HEAD == base on owned paths) still fails as before.
     local owned_diff_rc=0
     git -C "$worktree" diff --quiet "$packet_base_ref"...HEAD -- "${owned_files[@]}" 2>/dev/null \
       || owned_diff_rc=$?
@@ -3547,6 +3911,57 @@ with open(output, "w", encoding="utf-8") as handle:
     json.dump(data, handle, indent=2)
     handle.write("\n")
 PY
+}
+
+# Host proof observations precede audit admission. Only declared proofs on an
+# enabled mode produce artifacts. Product repairs and parking belong to L1.
+run_red_proof_phase() {
+  local n="$1" mode="${SINGULAR_RED_PROOF:-off}" proof_outcome proof_rc=0
+  [[ "$mode" != "off" ]] || return 0
+  # task_json is the host's pre-worker parse; never re-read the worker's task.
+  if ! printf '%s' "$task_json" | python3 -c '
+import json, sys
+task = json.load(sys.stdin)
+sys.exit(0 if task.get("proofCommand") or task.get("proofTests") else 1)
+'; then
+    return 0
+  fi
+  local feedback="$run_dir/red-proof-${n}-feedback.txt"
+  proof_outcome="$(printf '%s' "$task_json" | PYTHONDONTWRITEBYTECODE=1 \
+    python3 "$SINGULAR_LIB_DIR/red_proof.py" \
+      --root "$SINGULAR_ROOT" --state "$SINGULAR_STATE_DIR" \
+      --worktree "$worktree" --run-dir "$run_dir" --head "$head_sha" \
+      --lease "$lease_path" --task-id "$task_id" --run-id "$run_id" \
+      --attempt "$n" --mode "$mode" --timeout "$SINGULAR_RED_PROOF_TIMEOUT_SEC" \
+      2>"$feedback")" || proof_rc=$?
+  if [[ "$proof_rc" -ne 0 ]]; then
+    proof_outcome="inconclusive-infrastructure"
+  fi
+  singular_append_event "red_proof.observed" "host red-proof observation completed" \
+    "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"mode\":\"$mode\",\"outcome\":\"$proof_outcome\"}" || true
+  # Observe never supplies failure state to the driver's repair controller.
+  [[ "$mode" != "observe" ]] || return 0
+  case "$proof_outcome" in
+    proved|waived) return 0 ;;
+    not-demonstrated)
+      if [[ "$test_policy" == "characterization_first" ]]; then
+        printf '%s\n' "Red proof not-demonstrated: the proof command failed on the base. Characterization requires the proof tests to pass on both the base and the candidate." >"$feedback"
+      else
+        printf '%s\n' "Red proof not-demonstrated: the proof command passed on the base. Make the proof tests fail on the base behavior and pass on the candidate." >"$feedback"
+      fi
+      attempt_failure="red-proof-not-demonstrated"
+      ;;
+    green-failed)
+      printf '%s\n' "Red proof green-failed: the proof command failed on the candidate. Repair the implementation or proof tests so the candidate passes." >"$feedback"
+      attempt_failure="red-proof-green-failed"
+      ;;
+    *)
+      printf '%s\n' "Red proof $proof_outcome: the host could not establish the required observations. An operator must repair the proof environment, then run singular unpark $task_id." >>"$feedback"
+      attempt_failure="red-proof-infra"
+      ;;
+  esac
+  attempt_ctx="$feedback"
+  return 1
 }
 
 # Auditor invocation through verdict extraction + packet evidence append.
@@ -3930,7 +4345,7 @@ PY
   local audit_context_status audit_context_denial
   local audit_capability_profile
   local audit_pid="" audit_child_pgid=""
-  local audit_schema audit_validation_rc
+  local audit_schema audit_validation_rc audit_normalize_rc=0 audit_raw_response=""
   local audit_repair_error_file="" audit_repair_response_file=""
   local audit_prompt_for_try repair_prompt
   # Auditor runner output is durable (0.6.0): the console streams it as a
@@ -3974,6 +4389,12 @@ PY
   fi
   for ((audit_try=0; audit_try<=audit_infra_max; audit_try++)); do
     if l1_provider_window_preflight auditor "$audit_runner" audit "$n"; then
+      # The previous try's refused response is still at audit.json; it must
+      # not wait there for the resumed drive to read as a verdict.
+      if [[ "$audit_try" -gt 0 && -f "$audit_record" ]]; then
+        mv -f "$audit_record" "$run_dir/audit-attempt-${n}.rejected.json" 2>/dev/null \
+          || rm -f "$audit_record"
+      fi
       l1_release_review_operation "provider window closed during the audit phase"
       attempt_failure="provider-deferred"; attempt_ctx="$SINGULAR_PLANNER_BACKOFF_FILE"
       return 1
@@ -4185,10 +4606,68 @@ PY
         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\"}"
     else
       audit_schema="$(singular_json_field "$audit_record" schema 2>/dev/null || true)"
+      # Format normalisation (0.23.6). Before any validator reads a v1
+      # response the host drops properties it does not know inside finding and
+      # verification items, and completes an accepted verdict that leaves a
+      # still-open prior finding uncarried from its own durable record of that
+      # finding. Neither can change the verdict value, the identity, or the
+      # verification classification; a blocking prior becomes a required fix,
+      # so the review policy turns the acceptance into needs-fix. The response
+      # as received is kept for the repair prompt and beside the verdict.
+      # SINGULAR_AUDIT_FORMAT_NORMALIZE=0 restores the strict behaviour.
+      audit_normalize_rc=0
+      audit_raw_response=""
+      if [[ "$audit_schema" == "singular.orchestration.audit-verdict.v1" ]]; then
+        local audit_normalize_report="$run_dir/audit-attempt-${n}-try-${audit_try}.normalized.json"
+        local -a audit_normalize_args=(--normalize-format --verdict "$audit_record"
+          --prior-findings "$audit_prior_findings" --run-dir "$run_dir"
+          --schema "$SINGULAR_SCHEMA_DIR/audit-verdict.v1.schema.json")
+        [[ "${SINGULAR_AUDIT_FORMAT_NORMALIZE:-1}" != "0" ]] \
+          || audit_normalize_args+=(--guard-only)
+        audit_raw_response="$run_dir/audit-attempt-${n}-try-${audit_try}.raw.json"
+        rm -f "$audit_normalize_report" "$audit_record.pre-format-normalize.json"
+        cp "$audit_record" "$audit_raw_response" 2>/dev/null || audit_raw_response=""
+        python3 "$SCRIPT_DIR/audit-verdict-host-bind.py" "${audit_normalize_args[@]}" \
+          >"$audit_normalize_report" 2>"$run_dir/audit-format-normalize.err" \
+          || audit_normalize_rc=$?
+        if [[ "$audit_normalize_rc" -eq 0 ]] \
+            && [[ "$(singular_json_field "$audit_normalize_report" normalized 2>/dev/null || true)" == "True" ]]; then
+          singular_append_event "l1.audit_verdict_normalized" \
+            "auditor verdict format normalised by the host before validation" \
+            "$(python3 - "$audit_normalize_report" "$task_id" "$run_id" "$n" "$audit_try" <<'PY'
+import json, sys
+path, task_id, run_id, attempt, audit_try = sys.argv[1:6]
+report = json.load(open(path, encoding="utf-8"))
+print(json.dumps({
+    "taskId": task_id, "runId": run_id, "attempt": int(attempt), "try": int(audit_try),
+    "droppedFields": report.get("droppedFields") or [],
+    "carriedPriorFindings": [
+        {key: item.get(key) for key in ("id", "severity", "disposition", "classifiedAs")}
+        for item in report.get("carriedPriorFindings") or []
+    ],
+    "consumesProductRepairBudget": False,
+}, separators=(",", ":")))
+PY
+)" || true
+        else
+          rm -f "$audit_raw_response"; audit_raw_response=""
+        fi
+      fi
       audit_validation_rc=0
       validate_audit_record "$audit_record" 2>"$run_dir/audit-validate.err" \
         || audit_validation_rc=$?
-      if [[ "$audit_schema" == "singular.orchestration.audit-verdict.v1" \
+      if [[ "$audit_normalize_rc" -ne 0 ]]; then
+        # Only a host-owned member in the model's response fails here; an
+        # unreadable record leaves the response untouched for the validators.
+        infra_reason="invalid-verdict"
+        audit_repair_response_file="$run_dir/audit-attempt-${n}-try-${audit_try}.invalid.json"
+        audit_repair_error_file="$run_dir/audit-attempt-${n}-try-${audit_try}.validate.err"
+        cp "$audit_record" "$audit_repair_response_file"
+        cp "$run_dir/audit-format-normalize.err" "$audit_repair_error_file"
+        cp "$audit_record" "$audit_record.invalid.json" 2>/dev/null || true
+        singular_append_event "l1.audit_invalid_verdict" "auditor v1 verdict could not be normalised by the host" \
+          "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"detail\":\"$(head -1 "$run_dir/audit-format-normalize.err" 2>/dev/null | tr '"\\' "''" | head -c 300)\"}"
+      elif [[ "$audit_schema" == "singular.orchestration.audit-verdict.v1" \
           && "$audit_validation_rc" -ne 0 ]]; then
         # v1 is captured as plain provider output because the public schema is
         # richer than provider strict-output subsets. Host validation is always
@@ -4302,6 +4781,14 @@ PY
         audit_parsed="yes"
         break
       fi
+      # Every accepting arm above leaves the loop. A response the host
+      # normalised and still had to reject is shown back to the auditor, and
+      # kept, exactly as it was received.
+      if [[ -n "$audit_raw_response" && -f "$audit_raw_response" \
+          && -n "$audit_repair_response_file" ]]; then
+        cp "$audit_raw_response" "$audit_repair_response_file" 2>/dev/null || true
+        cp "$audit_raw_response" "$audit_record.invalid.json" 2>/dev/null || true
+      fi
     fi
   done
   if [[ "$audit_parsed" == "yes" ]]; then
@@ -4356,6 +4843,7 @@ PY
       --host-verification "${model_verification_status:-}" \
       --apply >"$review_record_file" 2>"$review_record_err"
     then
+      l1_void_review_round "review policy could not record or apply the verdict"
       attempt_failure="audit-infra"
       attempt_ctx="$review_record_err"
       return 1
@@ -4423,6 +4911,50 @@ print(json.dumps({"taskId": sys.argv[1], "runId": sys.argv[2], "attempt": int(sy
       assumptions_attempt_close "$audit_record" || true
     }
   else
+    # Format exhaustion (0.23.6). The auditor answered every try, and its last
+    # answer names this task, run and branch, carries a legal verdict value and
+    # echoes host classifications: a finished review the host could not read,
+    # not broken infrastructure and not a product defect. It must not be
+    # charged as either. The candidate is retained and parked awaiting-audit;
+    # `drive --audit-only` re-runs the audit without an implementer pass.
+    # Nothing is accepted on the unreadable answer.
+    local audit_format_exhausted="no"
+    case "${infra_reason:-}" in
+      invalid-verdict|invalid-audit-format|verification-classification-mismatch)
+        if [[ -n "$audit_repair_response_file" && -f "$audit_repair_response_file" ]] \
+            && python3 "$SCRIPT_DIR/audit-verdict-host-bind.py" --validate-authority \
+              --verdict "$audit_repair_response_file" \
+              --host-report "$run_dir/audit-verification.json" \
+              --expected-task "$task_id" --expected-run "$run_id" \
+              --expected-branch "$worker_branch" \
+              >/dev/null 2>"$run_dir/audit-authority-check.err"; then
+          audit_format_exhausted="yes"
+        fi
+        ;;
+    esac
+    # A rejected response never stays on the authority path: a later drive
+    # reads audit.json to recognise accepted checkpoints, and health reports
+    # its verdict. Every try is already preserved as audit-attempt-N-try-M.*.
+    if [[ -f "$audit_record" ]]; then
+      mv -f "$audit_record" "$run_dir/audit-attempt-${n}.rejected.json" 2>/dev/null \
+        || rm -f "$audit_record"
+    fi
+    if [[ "$audit_format_exhausted" == "yes" ]]; then
+      singular_append_event "l1.audit_completed" "auditor completed (verdict unreadable)" \
+        "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"verdict\":\"unreadable\"}"
+      singular_append_event "audit.format_exhausted" \
+        "auditor format-repair retries exhausted on a response with valid authority fields" \
+        "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"reason\":\"$infra_reason\",\"budgetDomain\":\"auditor-infrastructure\",\"retriesUsed\":$audit_infra_max,\"maxExtraRetries\":$audit_infra_max,\"consumesProductRepairBudget\":false,\"detail\":\"$(head -1 "${audit_repair_error_file:-/dev/null}" 2>/dev/null | tr '"\\' "''" | head -c 300)\"}" \
+        || true
+      python3 "$SCRIPT_DIR/review_policy.py" release \
+        --logical-change "$review_logical_change" --operation "$review_operation_id" \
+        --reason "auditor format-repair retries exhausted ($infra_reason)" \
+        >"$run_dir/review-policy-release-attempt-${n}.json" \
+        2>"$run_dir/review-policy-release-attempt-${n}.err" || true
+      attempt_failure="audit-format-exhausted"
+      attempt_ctx="${audit_repair_error_file:-$run_dir/audit-attempt-${n}.rejected.json}"
+      return 1
+    fi
     # Auditor infra failure persisted across SINGULAR_AUDIT_INFRA_MAX fresh re-runs:
     # a model decider cannot fix broken/empty auditor output. Surface as
     # audit-infra so the (fast-path) decider parks it; retryCount stays untouched.
@@ -4440,7 +4972,8 @@ print(json.dumps({"taskId": sys.argv[1], "runId": sys.argv[2], "attempt": int(sy
       >"$run_dir/review-policy-release-attempt-${n}.json" \
       2>"$run_dir/review-policy-release-attempt-${n}.err" || true
     attempt_failure="audit-infra"; attempt_ctx="$run_dir/worker-codex.log"
-    [[ -f "$audit_record" ]] && attempt_ctx="$audit_record"
+    [[ -f "$run_dir/audit-attempt-${n}.rejected.json" ]] \
+      && attempt_ctx="$run_dir/audit-attempt-${n}.rejected.json"
     return 1
   fi
   echo "  auditor verdict=$verdict"
@@ -4467,6 +5000,7 @@ print(json.dumps({"taskId": sys.argv[1], "runId": sys.argv[2], "attempt": int(sy
         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"headSha\":\"$head_sha\",\"stage\":\"final-manifest-refresh\",\"auditVerdict\":\"accepted\",\"consumesProductRepairBudget\":false}" \
         || true
     else
+      l1_void_review_round "evidence manifest refresh failed after the verdict"
       attempt_failure="audit-infra"
     fi
     attempt_ctx="$run_dir/evidence-manifest-final-refresh.log"
@@ -4482,10 +5016,23 @@ print(json.dumps({"taskId": sys.argv[1], "runId": sys.argv[2], "attempt": int(sy
   # publish. normalize() now refuses that rewrite (the auditor repair retry
   # handles it, audit-infra when exhausted), and the acceptance predicate
   # refuses any verdict whose preserved original reported failed-product.
-  if [[ "${model_verification_status:-}" == "failed-product" ]]; then
-    attempt_failure="audit-needs-fix"; attempt_ctx="$audit_record"; return 1
+  local audit_attempt_result audit_attempt_branch audit_attempt_failure
+  if ! audit_attempt_result="$(python3 "$SINGULAR_LIB_DIR/acceptance_validator.py" attempt-result \
+    "--require-audit=$require_audit" "--verdict=$verdict" \
+    "--verification=${model_verification_status:-}")"; then
+    # An unreadable decision uses the existing infrastructure parking path.
+    attempt_failure="audit-infra"; attempt_ctx="$audit_record"; return 1
   fi
-  if [[ "${model_verification_status:-}" == "inconclusive-infrastructure" ]]; then
+  audit_attempt_branch="${audit_attempt_result%%$'\t'*}"
+  audit_attempt_failure="${audit_attempt_result#*$'\t'}"
+  case "$audit_attempt_branch" in
+    product-failure|infrastructure|verdict|continue) ;;
+    *) attempt_failure="audit-infra"; attempt_ctx="$audit_record"; return 1 ;;
+  esac
+  if [[ "$audit_attempt_branch" == "product-failure" ]]; then
+    attempt_failure="$audit_attempt_failure"; attempt_ctx="$audit_record"; return 1
+  fi
+  if [[ "$audit_attempt_branch" == "infrastructure" ]]; then
     if [[ "$require_audit" == "1" && "$verdict" == "accepted" ]]; then
       accepted_audit_pending_evidence="yes"
       attempt_failure="evidence-infra-after-accept"
@@ -4496,14 +5043,15 @@ print(json.dumps({"taskId": sys.argv[1], "runId": sys.argv[2], "attempt": int(sy
         || true
       return 1
     fi
+    l1_void_review_round "host verification was inconclusive infrastructure"
     attempt_failure="audit-infra"; attempt_ctx="$audit_record"; return 1
   fi
 
   # With --no-audit the attempt may end here regardless of the verdict, but
   # only as a diagnostic: the acceptance predicate after the loop refuses to
   # publish any accepted packet when require_audit != 1.
-  if [[ "$require_audit" == "1" && "$verdict" != "accepted" ]]; then
-    attempt_failure="audit-$verdict"; attempt_ctx="$audit_record"; return 1
+  if [[ "$audit_attempt_branch" == "verdict" ]]; then
+    attempt_failure="$audit_attempt_failure"; attempt_ctx="$audit_record"; return 1
   fi
   return 0
 }
@@ -4529,7 +5077,7 @@ archive_attempt() {
 # singular_ctx_assumptions_transition at attempt-close) and adds no rendering of its
 # own. Fail-closed: on any error the attempt proceeds WITHOUT injection (non-fatal),
 # preserving the run. These sites are additive and disjoint from the post-acceptance
-# paired-audit (TASK-0006) and critic-recheck (TASK-0033) hooks, so this node's
+# paired-audit and critic-recheck hooks, so this node's
 # l1-drive.sh ownership does not collide with theirs.
 assumptions_ctx_enabled() { [[ -n "${SINGULAR_CTX_PACKET:-}" && "${SINGULAR_CTX_PACKET}" != "0" ]]; }
 assumptions_ledger_sidecar="$run_dir/assumptions-ledger.json"
@@ -4621,7 +5169,14 @@ try:
 except Exception:
     r = {}
 f = r.get("findings") if isinstance(r, dict) else None
-sys.stdout.write(json.dumps(f if isinstance(f, list) else []))
+f = list(f) if isinstance(f, list) else []
+# audit-verdict.v1 findings are strings; the only object that can cite an
+# assumption there is the finding's classifiedFindings item.
+c = r.get("classifiedFindings") if isinstance(r, dict) else None
+for item in c if isinstance(c, list) else []:
+    if isinstance(item, dict) and isinstance(item.get("assumptionId"), str):
+        f.append({"assumptionId": item["assumptionId"]})
+sys.stdout.write(json.dumps(f))
 PY
 )" || return 0
   updated="$(singular_ctx_assumptions_transition "$ledger" "$findings" 2>/dev/null)" || return 0
@@ -4767,6 +5322,7 @@ prev_progress_signature=""
 prev_findings_signature=""
 terminal_authority="decider"
 terminal_rationale=""
+l1_audit_recheck_json=""
 attempt_started_at=""
 
 # No product pass, initial or re-entry, starts without a future review slot.
@@ -4797,7 +5353,7 @@ fi
 # re-entry repair; later in-process repairs continue to use the ordinary bump
 # below.  A crash after this write may conservatively consume the repair.
 if [[ "$prior_product_lease" == "yes" && "${#authorized_continuation[@]}" -ne 10 \
-    && "$review_capacity_rc" -eq 0 ]]; then
+    && "$audit_only" != "yes" && "$review_capacity_rc" -eq 0 ]]; then
   if ! l1_campaign_publication_begin \
       "$l1_campaign_binding" pre-reentry-budget-mutation; then
     l1_campaign_mismatch_exit \
@@ -4875,7 +5431,9 @@ for ((attempt=0; attempt<product_passes_remaining; attempt++)); do
   prepare_worker_prompt "$n"
   assumptions_inject_fix || true
   if run_worker_phase "$n"; then
-    if run_audit_phase "$n"; then attempt_ok="yes"; fi
+    if run_red_proof_phase "$n"; then
+      if run_audit_phase "$n"; then attempt_ok="yes"; fi
+    fi
   fi
   if [[ "${#authorized_continuation[@]}" -eq 10 \
       && "$continuation_invocation_started" == "no" ]]; then
@@ -4938,6 +5496,41 @@ for ((attempt=0; attempt<product_passes_remaining; attempt++)); do
     break
   fi
 
+  # An unreadable audit verdict is a format-domain terminal. The work is
+  # finished and gated; only the review could not be read. No decider, no
+  # product repair, no escalate-infra: the candidate is retained with the
+  # exact command that re-runs only the audit.
+  if [[ "$attempt_failure" == "audit-format-exhausted" ]]; then
+    terminal_action="awaiting-audit"
+    terminal_authority="policy"
+    audit_recheck_command="singular drive $task_id --audit-only"
+    terminal_rationale="the auditor answered, but its verdict failed host format validation after the bounded repair retry ($(head -1 "${attempt_ctx:-/dev/null}" 2>/dev/null | head -c 300)). The gated candidate $head_sha is retained; no product repair or review round was charged and nothing was accepted. Re-run only the audit: \`$audit_recheck_command\`."
+    l1_audit_recheck_json="$(python3 - "$task_id" "$run_id" \
+        "$worker_branch" "$head_sha" "$packet_base_ref" "$worktree" "$n" \
+        "${attempt_ctx:-}" "$audit_recheck_command" <<'PY'
+import json, os, sys
+(task, run, branch, head, base, worktree, attempt, ctx, command) = sys.argv[1:10]
+detail = ""
+try:
+    with open(ctx, encoding="utf-8", errors="replace") as handle:
+        detail = handle.readline().strip()[:500]
+except OSError:
+    pass
+print(json.dumps({
+    "schema": "singular.orchestration.audit-recheck.v0",
+    "taskId": task, "runId": run, "branch": branch, "headSha": head,
+    "baseSha": base, "worktree": worktree, "attempt": int(attempt),
+    "reason": "audit-format-exhausted", "detail": detail,
+    "errorRef": os.path.basename(ctx) if ctx else "",
+    "recoveryCommand": command,
+    "consumesProductRepairBudget": False,
+}, separators=(",", ":")))
+PY
+)" || l1_audit_recheck_json=""
+    archive_attempt "$n" "$attempt_failure" "$terminal_action" "$terminal_authority"
+    break
+  fi
+
   # A provider window is neither a product signal nor an infrastructure one. It
   # consumes no product repair, no infrastructure allowance and no decider
   # round-trip, and it is not "no progress": the pending phase is recorded and
@@ -4996,7 +5589,7 @@ for ((attempt=0; attempt<product_passes_remaining; attempt++)); do
   fi
 
   case "$attempt_failure" in
-    gate-red|worker-no-packet|packet-invalid|no-changes|commit-failed|scope-violation)
+    red-proof-not-demonstrated|red-proof-green-failed|gate-red|worker-no-packet|packet-invalid|no-changes|commit-failed|scope-violation)
       # Representational packet failures never get here: the packet-format
       # domain above owns them. A remaining packet-invalid is a module-guard
       # or host-stamping refusal, which an identical candidate cannot cure.
@@ -5090,7 +5683,7 @@ for ((attempt=0; attempt<product_passes_remaining; attempt++)); do
   prev_progress_signature="$progress_signature"
 
   case "$attempt_failure" in
-    gate-red|worker-no-packet|packet-invalid|no-changes|commit-failed|scope-violation|audit-needs-fix|audit-needs-fix*)
+    red-proof-not-demonstrated|red-proof-green-failed|gate-red|worker-no-packet|packet-invalid|no-changes|commit-failed|scope-violation|audit-needs-fix|audit-needs-fix*)
       if [[ "$product_repairs_used" -ge "$max_retries" ]]; then
         terminal_action="escalate-parked"
         terminal_authority="policy"
@@ -5133,11 +5726,18 @@ for ((attempt=0; attempt<product_passes_remaining; attempt++)); do
   l1_status deciding active "Selecting the recovery action for $attempt_failure" true \
     "Retry within policy or record a terminal decision" "" "decision-controller"
   case "$attempt_failure" in
-    worker-infra|audit-infra|evidence-infra*)
+    red-proof-infra|worker-infra|audit-infra|evidence-infra*)
       # Infrastructure exhausted its own local one-extra-try budget.  This is
       # mandatory domain separation even when ordinary decider fast paths are
       # disabled: a model action may not convert it into a product repair.
       fast_action="escalate-infra"
+      if [[ "$attempt_failure" == "red-proof-infra" ]]; then
+        terminal_rationale="Red proof could not establish the required observations after its bounded infrastructure retry. An operator must repair the proof environment, then run \`singular unpark $task_id\`. No product repair was charged."
+      fi
+      ;;
+    red-proof-not-demonstrated|red-proof-green-failed)
+      # Only a product correction can satisfy V; a decider waiver cannot.
+      fast_action="retry"
       ;;
     evidence-invalid*)
       # Schema/identity/lineage/budget input rejection is stable for unchanged
@@ -5310,12 +5910,7 @@ done
 #     authorize work, never substitute for the gate or the audit.
 # A refusal is a recorded non-accepting outcome through the terminal path below.
 if [[ "$accepted" == "yes" ]]; then
-  if [[ "$require_audit" != "1" ]]; then
-    l1_acceptance_refusal="A:audit-disabled"
-    l1_note_acceptance_refused ordinary "$run_id" "$head_sha"
-  else
-    l1_validate_acceptance ordinary "$run_id" "$run_dir" "$head_sha" "$n" || true
-  fi
+  l1_validate_acceptance ordinary "$run_id" "$run_dir" "$head_sha" "$n" "$require_audit" || true
   if [[ -n "$l1_acceptance_refusal" ]]; then
     accepted="no"
     terminal_action="escalate-parked"
@@ -5323,6 +5918,8 @@ if [[ "$accepted" == "yes" ]]; then
     attempt_failure="${attempt_failure:-acceptance-refused}"
     if [[ "$l1_acceptance_refusal" == "A:audit-disabled" ]]; then
       terminal_rationale="--no-audit run is diagnostic only: head $head_sha was not published as accepted and is not integrable"
+    elif [[ "$l1_acceptance_refusal" == V:* ]]; then
+      terminal_rationale="acceptance refused ($l1_acceptance_refusal); operator must repair the proof evidence, explicitly reopen a closed review series with singular review-policy reopen, then run singular drive $task_id --audit-only"
     elif [[ "$waiver" == "yes" ]]; then
       terminal_rationale="legacy accept-waiver cannot substitute for the host gate or an accepted audit ($l1_acceptance_refusal); record an exact-artifact human approval or repair the product failure"
     else
@@ -5342,10 +5939,19 @@ if [[ "$accepted" != "yes" ]]; then
       "campaign identity changed before terminal result publication"
   fi
   _l1_outcome="terminal"
+  if [[ "$l1_acceptance_refusal" == V:* ]]; then
+    l1_block_proof_refused_packet || exit 3
+  fi
   [[ -n "$terminal_action" ]] || terminal_action="escalate-parked"
   if [[ -z "$terminal_rationale" ]]; then
     if [[ "$terminal_action" == "escalate-infra" ]]; then
-      terminal_rationale="environment failure ($attempt_failure), not a product defect: the workspace could not run the gate. Repair the environment, then \`singular unpark $task_id\`."
+      case "$attempt_failure" in
+        audit-infra*) failed_phase="the auditor could not complete the audit" ;;
+        worker-infra*) failed_phase="the worker could not complete implementation" ;;
+        evidence-infra*) failed_phase="evidence finalization could not complete" ;;
+        *) failed_phase="the workspace could not run the gate" ;;
+      esac
+      terminal_rationale="environment failure ($attempt_failure), not a product defect: $failed_phase. Repair the environment, then \`singular unpark $task_id\`."
     else
       terminal_rationale="decider terminal action after $attempt_failure"
     fi
@@ -5356,6 +5962,9 @@ if [[ "$accepted" != "yes" ]]; then
   elif [[ "$terminal_action" == "provider-deferred" ]]; then
     l1_status terminal failed "Provider window closed; the pending phase was deferred" true \
       "Resume after the provider window reopens" "$terminal_action"
+  elif [[ "$terminal_action" == "awaiting-audit" ]]; then
+    l1_status terminal failed "Candidate retained; the audit verdict could not be read" true \
+      "Re-run only the audit: singular drive $task_id --audit-only" "$terminal_action"
   else
     l1_status terminal failed "Task ended without acceptance: $terminal_action" true \
       "Inspect the decision and referenced failure evidence" "$terminal_action"
@@ -5369,12 +5978,25 @@ if [[ "$accepted" != "yes" ]]; then
   if [[ "$terminal_action" == "provider-deferred" && -n "$l1_provider_deferral_json" ]]; then
     singular_lease_record_provider_deferral "$task_id" "$l1_provider_deferral_json" 2>/dev/null || true
   fi
+  if [[ "$terminal_action" == "awaiting-audit" ]]; then
+    # Written under the terminal publication lock, after the status change, so
+    # the record and the parked state are one durable transition.
+    if ! singular_lease_record_audit_recheck "$task_id" "$l1_audit_recheck_json" 2>/dev/null; then
+      singular_append_event "l1.awaiting_audit_marker_failed" \
+        "the awaiting-audit lease record could not be written; audit-only re-entry is unavailable" \
+        "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"headSha\":\"$head_sha\"}" || true
+    fi
+  fi
   "$SCRIPT_DIR/record-decision.sh" --task "$task_id" --decision "$terminal_action" \
     --rationale "$terminal_rationale" --run "$run_id" --branch "$worker_branch" --authority "$terminal_authority" || true
   if [[ "$terminal_action" == "awaiting-evidence" ]]; then
     singular_append_event "l1.task_awaiting_evidence" \
       "product audit accepted; publication blocked on external evidence infrastructure" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"action\":\"awaiting-evidence\",\"lastFailure\":\"$attempt_failure\",\"headSha\":\"$head_sha\",\"auditVerdict\":\"accepted\",\"productAccepted\":true,\"published\":false,\"consumesProductRepairBudget\":false}"
+  elif [[ "$terminal_action" == "awaiting-audit" ]]; then
+    singular_append_event "l1.task_awaiting_audit" \
+      "gated candidate retained; only the audit has to be re-run" \
+      "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"action\":\"awaiting-audit\",\"lastFailure\":\"$attempt_failure\",\"headSha\":\"$head_sha\",\"candidateRetained\":true,\"recoveryCommand\":\"singular drive $task_id --audit-only\",\"consumesProductRepairBudget\":false}"
   elif [[ "$terminal_action" == "provider-deferred" ]]; then
     singular_append_event "l1.task_provider_deferred" \
       "l1 task deferred on a closed provider window; no product or infrastructure charge" \
@@ -5393,6 +6015,9 @@ if [[ "$accepted" != "yes" ]]; then
     echo "AWAITING EVIDENCE: $task_id — product audit accepted $head_sha; publication is blocked externally."
   elif [[ "$terminal_action" == "provider-deferred" ]]; then
     echo "PROVIDER DEFERRED: $task_id — provider window closed; pending phase recorded, no product repair charged."
+  elif [[ "$terminal_action" == "awaiting-audit" ]]; then
+    echo "AWAITING AUDIT: $task_id — gated candidate $head_sha retained; the audit verdict could not be read."
+    echo "  re-run only the audit: singular drive $task_id --audit-only"
   else
     echo "NOT ACCEPTED ($terminal_action): $task_id — recorded and parked; loop continues elsewhere."
   fi
@@ -5517,8 +6142,8 @@ singular_ctx_paired_audit_record "$run_id" "$task_id" "$run_dir" "$worktree" || 
 # Post-acceptance critic recheck (read-only; observability only). Strictly AFTER
 # acceptance is finalized above, beside the paired-audit hook. Minimal delegation
 # per the planner driver-hook rule: resolve the node and the prior plan-critique
-# record via the pure/read-only locators (TASK-0032), and only when BOTH resolve
-# invoke the recheck runner (TASK-0031). The runner self-guards on the default-OFF
+# record via the pure/read-only locators, and only when BOTH resolve
+# invoke the recheck runner. The runner self-guards on the default-OFF
 # SINGULAR_CRITIC_RECHECK_PCT sampling gate (unset/0 -> no ctx.critic_recheck event,
 # no recheck files, no state write) so the accepted flow is byte-identical when
 # disabled. The recheck verdict/dispositions NEVER feed back into the accept
@@ -5528,7 +6153,7 @@ singular_ctx_paired_audit_record "$run_id" "$task_id" "$run_dir" "$worktree" || 
 # contiguous literal name), mirroring engine/ctx-critic-recheck-run.sh: this is the
 # codebase's S2 contract-gate idiom that keeps a brick "structurally present but
 # uncalled" under its own literal-substring invariance grep while a later slice
-# (this hook) legitimately composes it (planner-contract rule 9). The delegation
+# (this hook) legitimately composes it. The delegation
 # adds no recheck logic of its own.
 _cr_pfx=singular_ctx_critic_recheck_
 critic_recheck_node="$("${_cr_pfx}locate_node" "$task_id" "$worktree" 2>/dev/null || true)"
@@ -5546,9 +6171,8 @@ unset _cr_pfx
 # durable-artifacts block, the paired-audit recorder, and the critic-recheck
 # block): durably RECORD this run's observed continuity knob-state so the
 # experiment report's per-arm attribution (control = M0 knob-state vs treatment)
-# is auditable on disk. TASK-0093 shipped the pure read-only emitter
-# singular_ctx_experiment_armstate_json but left it present-but-uncalled; this hook
-# is the separable driver wire-in that emitter's context packet deferred.
+# is auditable on disk. The pure read-only emitter
+# singular_ctx_experiment_armstate_json supplies the observed values for this hook.
 #
 # Minimal delegating call site — it inlines NO knob-state logic and only forwards
 # to the integrated emitter, writing its output (for the run's environment) to a

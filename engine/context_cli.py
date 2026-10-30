@@ -87,7 +87,7 @@ def _commands() -> argparse.ArgumentParser:
     )
     common(effective)
 
-    # B5 evaluation surfaces. Both are pure readers: they take their inputs as
+    # Evaluation surfaces. Both are pure readers: they take their inputs as
     # explicit paths, never resolve a context configuration, and never write
     # into the state directories they measure.
     evaluate = subparsers.add_parser(

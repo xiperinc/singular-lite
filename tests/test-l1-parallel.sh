@@ -1389,6 +1389,33 @@ test_frontier_scope_guard_honors_area_prefix() {
   assert_contains "$out" "S0.storage_substrate_base" "non-overlapping areaPrefix-derived scope is still selected"
 }
 
+test_frontier_skips_node_with_open_tasks_when_opted_in() {
+  with_fixture
+  # D1.contract already has a ready task from an earlier batch. By default the
+  # node is still selected (incremental planning); with the opt-in it is skipped
+  # while that task is ready, in flight or accepted, and selected again once the
+  # task is integrated or has failed (re-planning is how a failure is superseded).
+  local task="$SINGULAR_TASKS_DIR/TASK-0042.md"
+  printf '# TASK-0042: open\n\nStatus: ready\nArea: artifact\nDAG node: D1.contract\n\n## Objective\n\nDAG node: ignored-below-headers\n' > "$task"
+  local out
+  out="$(singular_select_l1_frontier 2)"
+  assert_contains "$out" "D1.contract" "default: a node with an open task is still planned"
+  out="$(SINGULAR_L1_SKIP_NODES_WITH_OPEN_TASKS=1 singular_select_l1_frontier 2)"
+  assert_not_contains "$out" "D1.contract" "opt-in: a node with a ready task is skipped"
+  assert_contains "$out" "S0.storage_substrate_base" "opt-in: other nodes are still selected"
+  local status
+  for status in running accepted; do
+    sed -i.bak "s/^Status: .*/Status: $status/" "$task"
+    out="$(SINGULAR_L1_SKIP_NODES_WITH_OPEN_TASKS=1 singular_select_l1_frontier 2)"
+    assert_not_contains "$out" "D1.contract" "opt-in: a node with a $status task is skipped"
+  done
+  for status in integrated failed blocked superseded; do
+    sed -i.bak "s/^Status: .*/Status: $status/" "$task"
+    out="$(SINGULAR_L1_SKIP_NODES_WITH_OPEN_TASKS=1 singular_select_l1_frontier 2)"
+    assert_contains "$out" "D1.contract" "opt-in: a node whose task is $status is planned again"
+  done
+}
+
 test_fanout_stop_blocks() {
   with_fixture
   local stub="$SINGULAR_ROOT/plan-stub.sh"; make_plan_stub "$stub"
@@ -1672,6 +1699,7 @@ test_rewrite_task_id_token_is_token_safe
 test_frontier_scope_guard_excludes_conflict_via_configured_area_map
 test_frontier_scope_guard_batch_overlap_via_configured_area_map
 test_frontier_scope_guard_honors_area_prefix
+test_frontier_skips_node_with_open_tasks_when_opted_in
 test_fanout_stop_blocks
 test_fanout_disk_blocks
 

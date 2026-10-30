@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.gate-baseline.v0",
+  "title": "singular Acknowledged Gate Baseline",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "commandSha256",
+    "failures",
+    "acknowledgedBy",
+    "recordedAt"
+  ],
+  "properties": {
+    "schema": { "const": "singular.orchestration.gate-baseline.v0" },
+    "commandSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "failures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["signature"],
+        "properties": {
+          "signature": { "type": "string", "minLength": 1 },
+          "title": { "type": "string" }
+        }
+      }
+    },
+    "acknowledgedBy": { "type": "string", "minLength": 1 },
+    "rationale": { "type": "string" },
+    "recordedAt": { "type": "string", "format": "date-time" }
+  }
+}

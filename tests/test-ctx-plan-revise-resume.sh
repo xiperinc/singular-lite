@@ -259,7 +259,7 @@ for fn in singular_plan_revise_resume_decide singular_plan_revise_record_strateg
           singular_plan_revise_record_resume_failed; do
   callers="$(grep -rl "$fn" "$ENGINE_HOME/engine" 2>/dev/null \
     | grep -v '/ctx-plan-revise-resume.sh$' || true)"
-  : # temporal assertion neutralized (planner-contract rule 9: later slices may legitimately call this)
+  : # temporal assertion neutralized (later slices may legitimately call this)
 done
 
 echo "ctx-plan-revise-resume tests passed"

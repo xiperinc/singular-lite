@@ -209,7 +209,7 @@ Each cycle writes `reconcile-receipt.json` (override with
 `SINGULAR_INTEGRATION_RECEIPT_FILE` when it is set, so a receipt cannot be
 satisfied by counting canonical invocations alone.
 
-The existing TASK-1106 evaluator consumes the receipt as a declared observation
+The campaign evaluator consumes the receipt as a declared observation
 input; no second reporting service exists:
 
 ```
@@ -261,7 +261,7 @@ see whether the next public `--actuate` rediscovers it. How many canonical
 passes the preceding stabilizing cycle costs is a property of the engine under
 test, not of the probe, so that count is reported rather than asserted.
 
-## What this task's evidence does and does not establish
+## Verification scope
 
 `tests/test-incremental-reconcile.sh` exercises the real
 `reconcile.sh --actuate` path into the production `integrate.sh` on a local
@@ -271,12 +271,5 @@ measured historical eligibility validations and zero final authority checks,
 across a complete sweep pass, including for a retained nonterminal entry whose
 candidate branch is missing, and with no eligible dispatch work present.
 
-It does not establish B1 completion, runtime adoption, operational improvement
-or unattended delivery. Host-only checks remain unrun until the host performs
-them; fixture results are not native acceptance. The complete canonical host
-suite on the final exact integration tree remains a separate, pending
-obligation before campaign delivery.
-
-TASK-1009 at `3a47a736` and its historical 214/214 evidence, the
-TASK-1010/TASK-1011 recovery, the B1–B3 integration, the subsequent B4/B5 work
-and all unsuccessful attempts remain retained and unchanged by this task.
+These synthetic checks do not establish runtime adoption, operational
+improvement or unattended delivery in a consumer project.

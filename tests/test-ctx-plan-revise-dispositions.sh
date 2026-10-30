@@ -246,7 +246,7 @@ d2="$(payload_data "$SINGULAR_EVENTS_FILE")"
 for fn in singular_plan_revise_classify singular_plan_revise_record_dispositions; do
   callers="$(grep -rl "$fn" "$ENGINE_HOME/engine" 2>/dev/null \
     | grep -v '/ctx-plan-revise-dispositions.sh$' || true)"
-  : # temporal assertion neutralized (planner-contract rule 9: later slices may legitimately call this)
+  : # temporal assertion neutralized (later slices may legitimately call this)
 done
 
 echo "ctx-plan-revise-dispositions tests passed"

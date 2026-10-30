@@ -1,0 +1,8 @@
+{
+  "schema": "singular.orchestration.dag.v0",
+  "layers": ["scaffold", "domain", "api"],
+  "kinds": ["build", "test"],
+  "nodes": [
+    {"id": "M0.scaffold", "stage": "M0", "area": "core", "layer": "scaffold", "kind": "build", "dependsOn": [], "requiredCompletion": "scaffold_complete"}
+  ]
+}

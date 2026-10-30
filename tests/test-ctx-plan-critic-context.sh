@@ -100,7 +100,7 @@ grep -q 'UNIQUE-SUMMARY-99'    "$out" || fail "composed context missing the exis
 grep -q 'UNIQUE-STAGE-MARKER-42' "$out" || fail "composed context missing the node stage-file content"
 grep -q 'NOT-A-CANDIDATE' "$out" && fail "composed context must not include non-candidate files"
 
-# (d) deterministic ordering: ALPHA (TASK-0007) sorts before BRAVO (TASK-0008).
+# (d) deterministic ordering: ALPHA sorts before BRAVO (TASK-0008).
 a_line="$(grep -n 'BODY-CANDIDATE-ALPHA' "$out" | head -1 | cut -d: -f1)"
 b_line="$(grep -n 'BODY-CANDIDATE-BRAVO' "$out" | head -1 | cut -d: -f1)"
 [[ -n "$a_line" && -n "$b_line" && "$a_line" -lt "$b_line" ]] \
@@ -127,6 +127,6 @@ after_hash="$(cat "$stage_dir/TASK-0007.candidate.md" "$stage_dir/TASK-0008.cand
 # ---------------------------------------------------------------------------
 callers="$(grep -rl 'singular_ctx_plan_critic_stage_file\|singular_ctx_plan_critic_context' \
   "$ENGINE_HOME/engine" 2>/dev/null | grep -v '/ctx-plan-critic-context.sh$' || true)"
-: # temporal assertion neutralized (planner-contract rule 9: later slices may legitimately call this)
+: # temporal assertion neutralized (later slices may legitimately call this)
 
 echo "ctx-plan-critic-context tests passed"

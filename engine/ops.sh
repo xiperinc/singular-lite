@@ -37,6 +37,36 @@ source "$SCRIPT_DIR/lib.sh"
 verb="${1:-}"
 shift || true
 
+ops_help_requested() {
+  local usage="$1" arg
+  shift
+  for arg in "$@"; do
+    if [[ "$arg" == --help ]]; then
+      printf '%s\n' "$usage"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ops_require_value() {
+  local usage="$1"
+  [[ $# -ge 3 ]] || {
+    printf '%s\n' "$usage" >&2
+    return 2
+  }
+}
+
+# Lock-taking operator verbs wait for a running loop cycle instead of failing
+# at once (0.23.7): `--wait[=SECONDS]`, `--no-wait`, SINGULAR_LOCK_WAIT_SEC.
+# Only these verbs: `ask --wait` means something else.
+ops_lock_wait_option() {
+  singular_lock_wait_parse_args "$2" || {
+    printf '%s\n' "$1" >&2
+    return 2
+  }
+}
+
 # --- unpark -------------------------------------------------------------------
 # Return a parked task to the dispatch frontier: task Status, lease status and
 # retryCount, the refusals counter, a decision record and an event.
@@ -54,15 +84,18 @@ shift || true
 # can park before the operator-authorized fresh pass. The refusals counter is
 # likewise only cleared on a successful dispatch.
 ops_unpark() {
+  local usage="usage: singular unpark TASK-XXXX [--reason TEXT]"
   local task_id="" reason=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --reason) reason="$2"; shift 2 ;;
-      TASK-*) task_id="$1"; shift ;;
-      *) echo "usage: singular unpark TASK-XXXX [--reason TEXT]" >&2; return 2 ;;
+      --help) printf '%s\n' "$usage"; return 0 ;;
+      --wait|--wait=*|--no-wait) ops_lock_wait_option "$usage" "$1" || return 2; shift ;;
+      --reason) ops_require_value "$usage" "$@" || return 2; reason="$2"; shift 2 ;;
+      TASK-*) [[ -z "$task_id" ]] || { echo "$usage" >&2; return 2; }; task_id="$1"; shift ;;
+      *) echo "$usage" >&2; return 2 ;;
     esac
   done
-  [[ -n "$task_id" ]] || { echo "usage: singular unpark TASK-XXXX [--reason TEXT]" >&2; return 2; }
+  [[ -n "$task_id" ]] || { echo "$usage" >&2; return 2; }
 
   local task_file="$SINGULAR_TASKS_DIR/$task_id.md"
   if [[ ! -f "$task_file" ]]; then
@@ -122,7 +155,7 @@ ops_unpark() {
 
   local run_id
   run_id="$(singular_run_id)"
-  singular_acquire_lock "$run_id" || { echo "unpark: origin lock busy" >&2; return 2; }
+  singular_acquire_lock_wait "$run_id" "unpark" || { echo "unpark: origin lock busy" >&2; return 2; }
   # shellcheck disable=SC2064
   trap "singular_release_lock '$run_id' 2>/dev/null || true" EXIT
 
@@ -155,10 +188,15 @@ ops_unpark() {
   singular_task_set_status "$task_file" "ready" \
     && echo "unpark: task -> ready" \
     || { echo "unpark: task status update FAILED" >&2; return 2; }
-  # Surface 4 — refusals counter.
+  # Surface 4 — refusals counters (the driver's own, and the reaper's
+  # consecutive-dispatch-refusal record that `singular health` reports).
   if [[ -f "$SINGULAR_DISPATCH_DIR/$task_id.refusals" ]]; then
     rm -f "$SINGULAR_DISPATCH_DIR/$task_id.refusals"
     echo "unpark: refusals counter cleared"
+  fi
+  if [[ -f "$(singular_dispatch_refusal_path "$task_id")" ]]; then
+    singular_dispatch_refusal_clear "$task_id"
+    echo "unpark: dispatch-refusal record cleared"
   fi
   singular_append_event "task.unparked" "task returned to the frontier via operator verb" \
     "{\"taskId\":\"$task_id\",\"previousStatus\":\"$current\"}"
@@ -167,19 +205,22 @@ ops_unpark() {
 
 # --- reconcile orphan reservation / authorize one-shot continuation ----------
 ops_reconcile_orphan_reservation() {
+  local usage="usage: singular recover orphan-reservation TASK-XXXX --owner OWNER --generation N --run RUN --campaign BINDING --reservation-base SHA --candidate-source SHA --worktree PATH"
   local task_id="" owner="" generation="" predecessor_run="" predecessor_campaign=""
   local reservation_base="" candidate_source="" worktree=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      TASK-*) task_id="$1"; shift ;;
-      --owner) owner="${2:-}"; shift 2 ;;
-      --generation) generation="${2:-}"; shift 2 ;;
-      --run) predecessor_run="${2:-}"; shift 2 ;;
-      --campaign) predecessor_campaign="${2:-}"; shift 2 ;;
-      --reservation-base) reservation_base="${2:-}"; shift 2 ;;
-      --candidate-source) candidate_source="${2:-}"; shift 2 ;;
-      --worktree) worktree="${2:-}"; shift 2 ;;
-      *) echo "usage: singular recover orphan-reservation TASK-XXXX --owner OWNER --generation N --run RUN --campaign BINDING --reservation-base SHA --candidate-source SHA --worktree PATH" >&2; return 2 ;;
+      --help) printf '%s\n' "$usage"; return 0 ;;
+      --wait|--wait=*|--no-wait) ops_lock_wait_option "$usage" "$1" || return 2; shift ;;
+      TASK-*) [[ -z "$task_id" ]] || { echo "$usage" >&2; return 2; }; task_id="$1"; shift ;;
+      --owner) ops_require_value "$usage" "$@" || return 2; owner="${2:-}"; shift 2 ;;
+      --generation) ops_require_value "$usage" "$@" || return 2; generation="${2:-}"; shift 2 ;;
+      --run) ops_require_value "$usage" "$@" || return 2; predecessor_run="${2:-}"; shift 2 ;;
+      --campaign) ops_require_value "$usage" "$@" || return 2; predecessor_campaign="${2:-}"; shift 2 ;;
+      --reservation-base) ops_require_value "$usage" "$@" || return 2; reservation_base="${2:-}"; shift 2 ;;
+      --candidate-source) ops_require_value "$usage" "$@" || return 2; candidate_source="${2:-}"; shift 2 ;;
+      --worktree) ops_require_value "$usage" "$@" || return 2; worktree="${2:-}"; shift 2 ;;
+      *) echo "$usage" >&2; return 2 ;;
     esac
   done
   [[ -n "$task_id" && -n "$owner" && "$generation" =~ ^[1-9][0-9]*$ \
@@ -187,6 +228,7 @@ ops_reconcile_orphan_reservation() {
       && "$reservation_base" =~ ^[0-9a-f]{40,64}$ \
       && "$candidate_source" =~ ^[0-9a-f]{40,64}$ && -n "$worktree" ]] || {
     echo "reconcile-orphan-reservation: complete exact predecessor identity is required" >&2
+    echo "$usage" >&2
     return 2
   }
   local lease task_file current_campaign op_run reconciliation_id
@@ -199,7 +241,7 @@ ops_reconcile_orphan_reservation() {
   singular_campaign_verify_or_refuse ops reconcile-orphan-reservation || return 2
   current_campaign="$(singular_campaign_binding)" || return 2
   op_run="$(singular_run_id)"
-  singular_acquire_lock "$op_run" || { echo "reconcile-orphan-reservation: origin lock busy" >&2; return 2; }
+  singular_acquire_lock_wait "$op_run" "reconcile-orphan-reservation" || { echo "reconcile-orphan-reservation: origin lock busy" >&2; return 2; }
   trap "singular_release_lock '$op_run' 2>/dev/null || true" EXIT
   reconciliation_id="$(python3 "$SCRIPT_DIR/task_lifecycle.py" reconcile-orphan-reservation \
     --lease "$lease" --record "$(singular_dispatch_record_path "$task_id")" \
@@ -215,22 +257,25 @@ ops_reconcile_orphan_reservation() {
 }
 
 ops_authorize_continuation() {
+  local usage="usage: singular recover continuation TASK-XXXX --predecessor-owner OWNER --predecessor-generation N --predecessor-run RUN --predecessor-campaign BINDING --predecessor-reservation-base SHA --candidate-source SHA [--candidate-base SHA] --integration-target SHA --worktree PATH"
   local task_id="" predecessor_owner="" predecessor_generation="" predecessor_run=""
   local predecessor_campaign="" predecessor_reservation_base="" candidate_source=""
   local candidate_base="" integration_target="" worktree=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      TASK-*) task_id="$1"; shift ;;
-      --predecessor-owner) predecessor_owner="${2:-}"; shift 2 ;;
-      --predecessor-generation) predecessor_generation="${2:-}"; shift 2 ;;
-      --predecessor-run) predecessor_run="${2:-}"; shift 2 ;;
-      --predecessor-campaign) predecessor_campaign="${2:-}"; shift 2 ;;
-      --predecessor-reservation-base) predecessor_reservation_base="${2:-}"; shift 2 ;;
-      --candidate-source) candidate_source="${2:-}"; shift 2 ;;
-      --candidate-base) candidate_base="${2:-}"; shift 2 ;;
-      --integration-target) integration_target="${2:-}"; shift 2 ;;
-      --worktree) worktree="${2:-}"; shift 2 ;;
-      *) echo "usage: singular recover continuation TASK-XXXX --predecessor-owner OWNER --predecessor-generation N --predecessor-run RUN --predecessor-campaign BINDING --predecessor-reservation-base SHA --candidate-source SHA [--candidate-base SHA] --integration-target SHA --worktree PATH" >&2; return 2 ;;
+      --help) printf '%s\n' "$usage"; return 0 ;;
+      --wait|--wait=*|--no-wait) ops_lock_wait_option "$usage" "$1" || return 2; shift ;;
+      TASK-*) [[ -z "$task_id" ]] || { echo "$usage" >&2; return 2; }; task_id="$1"; shift ;;
+      --predecessor-owner) ops_require_value "$usage" "$@" || return 2; predecessor_owner="${2:-}"; shift 2 ;;
+      --predecessor-generation) ops_require_value "$usage" "$@" || return 2; predecessor_generation="${2:-}"; shift 2 ;;
+      --predecessor-run) ops_require_value "$usage" "$@" || return 2; predecessor_run="${2:-}"; shift 2 ;;
+      --predecessor-campaign) ops_require_value "$usage" "$@" || return 2; predecessor_campaign="${2:-}"; shift 2 ;;
+      --predecessor-reservation-base) ops_require_value "$usage" "$@" || return 2; predecessor_reservation_base="${2:-}"; shift 2 ;;
+      --candidate-source) ops_require_value "$usage" "$@" || return 2; candidate_source="${2:-}"; shift 2 ;;
+      --candidate-base) ops_require_value "$usage" "$@" || return 2; candidate_base="${2:-}"; shift 2 ;;
+      --integration-target) ops_require_value "$usage" "$@" || return 2; integration_target="${2:-}"; shift 2 ;;
+      --worktree) ops_require_value "$usage" "$@" || return 2; worktree="${2:-}"; shift 2 ;;
+      *) echo "$usage" >&2; return 2 ;;
     esac
   done
   [[ -n "$task_id" && -n "$predecessor_owner" \
@@ -240,6 +285,7 @@ ops_authorize_continuation() {
       && "$candidate_source" =~ ^[0-9a-f]{40,64}$ \
       && "$integration_target" =~ ^[0-9a-f]{40,64}$ && -n "$worktree" ]] || {
     echo "authorize-continuation: complete predecessor, integration target, and worktree identity are required" >&2
+    echo "$usage" >&2
     return 2
   }
   local lease task_file current_campaign engine_source_fingerprint op_run branch authority_dir authority_file
@@ -321,7 +367,7 @@ PY
     return 2
   }
   op_run="$(singular_run_id)"
-  singular_acquire_lock "$op_run" || { echo "authorize-continuation: origin lock busy" >&2; return 2; }
+  singular_acquire_lock_wait "$op_run" "authorize-continuation" || { echo "authorize-continuation: origin lock busy" >&2; return 2; }
   trap "singular_release_lock '$op_run' 2>/dev/null || true" EXIT
   authority_dir="$SINGULAR_STATE_DIR/recovery-authority/$task_id"
   authority_file="$authority_dir/continuation.json"
@@ -404,21 +450,22 @@ PY
 # distinct immutable evidence hash from the repaired host condition; it never
 # creates another worker allowance or resets predecessor accounting.
 ops_rearm_continuation_preparation() {
-  local task_id="${1:-}" authorization_id="" evidence=""
-  [[ -n "$task_id" ]] || {
-    echo "usage: singular recover continuation-preparation TASK-XXXX --authorization-id ID --evidence PATH" >&2
-    return 2
-  }
-  shift
+  local usage="usage: singular recover continuation-preparation TASK-XXXX --authorization-id ID --evidence PATH"
+  local task_id="" authorization_id="" evidence=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --authorization-id) authorization_id="${2:-}"; shift 2 ;;
-      --evidence) evidence="${2:-}"; shift 2 ;;
-      *) echo "usage: singular recover continuation-preparation TASK-XXXX --authorization-id ID --evidence PATH" >&2; return 2 ;;
+      --help) printf '%s\n' "$usage"; return 0 ;;
+      TASK-*) [[ -z "$task_id" ]] || { echo "$usage" >&2; return 2; }; task_id="$1"; shift ;;
+      --wait|--wait=*|--no-wait) ops_lock_wait_option "$usage" "$1" || return 2; shift ;;
+      --authorization-id) ops_require_value "$usage" "$@" || return 2; authorization_id="${2:-}"; shift 2 ;;
+      --evidence) ops_require_value "$usage" "$@" || return 2; evidence="${2:-}"; shift 2 ;;
+      *) echo "$usage" >&2; return 2 ;;
     esac
   done
+  [[ -n "$task_id" ]] || { echo "$usage" >&2; return 2; }
   [[ -n "$authorization_id" && -n "$evidence" && -f "$evidence" ]] || {
     echo "continuation-preparation: authorization id and repair evidence file are required" >&2
+    echo "$usage" >&2
     return 2
   }
   local lease task_file op_run result
@@ -430,7 +477,7 @@ ops_rearm_continuation_preparation() {
   }
   singular_campaign_verify_or_refuse ops rearm-continuation-preparation || return 2
   op_run="$(singular_run_id)"
-  singular_acquire_lock "$op_run" || {
+  singular_acquire_lock_wait "$op_run" "rearm-continuation-preparation" || {
     echo "continuation-preparation: origin lock busy" >&2
     return 2
   }
@@ -453,23 +500,115 @@ ops_rearm_continuation_preparation() {
 # lifecycle helper validates every predecessor binding again before changing
 # dispatch/integration eligibility; the decision log is an audit trail, never
 # authority by itself.
+# Regating retains acceptance authority, so its original certificate must still
+# satisfy the one rule before a recovery authorization can be written.
+ops_validate_regate_acceptance() {
+  local task_id="$1" task_file="$2" lease="$3" campaign="$4"
+  local mode declaration candidate_run candidate_head candidate_branch
+  local logical_change dag_node policy_env result rc=0 reason marker advice payload
+  mode="$(singular_acceptance_mode)" || return 2
+  [[ "$mode" == every-path && "${SINGULAR_RED_PROOF:-off}" == enforce ]] || return 0
+  declaration="$(singular_task_json "$task_file")" || return 2
+  declaration="$(printf '%s' "$declaration" | python3 -c 'import json,sys
+value = json.load(sys.stdin)
+print("yes" if value.get("proofCommand") or value.get("proofTests") else "no")')" || return 2
+  [[ "$declaration" == yes ]] || return 0
+  candidate_run="$(singular_json_field "$lease" acceptedCandidate.runId)" || return 2
+  [[ -n "$candidate_run" && "$candidate_run" != */* && "$candidate_run" != *..* ]] || return 2
+  candidate_head="$(singular_json_field "$lease" acceptedCandidate.headSha)" || return 2
+  candidate_branch="$(singular_json_field "$lease" acceptedCandidate.branch)" || return 2
+  dag_node="$(singular_task_field "$task_file" dagNode)" || return 2
+  logical_change="$(python3 "$SINGULAR_LIB_DIR/review_policy.py" \
+    --config "$SINGULAR_JSON_CONFIG_FILE" --state-dir "$SINGULAR_STATE_DIR" \
+    resolve --task "$task_id" --dag-node "$dag_node" --tasks-dir "$SINGULAR_TASKS_DIR" --dry-run)" || return 2
+  logical_change="$(printf '%s' "$logical_change" | python3 -c 'import json,sys; print(json.load(sys.stdin)["logicalChange"])')" || return 2
+  policy_env="$(python3 -c 'import json,os
+print(json.dumps({k:v for k,v in os.environ.items() if k.startswith("SINGULAR_REVIEW_")}))')" || return 2
+  result="$(python3 "$SINGULAR_LIB_DIR/acceptance_validator.py" \
+    "--red-proof=${SINGULAR_RED_PROOF:-off}" "--acceptance-mode=$mode" "--lease=$lease" \
+    "--task=$task_id" "--run=$candidate_run" "--branch=$candidate_branch" "--head=$candidate_head" \
+    "--campaign=$campaign" "--run-dir=$SINGULAR_RUNS_DIR/$candidate_run" \
+    "--repo-root=$SINGULAR_ROOT" "--state-dir=$SINGULAR_STATE_DIR" \
+    "--logical-change=$logical_change" "--task-contract=$task_file" \
+    "--schema-dir=$SINGULAR_SCHEMA_DIR" "--config=$SINGULAR_JSON_CONFIG_FILE" \
+    "--policy-env-json=$policy_env" "--legacy-schema-mode=${SINGULAR_LEGACY_SCHEMA_MODE:-warn}" \
+    "--trusted-shell=${SINGULAR_BASH_BIN:-}" --require-audit=1)" || rc=$?
+  marker="$SINGULAR_RUNS_DIR/$candidate_run/regate-acceptance-refused.json"
+  if [[ "$rc" -eq 0 ]]; then
+    # Reopen only this guard's park and only when changing Status reproduces
+    # the exact retained contract. Authorization still rechecks the certificate.
+    if [[ -f "$marker" ]]; then
+      python3 - "$SINGULAR_LIB_DIR" "$lease" "$task_file" "$candidate_run" "$candidate_head" <<'PYRESTORE'
+import hashlib
+from pathlib import Path
+import sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+import task_lifecycle
+path = Path(sys.argv[3])
+with task_lifecycle.locked(Path(sys.argv[2])) as lease:
+    candidate = lease.get("acceptedCandidate")
+    if (lease.get("status") == "blocked" and isinstance(candidate, dict)
+            and candidate.get("runId") == sys.argv[4] and candidate.get("headSha") == sys.argv[5]
+            and Path(candidate.get("taskContractPath", "")).resolve() == path.resolve()):
+        for status in ("accepted", "ready"):
+            data, current = task_lifecycle.task_contract_status_bytes(path, status)
+            if current != "blocked" or hashlib.sha256(data).hexdigest() != candidate.get("taskContractSha256"):
+                continue
+            temporary = path.with_name(path.name + ".tmp")
+            temporary.write_bytes(data)
+            temporary.replace(path)
+            lease["status"] = "accepted"
+            break
+PYRESTORE
+      [[ "$?" -eq 0 ]] || return 2
+    fi
+    return 0
+  fi
+  reason="$(printf '%s' "$result" | python3 -c 'import json,sys
+try:
+    value = json.load(sys.stdin)
+    print(value["conjunct"] + ":" + value["reason"])
+except (ValueError, KeyError, TypeError):
+    print("validator:validator-failed")')"
+  advice="Operator: repair the acceptance evidence, then retry singular recover candidate $task_id --action regate with the same successor arguments."
+  printf 'recover-candidate: acceptance refused (%s). %s\n' "$reason" "$advice" >&2
+  if [[ ! -f "$marker" || "$(singular_lease_status "$task_id")" != blocked ]]; then
+    payload="$(python3 - "$task_id" "$candidate_run" "$reason" "$advice" <<'PY'
+import json, sys
+print(json.dumps(dict(taskId=sys.argv[1], runId=sys.argv[2], reason=sys.argv[3],
+                     nextAction=sys.argv[4], resolutionOwner="operator")))
+PY
+)" || return 2
+    singular_lease_set_status "$task_id" blocked || return 2
+    singular_task_set_status "$task_file" blocked || return 2
+    singular_append_event candidate.acceptance_refused "regate acceptance refused; task parked" "$payload" || return 2
+    printf '%s\n' "$payload" >"$marker" || return 2
+  fi
+  return "$rc"
+}
+
 ops_recover_candidate() {
+  local usage="usage: singular recover candidate TASK-XXXX --action repair|regate --successor-run RUN --successor-branch BRANCH --successor-worktree PATH [--failure-id ID]"
   local task_id="" action="" successor_run="" successor_branch=""
   local successor_worktree="" failure_id=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      TASK-*) task_id="$1"; shift ;;
-      --action) action="${2:-}"; shift 2 ;;
-      --successor-run) successor_run="${2:-}"; shift 2 ;;
-      --successor-branch) successor_branch="${2:-}"; shift 2 ;;
-      --successor-worktree) successor_worktree="${2:-}"; shift 2 ;;
-      --failure-id) failure_id="${2:-}"; shift 2 ;;
-      *) echo "usage: singular recover-candidate TASK-XXXX --action repair|regate --successor-run RUN --successor-branch BRANCH --successor-worktree PATH [--failure-id ID]" >&2; return 2 ;;
+      --help) printf '%s\n' "$usage"; return 0 ;;
+      --wait|--wait=*|--no-wait) ops_lock_wait_option "$usage" "$1" || return 2; shift ;;
+      TASK-*) [[ -z "$task_id" ]] || { echo "$usage" >&2; return 2; }; task_id="$1"; shift ;;
+      --action) ops_require_value "$usage" "$@" || return 2; action="${2:-}"; shift 2 ;;
+      --successor-run) ops_require_value "$usage" "$@" || return 2; successor_run="${2:-}"; shift 2 ;;
+      --successor-branch) ops_require_value "$usage" "$@" || return 2; successor_branch="${2:-}"; shift 2 ;;
+      --successor-worktree) ops_require_value "$usage" "$@" || return 2; successor_worktree="${2:-}"; shift 2 ;;
+      --failure-id) ops_require_value "$usage" "$@" || return 2; failure_id="${2:-}"; shift 2 ;;
+      *) echo "$usage" >&2; return 2 ;;
     esac
   done
   [[ -n "$task_id" && ( "$action" == repair || "$action" == regate ) \
       && -n "$successor_run" && -n "$successor_branch" && -n "$successor_worktree" ]] || {
     echo "recover-candidate: complete task/action/successor identity is required" >&2
+    echo "$usage" >&2
     return 2
   }
   local lease task_file campaign run_id authority_dir authority_file authorization_id
@@ -482,8 +621,11 @@ ops_recover_candidate() {
   singular_campaign_verify_or_refuse ops recover-candidate || return 2
   campaign="$(singular_campaign_binding)" || return 2
   run_id="$(singular_run_id)"
-  singular_acquire_lock "$run_id" || { echo "recover-candidate: origin lock busy" >&2; return 2; }
+  singular_acquire_lock_wait "$run_id" "recover-candidate" || { echo "recover-candidate: origin lock busy" >&2; return 2; }
   trap "singular_release_lock '$run_id' 2>/dev/null || true" EXIT
+  if [[ "$action" == regate ]]; then
+    ops_validate_regate_acceptance "$task_id" "$task_file" "$lease" "$campaign" || return $?
+  fi
   authority_dir="$SINGULAR_STATE_DIR/recovery-authority/$task_id"
   mkdir -p "$authority_dir"
   authority_file="$authority_dir/$successor_run.json"
@@ -536,6 +678,11 @@ PY
     rm -f "$authority_file" 2>/dev/null || true
     return 2
   fi
+  # Same 0.23.4 repair as integrate.sh: a red integration may have left the
+  # committed `Status: ready` header under a lease that bound the accepted
+  # bytes. Restoring is exact-hash gated, so authorize-recovery stays strict.
+  python3 "$SCRIPT_DIR/task_lifecycle.py" candidate-contract-restore \
+    --lease "$lease" --task-file "$task_file" >/dev/null 2>&1 || true
   if ! authorization_id="$(python3 "$SCRIPT_DIR/task_lifecycle.py" authorize-recovery \
     --lease "$lease" --authority "$authority_file" --task-contract "$task_file" \
     --expected-task "$task_id" --expected-campaign "$campaign" \
@@ -563,17 +710,20 @@ PY
 # dispatch record finalize + inbox quarantine. Idempotent; refuses a live
 # dispatch without --force.
 ops_supersede() {
+  local usage="usage: singular supersede TASK-XXXX [--by TASK-YYYY] [--reason TEXT] [--force]"
   local task_id="" by="" reason="" force="no"
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --by) by="$2"; shift 2 ;;
-      --reason) reason="$2"; shift 2 ;;
+      --help) printf '%s\n' "$usage"; return 0 ;;
+      --wait|--wait=*|--no-wait) ops_lock_wait_option "$usage" "$1" || return 2; shift ;;
+      --by) ops_require_value "$usage" "$@" || return 2; by="$2"; shift 2 ;;
+      --reason) ops_require_value "$usage" "$@" || return 2; reason="$2"; shift 2 ;;
       --force) force="yes"; shift ;;
-      TASK-*) task_id="$1"; shift ;;
-      *) echo "usage: singular supersede TASK-XXXX [--by TASK-YYYY] [--reason TEXT] [--force]" >&2; return 2 ;;
+      TASK-*) [[ -z "$task_id" ]] || { echo "$usage" >&2; return 2; }; task_id="$1"; shift ;;
+      *) echo "$usage" >&2; return 2 ;;
     esac
   done
-  [[ -n "$task_id" ]] || { echo "usage: singular supersede TASK-XXXX [--by TASK-YYYY] [--reason TEXT] [--force]" >&2; return 2; }
+  [[ -n "$task_id" ]] || { echo "$usage" >&2; return 2; }
 
   local superseded_dir="$SINGULAR_TASKS_DIR/superseded"
   if [[ -f "$superseded_dir/$task_id.md" ]]; then
@@ -609,7 +759,7 @@ ops_supersede() {
 
   local run_id
   run_id="$(singular_run_id)"
-  singular_acquire_lock "$run_id" || { echo "supersede: origin lock busy" >&2; return 2; }
+  singular_acquire_lock_wait "$run_id" "supersede" || { echo "supersede: origin lock busy" >&2; return 2; }
   # shellcheck disable=SC2064
   trap "singular_release_lock '$run_id' 2>/dev/null || true" EXIT
 
@@ -666,6 +816,9 @@ PY
 
 # --- breaker / stop / resume / wake -------------------------------------------
 ops_breaker() {
+  local usage="usage: singular breaker [show|reset]"
+  ops_help_requested "$usage" "$@" && return 0
+  [[ $# -le 1 ]] || { echo "$usage" >&2; return 2; }
   local sub="${1:-show}"
   case "$sub" in
     show)
@@ -681,18 +834,28 @@ ops_breaker() {
       singular_append_event "breaker.reset" "circuit breaker reset by operator" "{\"previous\":$prev}"
       echo "breaker reset (was $prev/$SINGULAR_MAX_CONSEC_FAILS)"
       ;;
-    *) echo "usage: singular breaker [show|reset]" >&2; return 2 ;;
+    *) echo "$usage" >&2; return 2 ;;
   esac
 }
 
 ops_stop() {
-  local wait_secs=""
-  case "${1:-}" in
-    --wait) wait_secs=300 ;;
-    --wait=*) wait_secs="${1#--wait=}" ;;
-    "") : ;;
-    *) echo "usage: singular stop [--wait[=SECS]]" >&2; return 2 ;;
-  esac
+  local usage="usage: singular stop [--wait[=SECS]]"
+  ops_help_requested "$usage" "$@" && return 0
+  local wait_secs="" first="yes"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --wait) [[ "$first" != "yes" ]] || wait_secs=300 ;;
+      --wait=*)
+        [[ -n "${1#--wait=}" ]] || { echo "$usage" >&2; return 2; }
+        [[ "$first" != "yes" ]] || wait_secs="${1#--wait=}"
+        ;;
+      "") [[ "$first" == "yes" ]] || { echo "$usage" >&2; return 2; } ;;
+      *) echo "$usage" >&2; return 2 ;;
+    esac
+    # The base uses the first wait; repeated recognized options stay harmless.
+    first="no"
+    shift
+  done
   singular_ensure_state_dirs
   : >"$SINGULAR_STOP_FILE"
   singular_append_event "operator.stop_requested" "STOP sentinel written by operator" "{}"
@@ -718,6 +881,9 @@ ops_stop() {
 }
 
 ops_resume() {
+  local usage="usage: singular resume"
+  ops_help_requested "$usage" "$@" && return 0
+  [[ $# -eq 0 ]] || { echo "$usage" >&2; return 2; }
   if [[ -f "$SINGULAR_STOP_FILE" ]]; then
     rm -f "$SINGULAR_STOP_FILE"
     singular_append_event "operator.resume_requested" "STOP sentinel removed by operator" "{}"
@@ -733,13 +899,15 @@ ops_resume() {
 }
 
 ops_wake() {
+  local usage="usage: singular wake [--keep-stop]"
   # One-shot "make the loop runnable": clear backoff, reset breaker, drop STOP,
   # then signal any live nap to end. Each step reports individually.
   local keep_stop="no"
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --help) printf '%s\n' "$usage"; return 0 ;;
       --keep-stop) keep_stop="yes"; shift ;;
-      *) echo "usage: singular wake [--keep-stop]" >&2; return 2 ;;
+      *) echo "$usage" >&2; return 2 ;;
     esac
   done
   singular_planner_backoff_clear
@@ -936,6 +1104,18 @@ except Exception:
   # remains the only canonical eligibility and acceptance authority.
   reconcile_index_json="$(singular_reconcile_index_status_json 2>/dev/null || echo '{}')"
 
+  # Why the breaker last moved (0.23.7), for the ATTENTION line.
+  local breaker_reason=""
+  if [[ "$breaker_n" =~ ^[1-9][0-9]*$ && -f "$SINGULAR_EVENTS_FILE" ]]; then
+    breaker_reason="$(grep -a '"type":"autonomate.breaker_incremented"' "$SINGULAR_EVENTS_FILE" 2>/dev/null \
+      | tail -1 | python3 -c 'import json,sys
+try:
+    print(str((json.loads(sys.stdin.read()).get("data") or {}).get("reason") or "")[:200])
+except Exception:
+    pass' 2>/dev/null || true)"
+  fi
+
+  SINGULAR_HEALTH_BREAKER_REASON="$breaker_reason" \
   python3 - "$gates_json" "$frontier_json" "$ready_count" "$active_count" "$l1_active" "$l1_stale" \
     "$backoff_json" "$breaker_n" "${SINGULAR_MAX_CONSEC_FAILS:-5}" "$stop_present" "$lock_present" \
     "$auto_pid" "$auto_state" "$disk_free" "${SINGULAR_MIN_DISK_GB:-2}" "$wt_count" "$console_url" \
@@ -943,6 +1123,7 @@ except Exception:
     "$health_details_json" "$effective_configuration_json" "$reconcile_index_json" "$json" <<'PY'
 import hashlib
 import json
+import os
 import sys
 from datetime import datetime, timezone
 
@@ -1018,8 +1199,20 @@ if stop == "true":
     attention.append("STOP sentinel present")
 if backoff:
     attention.append(f"planner backoff active ({backoff.get('failureClass')}, until {backoff.get('until')})")
+breaker_attention_at = min(3, num(breaker_max) or 3)
+breaker_reason = os.environ.get("SINGULAR_HEALTH_BREAKER_REASON", "").strip()
 if num(breaker) and num(breaker) >= num(breaker_max):
-    attention.append(f"circuit breaker OPEN ({breaker}/{breaker_max})")
+    attention.append(
+        f"circuit breaker OPEN ({breaker}/{breaker_max}); the loop is halted"
+        + (f" (last increment: {breaker_reason})" if breaker_reason else "")
+        + ". Fix the cause, then `singular breaker reset`"
+    )
+elif num(breaker) and num(breaker) >= breaker_attention_at:
+    attention.append(
+        f"circuit breaker at {breaker}/{breaker_max}; the loop halts at {breaker_max}"
+        + (f" (last increment: {breaker_reason})" if breaker_reason else "")
+        + ". See autonomate.breaker_incremented in events.ndjson"
+    )
 if num(l1s):
     attention.append(f"{l1s} stale L1 lease(s) (singular recover --scan)")
 if num(disk) is not None and num(min_disk) is not None and num(disk) < num(min_disk):
@@ -1041,8 +1234,54 @@ if (reconcile_index.get("present") and not reconcile_index.get("healthy")
         f"({reconcile_index.get('reason')}); reconcile falls back to full "
         "canonical discovery until it is rebuilt"
     )
+for parked in lifecycle.get("parkedImports") or []:
+    attention.append(
+        f"packet import parked: {parked.get('taskId') or 'unknown task'} "
+        f"({parked.get('packet')}) failed {parked.get('count')} times: {parked.get('error')}. "
+        "The accepted task cannot integrate until the packet in .singular-state/inbox "
+        "is fixed (or touched to retry as is)"
+    )
+for refused in lifecycle.get("refusedDispatches") or []:
+    attention.append(
+        f"dispatch refused {refused.get('count')} consecutive times, task parked: "
+        f"{refused.get('taskId')}: {refused.get('reason')}. "
+        f"Fix the cause, then `{refused.get('suggestedCommand')}`"
+    )
 if resources and resources.get("effectiveSlots") == 0:
     attention.append("adaptive scheduler has zero affordable worktree slots")
+if isinstance(resources, dict) and resources.get("admission") in ("throttled", "floor"):
+    held = (
+        "only one unit of work at a time is admitted (minimum-progress floor)"
+        if resources.get("progressFloor") is True
+        else "no new workers or planners are admitted"
+    )
+    if resources.get("admissionReason") == "memory-low":
+        attention.append(
+            "machine is short of memory "
+            f"({(resources.get('availableMemoryBytes') or 0) / 1024 ** 3:.1f}GiB available, "
+            f"reserve {(resources.get('memoryReserveBytes') or 0) / 1024 ** 3:.1f}GiB); "
+            f"{held} until it recovers"
+        )
+    elif resources.get("admissionReason") == "cpu-busy":
+        attention.append(
+            "machine is saturated "
+            f"(CPU {(resources.get('cpuBusy') or 0) * 100:.0f}% busy, high-water "
+            f"{(resources.get('cpuBusyHighWater') or 0) * 100:.0f}%); {held} "
+            f"until it falls below {(resources.get('cpuBusyLowWater') or 0) * 100:.0f}%"
+        )
+    else:
+        attention.append(
+            "machine is saturated "
+            f"(load per core {resources.get('loadPerCore')}, high-water "
+            f"{resources.get('loadHighWater')}; CPU utilisation could not be sampled); {held} "
+            f"until it falls below {resources.get('loadLowWater')}"
+        )
+if isinstance(resources, dict) and resources.get("reason") == "probe-unavailable":
+    attention.append(
+        "machine probes unavailable "
+        f"({', '.join(resources.get('probeFailures') or []) or 'unknown'}); "
+        "auto concurrency fell back to 3 slots"
+    )
 pressure = resources.get("providerPressure") if isinstance(resources, dict) else None
 if isinstance(pressure, dict) and pressure.get("applied"):
     attention.append(
@@ -1065,6 +1304,9 @@ doc = {
                "implementersActive": lifecycle.get("implementersActive", 0)},
     "lifecycle": lifecycle,
     "candidates": lifecycle.get("candidates", []),
+    "awaitingAudit": lifecycle.get("awaitingAudit", []),
+    "parkedImports": lifecycle.get("parkedImports", []),
+    "refusedDispatches": lifecycle.get("refusedDispatches", []),
     "effectiveConfiguration": effective_configuration,
     "resources": resources,
     "reconcileIndex": reconcile_index,
@@ -1101,6 +1343,9 @@ digest_doc = json.loads(json.dumps(doc))
 if isinstance(digest_doc.get("resources"), dict):
     digest_doc["resources"].pop("freeBytes", None)
     digest_doc["resources"].pop("affordableSlots", None)
+    # A sampled utilisation moves on every call; the admission it leads to is
+    # what a change of state means, and that stays in the digest.
+    digest_doc["resources"].pop("cpuBusy", None)
 doc["digest"] = hashlib.sha256(
     json.dumps(digest_doc, sort_keys=True, separators=(",", ":")).encode()
 ).hexdigest()[:16]
@@ -1129,6 +1374,31 @@ else:
     print(f"disk:       {doc['diskFreeGb']}GiB free; worktrees: {doc['worktrees']}")
     if doc["resources"]:
         print(f"capacity:   {doc['resources']['effectiveSlots']}/{doc['resources']['configuredSlots']} slots ({doc['resources']['reason']})")
+        res = doc["resources"]
+        if "cpuSlots" in res:
+            def shown(value):
+                return "?" if value is None else str(value)
+            def gib(value):
+                return "?" if value is None else f"{value / 1024 ** 3:.1f}GiB"
+            print(
+                f"governor:   {res.get('mode')} ceiling; slots cpu={shown(res.get('cpuSlots'))} "
+                f"memory={shown(res.get('memorySlots'))} disk={shown(res.get('diskSlots'))} "
+                f"planners={shown(res.get('plannerSlots'))}; binding={res.get('capacityReason')}"
+            )
+            print(
+                f"machine:    {shown(res.get('cpuCount'))} cores, cpu busy "
+                + ("?" if res.get("cpuBusy") is None else f"{res.get('cpuBusy') * 100:.0f}%")
+                + f" (high {res.get('cpuBusyHighWater')} / low {res.get('cpuBusyLowWater')}), "
+                f"load/core {shown(res.get('loadPerCore'))} "
+                f"(high {res.get('loadHighWater')} / low {res.get('loadLowWater')}; "
+                f"signal {res.get('pressureSignal') or 'load-average'}), "
+                f"memory {gib(res.get('availableMemoryBytes'))} available; admission "
+                + (
+                    f"THROTTLED ({res.get('admissionReason')})" if res.get("admission") == "throttled"
+                    else f"FLOOR ({res.get('admissionReason')}; one unit at a time)" if res.get("admission") == "floor"
+                    else "open"
+                )
+            )
         pressure = doc["resources"].get("providerPressure")
         if isinstance(pressure, dict):
             cap_display = pressure.get("cap") if pressure.get("cap") is not None else "none"
@@ -1160,6 +1430,18 @@ else:
             + " owner=" + str(candidate.get("owner"))
             + " action=" + str(candidate.get("permittedNextAction"))
         )
+        if candidate.get("recoveryCommand"):
+            print("            regate: " + str(candidate.get("recoveryCommand")))
+    for parked in doc.get("awaitingAudit") or []:
+        print(
+            "awaiting-audit: " + str(parked.get("taskId"))
+            + " head=" + str(parked.get("headSha"))
+            + " run=" + str(parked.get("runId"))
+            + " reason=" + str(parked.get("reason"))
+        )
+        if parked.get("detail"):
+            print("            " + str(parked.get("detail"))[:200])
+        print("            re-audit: " + str(parked.get("recoveryCommand")))
     diagnostics = doc["diagnostics"]
     if diagnostics.get("total"):
         print(f"diagnostics:{diagnostics.get('counts', {})}")
@@ -1176,20 +1458,25 @@ PY
 
 # --- gc --------------------------------------------------------------------------
 ops_gc() {
+  local usage="usage: singular gc [--dry-run] [--from-reconcile RUN_ID]"
   local dry="no" inherited_run_id=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --help) printf '%s\n' "$usage"; return 0 ;;
+      --wait|--wait=*|--no-wait) ops_lock_wait_option "$usage" "$1" || return 2; shift ;;
       --dry-run) dry="yes"; shift ;;
       --from-reconcile)
-        [[ -n "${2:-}" ]] || { echo "usage: singular gc [--dry-run] [--from-reconcile RUN_ID]" >&2; return 2; }
+        ops_require_value "$usage" "$@" || return 2
+        [[ -n "$2" ]] || { echo "$usage" >&2; return 2; }
         inherited_run_id="$2"
         shift 2
         ;;
-      *) echo "usage: singular gc [--dry-run] [--from-reconcile RUN_ID]" >&2; return 2 ;;
+      *) echo "$usage" >&2; return 2 ;;
     esac
   done
   [[ -z "$inherited_run_id" || "$dry" == "no" ]] || {
     echo "gc: --from-reconcile cannot be combined with --dry-run" >&2
+    echo "$usage" >&2
     return 2
   }
 
@@ -1203,7 +1490,7 @@ ops_gc() {
       return 2
     fi
   elif [[ "$dry" == "no" ]]; then
-    singular_acquire_lock "$run_id" || { echo "gc: origin lock busy" >&2; return 2; }
+    singular_acquire_lock_wait "$run_id" "gc" || { echo "gc: origin lock busy" >&2; return 2; }
     # shellcheck disable=SC2064
     trap "singular_release_lock '$run_id' 2>/dev/null || true" EXIT
   fi
@@ -1411,6 +1698,14 @@ PY
 # read-only history; the archive root is gitignored (runs/events were never
 # committed), the docs-side history stays in git and the manifest records the sha.
 ops_plan() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --wait|--wait=*|--no-wait)
+        ops_lock_wait_option "usage: singular plan archive|list ..." "$1" || return 2
+        shift ;;
+      *) break ;;
+    esac
+  done
   local sub="${1:-}"
   shift || true
   case "$sub" in
@@ -1421,13 +1716,16 @@ ops_plan() {
 }
 
 ops_plan_archive() {
+  local usage="usage: singular plan archive [--name <display name>] [--force] [--no-commit]"
   local name="" force="no" no_commit="no"
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --name)      name="${2:-}"; shift 2 ;;
+      --help) printf '%s\n' "$usage"; return 0 ;;
+      --wait|--wait=*|--no-wait) ops_lock_wait_option "$usage" "$1" || return 2; shift ;;
+      --name) ops_require_value "$usage" "$@" || return 2; name="${2:-}"; shift 2 ;;
       --force)     force="yes"; shift ;;
       --no-commit) no_commit="yes"; shift ;;
-      *) echo "usage: singular plan archive [--name <display name>] [--force] [--no-commit]" >&2; return 2 ;;
+      *) echo "$usage" >&2; return 2 ;;
     esac
   done
 
@@ -1494,7 +1792,7 @@ except Exception:
   # --- Acquire the origin lock (trap release) ---
   local run_id
   run_id="$(singular_run_id)"
-  singular_acquire_lock "$run_id" || { echo "plan archive: origin lock busy" >&2; return 1; }
+  singular_acquire_lock_wait "$run_id" "plan archive" || { echo "plan archive: origin lock busy" >&2; return 1; }
   # shellcheck disable=SC2064
   trap "singular_release_lock '$run_id' 2>/dev/null || true" EXIT
   # Re-check autonomate liveness after acquiring the lock (it may have started).
@@ -1712,6 +2010,8 @@ print(json.dumps({"ok":True,"id":sys.argv[1],"dir":sys.argv[2],
 }
 
 ops_plan_list() {
+  singular_lock_wait_parse_args "$@" || return 2
+  set -- ${SINGULAR_LOCK_WAIT_ARGS[@]+"${SINGULAR_LOCK_WAIT_ARGS[@]}"}
   local json="no"
   case "${1:-}" in
     --json) json="yes" ;;
@@ -1775,15 +2075,20 @@ PY
 # ask.sh. Default: dispatch in the background and print the runId. --wait: run in
 # the foreground and print the answer when it lands.
 ops_ask() {
-  local question="" want_wait="no"
+  local usage="usage: singular ask \"<question>\" [--wait]"
+  local question="" want_wait="no" question_words="no"
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --wait) want_wait="yes"; shift ;;
-      -*) echo "usage: singular ask \"<question>\" [--wait]" >&2; return 2 ;;
-      *) if [[ -z "$question" ]]; then question="$1"; else question="$question $1"; fi; shift ;;
+      --wait) want_wait="yes"; question_words="no"; shift ;;
+      --help)
+        # Within the free-word question, keep the base's dash-word error.
+        [[ "$question_words" == "no" ]] || { echo "$usage" >&2; return 2; }
+        printf '%s\n' "$usage"; return 0 ;;
+      -*) echo "$usage" >&2; return 2 ;;
+      *) if [[ -z "$question" ]]; then question="$1"; else question="$question $1"; fi; question_words="yes"; shift ;;
     esac
   done
-  [[ -n "$question" ]] || { echo "usage: singular ask \"<question>\" [--wait]" >&2; return 2; }
+  [[ -n "$question" ]] || { echo "$usage" >&2; return 2; }
   singular_ensure_state_dirs
   local run_id run_dir
   run_id="ASK-$(date -u +%Y%m%dT%H%M%SZ)-$$"
@@ -1812,8 +2117,18 @@ PY
 # ops_report runs a single supervisor briefing in the foreground; latest.json is
 # updated in place only if the model returns a schema-valid report.
 ops_report() {
+  local usage="usage: singular report"
+  ops_help_requested "$usage" "$@" && return 0
+  [[ $# -eq 0 ]] || { echo "$usage" >&2; return 2; }
   echo "requesting supervisor briefing (readonly, one-shot)..." >&2
   "$(singular_bash_bin)" "$SCRIPT_DIR/supervise.sh" --once
+}
+
+ops_clear_backoff() {
+  local usage="usage: singular clear-backoff"
+  ops_help_requested "$usage" "$@" && return 0
+  [[ $# -eq 0 ]] || { echo "$usage" >&2; return 2; }
+  singular_planner_backoff_clear
 }
 
 case "$verb" in
@@ -1823,7 +2138,7 @@ case "$verb" in
   authorize-continuation) ops_authorize_continuation "$@" ;;
   rearm-continuation-preparation) ops_rearm_continuation_preparation "$@" ;;
   recover-candidate) ops_recover_candidate "$@" ;;
-  clear-backoff) singular_planner_backoff_clear ;;
+  clear-backoff) ops_clear_backoff "$@" ;;
   breaker)       ops_breaker "$@" ;;
   stop)          ops_stop "$@" ;;
   resume)        ops_resume "$@" ;;

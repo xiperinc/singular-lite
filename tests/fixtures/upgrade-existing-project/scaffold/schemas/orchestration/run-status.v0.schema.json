@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.run-status.v0",
+  "title": "singular Run Lifecycle Status",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "runId",
+    "phase",
+    "state",
+    "phaseStartedAt",
+    "lastProgressAt",
+    "currentActivity",
+    "safeCancel",
+    "nextAction",
+    "updatedAt"
+  ],
+  "properties": {
+    "schema": { "const": "singular.orchestration.run-status.v0" },
+    "runId": { "type": "string", "minLength": 1 },
+    "taskId": { "type": "string", "pattern": "^TASK-[0-9]{4,}$" },
+    "node": { "type": "string", "minLength": 1 },
+    "phase": {
+      "type": "string",
+      "enum": [
+        "planning",
+        "implementing",
+        "gating",
+        "auditing",
+        "deciding",
+        "integrating",
+        "awaiting-human",
+        "terminal"
+      ]
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "active",
+        "waiting",
+        "completed",
+        "failed",
+        "stale",
+        "cancelled"
+      ]
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "pid", "startedAt"],
+      "properties": {
+        "type": { "type": "string", "minLength": 1 },
+        "pid": { "type": "integer", "minimum": 1 },
+        "pgid": { "type": "integer", "minimum": 1 },
+        "startedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "phaseStartedAt": { "type": "string", "format": "date-time" },
+    "phaseFinishedAt": { "type": "string", "format": "date-time" },
+    "lastProgressAt": { "type": "string", "format": "date-time" },
+    "currentActivity": { "type": "string", "minLength": 1 },
+    "safeCancel": { "type": "boolean" },
+    "nextAction": { "type": "string", "minLength": 1 },
+    "outcome": { "type": "string" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

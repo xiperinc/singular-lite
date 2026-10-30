@@ -1,38 +1,5 @@
 #!/usr/bin/env bash
-# Covers the next strict-test-first slice of the executable DAG node
-# `subgraph-rehydrate` (stage S6-graph, layer engine_runtime): the pure,
-# read-only, deterministic resolver `engine/ctx-rehydrate-subgraph-sources.sh`.
-#
-#   singular_ctx_rehydrate_subgraph_sources [file]
-#
-# Reads a stream of canonical schemas/context-graph.v0.schema.json NODE records
-# (JSONL) from stdin (or a file arg) — the SELECTED subgraph — and maps each
-# node whose `type` has a durable rehydration source class onto one
-# `<source-class-id>=<provenance.sourcePath>` spec:
-#
-#     type=task        -> task-packet
-#     type=capsule (role=implementer) -> implementer-capsule
-#     type=capsule (role=reviewer)    -> reviewer-capsule
-#     type=finding     -> findings-ledger
-#     type=assumption  -> assumptions-ledger
-#     type=critique    -> critique-record
-#     type=decision    -> decision-record
-#
-# Nodes whose type has NO durable rehydration source class (goal, plan-batch,
-# plan-version, attempt, commit, gate-result, audit) emit nothing.
-#
-#   - Emitted ids match the integrated assembler vocabulary EXACTLY (the RANK in
-#     engine/ctx-rehydrate.sh, same as engine/ctx-rehydrate-sources.sh), so the
-#     stdout composes directly as arguments to singular_ctx_rehydrate_packet /
-#     singular_ctx_rehydrate_manifest.
-#   - Order: PRESERVES the input record order (the selector's contradictions-first
-#     selection order) — it does NOT re-sort by source-class rank.
-#   - Data contract: consumes selected node records as INPUT; it does NOT call the
-#     TASK-0099 selection reader.
-#   - Deterministic: identical input node records yield byte-identical specs.
-#   - Fail-safe: empty input (no node records) yields no specs and exits zero.
-#   - Pure / read-only: writes/renames/deletes nothing, appends no events, confers
-#     no independence (`rehydrate` stays tainted), records nothing authoritative.
+# Regression contracts for ctx-rehydrate-subgraph-sources.
 set -uo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

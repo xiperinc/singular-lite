@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.test-run.v0",
+  "title": "singular Supervised Test Run v0",
+  "description": "Durable manifest for one supervised regression-suite run (`singular test`). Written atomically by the run supervisor and reconciled by any later reader that finds the supervisor gone: the file, not a live process, is the record of what happened.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "runId",
+    "status",
+    "startedAt",
+    "suitePath",
+    "interpreter",
+    "pid",
+    "pgid",
+    "counts",
+    "failed"
+  ],
+  "properties": {
+    "schema": { "const": "singular.test-run.v0" },
+    "runId": { "type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{4}$" },
+    "status": {
+      "type": "string",
+      "enum": ["running", "passed", "failed", "interrupted"]
+    },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "endedAt": { "type": ["string", "null"], "format": "date-time" },
+    "suitePath": { "type": "string", "minLength": 1 },
+    "engineVersion": { "type": ["string", "null"] },
+    "engineCommit": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40,64}$" },
+    "interpreter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "version"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "version": { "type": "string" }
+      }
+    },
+    "pid": { "type": "integer" },
+    "pgid": { "type": "integer" },
+    "filter": {
+      "type": ["array", "null"],
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pass", "fail"],
+      "properties": {
+        "pass": { "type": "integer", "minimum": 0 },
+        "fail": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "failed": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "exitCode": { "type": ["integer", "null"] },
+    "reconciledBy": { "type": "string", "minLength": 1 }
+  }
+}

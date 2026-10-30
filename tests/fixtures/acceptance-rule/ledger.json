@@ -1,0 +1,21 @@
+{
+  "schema": "singular.review-policy.ledger.v1",
+  "logicalChanges": {
+    "TASK-0001": {
+      "rounds": [
+        {
+          "round": 1,
+          "runId": "RUN-fixture",
+          "attempt": 1,
+          "head": "@HEAD@",
+          "campaignBinding": "legacy",
+          "originalVerdict": "accepted",
+          "effectiveVerdict": "accepted",
+          "blocking": [],
+          "downgraded": [],
+          "unclassifiedCount": 0
+        }
+      ]
+    }
+  }
+}

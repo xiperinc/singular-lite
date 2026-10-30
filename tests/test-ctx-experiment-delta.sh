@@ -15,7 +15,7 @@
 #   3. singular_ctx_experiment_delta_json    — public entry: obtain bundle, emit
 #      ONE deterministic sorted-key JSON object under the v0 schema.
 #
-# Guarantees pinned BEHAVIORALLY over a fixture (no absence greps, planner rule 9):
+# Guarantees pinned BEHAVIORALLY over a fixture (no absence greps):
 #   - per headline metric a record carries a, b, delta=B-A, neutral direction.
 #   - each delta equals the difference of the corresponding per-arm bundle values
 #     verbatim (no re-derivation; single upstream definition site).

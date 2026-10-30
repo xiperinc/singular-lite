@@ -170,10 +170,20 @@ env "${base_env[@]}" "$ROOT/engine/audit-verify.sh" \
   || { echo "stale-head verification ran the gate before refusal" >&2; exit 1; }
 git -C "$repo" reset -q --hard "$head_sha"
 
+pass_observation='printf "%s\n" "{\"schema\":\"singular.orchestration.gate-observation.v0\",\"failures\":[]}" >"$SINGULAR_GATE_REPORT_FILE"'
+# A missing explicit TMPDIR must fail closed before running even a passing gate.
+TMPDIR="$tmp/missing-tmpdir" run_verify "$pass_observation; touch '$tmp/missing-tmpdir-gate-ran'" 20
+[[ ! -e "$tmp/missing-tmpdir" && ! -e "$tmp/missing-tmpdir-gate-ran" ]]
+[[ "$(outcome)" == "inconclusive-infrastructure" ]]
+python3 - "$run_dir/audit-verification.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+assert "scratch-create-failed" in data["infrastructureSignals"], data
+PY
+
 # Turbo/Vitest/Bun-style cache writes are allowed in ignored workspace paths
 # and isolated cache roots, while the original audited checkout stays unchanged.
 original_before="$(git -C "$repo" status --porcelain=v1 --untracked-files=all)"
-pass_observation='printf "%s\n" "{\"schema\":\"singular.orchestration.gate-observation.v0\",\"failures\":[]}" >"$SINGULAR_GATE_REPORT_FILE"'
 cache_command="$pass_observation; mkdir -p .turbo node_modules/.vite; printf cache > .turbo/state; printf vite > node_modules/.vite/state; test -n \"\$TURBO_CACHE_DIR\"; printf external > \"\$TURBO_CACHE_DIR/entry\""
 run_verify "$cache_command" 0
 [[ "$(outcome)" == "passed" ]]

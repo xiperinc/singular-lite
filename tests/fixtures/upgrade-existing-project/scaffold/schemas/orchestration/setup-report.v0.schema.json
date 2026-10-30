@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.setup-report.v0",
+  "title": "singular Setup Report v0",
+  "description": "The success half of the `singular setup` contract: what each step did, what was warned about, the state actually reached, and EXACTLY ONE next action. `state` is the highest state truthfully reached — 'stopped-ready' requires migration complete, historical gates verified, doctor passing, and a recorded PASSING regression run. Reaching 'validated' never implies the loop is running, and nothing here authorizes actuation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "state", "steps", "warnings", "nextAction"],
+  "properties": {
+    "schema": { "const": "singular.setup-report.v0" },
+    "state": {
+      "type": "string",
+      "enum": ["installed", "migrated", "validated", "stopped-ready"]
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "detail"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "status": {
+            "description": "ok = already correct; new = this run created it; skip = deliberately not done, with the reason in detail; warn = done, but something needs an operator's eye.",
+            "type": "string",
+            "enum": ["ok", "new", "skip", "warn"]
+          },
+          "detail": { "type": "string" }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "message"],
+        "properties": {
+          "code": { "type": "string", "pattern": "^SINGULAR_[A-Z0-9_]+$" },
+          "message": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "nextAction": {
+      "description": "The single command an operator should run next. There is exactly one, and the human output prints exactly one matching `Next:` line.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "instruction"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1 },
+        "instruction": { "type": "string", "minLength": 1 }
+      }
+    },
+    "safeToActuate": {
+      "description": "True only in 'stopped-ready': everything was verified AND the repository is still stopped. Actuation remains a separate explicit operator action either way.",
+      "type": "boolean"
+    },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "engineVersion": { "type": ["string", "null"] },
+    "engineHome": { "type": ["string", "null"] },
+    "schemaVersion": { "type": ["string", "null"] },
+    "lastTestRunId": { "type": ["string", "null"] }
+  }
+}

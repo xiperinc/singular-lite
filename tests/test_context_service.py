@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Direct contract tests for the dependency-free B2 context service."""
+"""Direct contract tests for the dependency-free context service."""
 
 from __future__ import annotations
 

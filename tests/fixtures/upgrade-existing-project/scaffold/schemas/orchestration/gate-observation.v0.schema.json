@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.gate-observation.v0",
+  "title": "singular Gate Adapter Observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "failures"
+  ],
+  "properties": {
+    "schema": { "const": "singular.orchestration.gate-observation.v0" },
+    "failures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["signature"],
+        "properties": {
+          "signature": { "type": "string", "minLength": 1 },
+          "title": { "type": "string" }
+        }
+      }
+    },
+    "infrastructureFailure": { "type": "boolean" },
+    "infrastructureReason": { "type": "string" }
+  }
+}

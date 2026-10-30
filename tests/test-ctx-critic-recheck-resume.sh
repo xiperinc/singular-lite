@@ -1,42 +1,5 @@
 #!/usr/bin/env bash
-# Covers the post-acceptance-recheck RESUME authority brick
-# engine/ctx-critic-recheck-resume.sh: the fail-closed, skeptic-role-gated decider
-# that decides whether the post-acceptance critic recheck may RESUME the persisted
-# per-node plan-critic session READ-ONLY over the ACCEPTED diff or must run FRESH,
-# plus the record-only strategy provenance emitter. Advances the executable DAG
-# node `critic-carryover` (stage S3-plan-revision, area plancritic, layer
-# engine_runtime, kind runtime).
-#
-# singular_ctx_critic_recheck_resume_decide is the post-acceptance-recheck sibling
-# of the integrated in-loop re-critique decider singular_plan_recritic_resume_decide
-# (TASK-0025): same single-line `resume <sessionId>` / `fresh <reason>` contract,
-# the same ordered fail-closed gates (first failing gate names the reason), reusing
-# the singular.orchestration.session-meta.v0 shape the plan-critic driver already
-# FINALIZES at <state-dir>/sessions/plan-critic/<node>.json (role plan-critic). It
-# is a DIFFERENT engagement — the ACCEPTED diff (not revised candidates), gated by
-# SINGULAR_CRITIC_RECHECK_PCT (not SINGULAR_PLAN_RECRITIC_RESUME) — so it advances the
-# stage rather than duplicating TASK-0025.
-#
-# Gate deltas asserted here:
-#   - Enable gate (default 0 = OFF): SINGULAR_CRITIC_RECHECK_PCT unset / 0 /
-#     non-numeric -> fresh disabled (the whole recheck feature is OFF, so no session
-#     is ever resumed).
-#   - Skeptic-role gate: role != plan-critic -> fresh role-mismatch (a
-#     planner/implementer/reviewer session is NEVER resumable for a recheck).
-#   - Prompt-template gate keyed on the critic TEMPLATE sha (plan-critic.md).
-#   - Session-lease gate at .singular-state/sessions/plan-critic/<node>.lease.
-#   - Kept sibling-decider gates/reasons: no-session, no-session-id, node-mismatch,
-#     head-rewritten, runner-changed, expired, worktree-moved.
-#
-# singular_ctx_critic_recheck_record_strategy emits EXACTLY ONE role=plan-critic
-# context.strategy_selected event carrying node, runId, taskId, strategy, reason,
-# and sessionId on resume; records only (no lease, no runner, no outcome mutation).
-#
-# The file defines NEW functions only and is invoked by NO existing engine path, so
-# with it present-but-uncalled the engine is byte-identical to prior behavior: a
-# decide()-only run mutates no state (no events, no lease). The read-only
-# critic-resume RUNNER, and the l1-drive.sh post-acceptance hook, are the sanctioned
-# follow-up slices and are OUT OF SCOPE here.
+# Regression contracts for ctx-critic-recheck-resume.
 set -uo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

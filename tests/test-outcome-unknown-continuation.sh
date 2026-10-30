@@ -121,7 +121,7 @@ tracked_before="$(shasum -a 256 "$worktree/app.txt" | awk '{print $1}')"
 untracked_before="$(shasum -a 256 "$worktree/untracked.txt" | awk '{print $1}')"
 
 # The integration target advances (gate/control-state commits), and the retained
-# candidate is base-refreshed onto it by merge, which is the real TASK-1116 shape.
+# candidate is base-refreshed onto it by merge, which is the interrupted-attempt shape.
 git -C "$repo" checkout -q target
 printf 'advanced\n' >"$repo/target-advanced.txt"
 git -C "$repo" add target-advanced.txt

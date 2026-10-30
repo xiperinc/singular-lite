@@ -5,11 +5,24 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 source "$SCRIPT_DIR/lib.sh"
 
-configured="${SINGULAR_MAX_CONCURRENT:-${SINGULAR_MAX_L1_CONCURRENT:-3}}"
+# `auto` (the default) sizes the ceiling from the machine; an explicit integer
+# keeps the disk-only rule this script has always applied. See
+# resource_governor.py for the formula and its constants.
+configured="${SINGULAR_MAX_CONCURRENT:-auto}"
 reserve="${SINGULAR_DISK_RESERVE_BYTES:-2147483648}"
 estimate="${SINGULAR_ESTIMATED_WORKTREE_BYTES:-}"
 free_bytes=""
 json="no"
+# Machine facts. Empty means "probe it"; a flag (or the SINGULAR_RESOURCE_*
+# env of the same name) injects the fact so callers and tests are hermetic.
+cpu_count=""
+available_memory=""
+load_1m=""
+cpu_busy=""
+active_workers=""
+active_planners=""
+governor_state="${SINGULAR_RESOURCE_GOVERNOR_STATE_FILE:-$SINGULAR_STATE_DIR/resource-governor.json}"
+update_state="no"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -17,12 +30,27 @@ while [[ $# -gt 0 ]]; do
     --reserve-bytes) reserve="${2:-}"; shift 2 ;;
     --estimated-worktree-bytes) estimate="${2:-}"; shift 2 ;;
     --free-bytes) free_bytes="${2:-}"; shift 2 ;;
+    --cpu-count) cpu_count="${2:-}"; shift 2 ;;
+    --available-memory-bytes) available_memory="${2:-}"; shift 2 ;;
+    --load-1m) load_1m="${2:-}"; shift 2 ;;
+    --cpu-busy) cpu_busy="${2:-}"; shift 2 ;;
+    --active-workers) active_workers="${2:-}"; shift 2 ;;
+    --active-planners) active_planners="${2:-}"; shift 2 ;;
+    --governor-state) governor_state="${2:-}"; shift 2 ;;
+    # Only the reconcile cycle records throttle state. health and doctor read
+    # the same file but must stay read-only, or merely looking at capacity
+    # would move the hysteresis.
+    --update-governor-state) update_state="yes"; shift ;;
     --json) json="yes"; shift ;;
     *) echo "resource-plan: unknown option: $1" >&2; exit 2 ;;
   esac
 done
 
-[[ "$configured" =~ ^[0-9]+$ && "$reserve" =~ ^[0-9]+$ ]] || {
+[[ "$configured" == "auto" || "$configured" =~ ^[0-9]+$ ]] || {
+  echo "resource-plan: slots must be 'auto' or a non-negative integer" >&2
+  exit 2
+}
+[[ "$reserve" =~ ^[0-9]+$ ]] || {
   echo "resource-plan: slots and reserve must be non-negative integers" >&2
   exit 2
 }
@@ -64,45 +92,57 @@ fi
   exit 2
 }
 
+if [[ -z "$active_workers" ]]; then
+  active_workers="$(singular_active_lease_count 2>/dev/null || echo 0)"
+fi
+[[ "$active_workers" =~ ^[0-9]+$ ]] || active_workers=0
+# Planners in flight (live L1 leases). Only the minimum-progress floor reads
+# this: it admits one unit of work under a hold only when nothing is running.
+if [[ -z "$active_planners" ]]; then
+  active_planners="$(singular_l1_list_active 2>/dev/null | grep -c . || true)"
+fi
+[[ "$active_planners" =~ ^[0-9]+$ ]] || active_planners=0
+
+governor_args=(
+  --configured "$configured" --free-bytes "$free_bytes" --reserve-bytes "$reserve"
+  --estimated-worktree-bytes "$estimate" --active-workers "$active_workers"
+  --active-planners "$active_planners"
+  --state-file "$governor_state"
+)
+[[ -z "$cpu_count" ]] || governor_args+=(--cpu-count "$cpu_count")
+[[ -z "$available_memory" ]] || governor_args+=(--available-memory-bytes "$available_memory")
+[[ -z "$load_1m" ]] || governor_args+=(--load-1m "$load_1m")
+[[ -z "$cpu_busy" ]] || governor_args+=(--cpu-busy "$cpu_busy")
+[[ "$update_state" != "yes" ]] || governor_args+=(--update-state)
+base_record="$(python3 "$SCRIPT_DIR/resource_governor.py" "${governor_args[@]}")" || {
+  echo "resource-plan: resource governor failed" >&2
+  exit 2
+}
+configured_slots="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["configuredSlots"])' "$base_record")"
+
 # Provider-pressure ceiling (opt-in, default off). Read-only: with adaptation
 # disabled this prints nothing, no state is created, and the record below is
-# byte-identical to the pre-0.17.0 plan.
+# the governor's record unchanged.
 pressure_json=""
 if singular_provider_pressure_enabled; then
   # Hand the controller the very baseline this plan is using, so its stored cap
   # is bounded by the same configured ceiling the min() below applies.
-  pressure_json="$(SINGULAR_MAX_CONCURRENT="$configured" \
+  pressure_json="$(SINGULAR_MAX_CONCURRENT="$configured_slots" \
     singular_provider_pressure_status_json 2>/dev/null || true)"
 fi
 
-python3 - "$configured" "$reserve" "$estimate" "$free_bytes" "$json" "$pressure_json" <<'PY'
+python3 - "$base_record" "$json" "$pressure_json" <<'PY'
 import json
+import math
 import sys
 
-configured, reserve, estimate, free = map(int, sys.argv[1:5])
-affordable = max(0, free - reserve) // estimate
-effective = min(configured, affordable)
-if effective == configured:
-    reason = "configured-capacity-available"
-elif effective == 0:
-    reason = "insufficient-disk-after-reserve"
-else:
-    reason = "disk-limited-concurrency"
-record = {
-    "schema": "singular.orchestration.resource-plan.v0",
-    "configuredSlots": configured,
-    "effectiveSlots": effective,
-    "freeBytes": free,
-    "reserveBytes": reserve,
-    "estimatedWorktreeBytes": estimate,
-    "affordableSlots": affordable,
-    "reason": reason,
-}
+record = json.loads(sys.argv[1])
+effective = record["effectiveSlots"]
 
 # Disk decides first, then provider pressure lowers the result further — never
 # raises it. Taking the min here is what makes recovery structurally unable to
 # exceed configured or disk-affordable capacity, whatever the stored cap says.
-pressure_raw = sys.argv[6] if len(sys.argv) > 6 else ""
+pressure_raw = sys.argv[3] if len(sys.argv) > 3 else ""
 if pressure_raw:
     try:
         pressure = json.loads(pressure_raw)
@@ -116,7 +156,15 @@ if pressure_raw:
         if applied:
             effective = cap
             record["effectiveSlots"] = effective
-            record["reason"] = "provider-pressure-limited"
+            record["capacityReason"] = "provider-pressure-limited"
+            # A live-pressure throttle still names itself: it is what is
+            # holding this cycle, the pressure cap only lowered the ceiling.
+            if record.get("admission") != "throttled" or effective <= 0:
+                record["reason"] = "provider-pressure-limited"
+            # Planners follow the ceiling that is actually in force.
+            fraction = record.get("plannerFraction") or 0.5
+            record["plannerSlots"] = 0 if effective <= 0 else max(
+                1, min(effective, math.ceil(effective * fraction)))
         record["providerPressure"] = {
             "enabled": True,
             "provider": pressure.get("provider"),
@@ -128,7 +176,7 @@ if pressure_raw:
             "clusterThreshold": pressure.get("clusterThreshold"),
             "applied": applied,
         }
-if sys.argv[5] == "yes":
+if sys.argv[2] == "yes":
     print(json.dumps(record, separators=(",", ":")))
 else:
     print(effective)

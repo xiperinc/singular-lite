@@ -1,0 +1,72 @@
+[
+  {
+    "audit": "1",
+    "verdict": "accepted",
+    "verification": "passed",
+    "failure": "",
+    "branch": "continue"
+  },
+  {
+    "audit": "1",
+    "verdict": "accepted",
+    "verification": "failed-product",
+    "failure": "audit-needs-fix",
+    "branch": "product-failure"
+  },
+  {
+    "audit": "1",
+    "verdict": "accepted",
+    "verification": "inconclusive-infrastructure",
+    "failure": "audit-infra",
+    "branch": "infrastructure"
+  },
+  {
+    "audit": "1",
+    "verdict": "needs-fix",
+    "verification": "passed",
+    "failure": "audit-needs-fix",
+    "branch": "verdict"
+  },
+  {
+    "audit": "1",
+    "verdict": "blocked",
+    "verification": "",
+    "failure": "audit-blocked",
+    "branch": "verdict"
+  },
+  {
+    "audit": "1",
+    "verdict": "needs-human",
+    "verification": "passed",
+    "failure": "audit-needs-human",
+    "branch": "verdict"
+  },
+  {
+    "audit": "0",
+    "verdict": "needs-fix",
+    "verification": "passed",
+    "failure": "",
+    "branch": "continue"
+  },
+  {
+    "audit": "0",
+    "verdict": "accepted",
+    "verification": "failed-product",
+    "failure": "audit-needs-fix",
+    "branch": "product-failure"
+  },
+  {
+    "audit": "0",
+    "verdict": "accepted",
+    "verification": "inconclusive-infrastructure",
+    "failure": "audit-infra",
+    "branch": "infrastructure"
+  },
+  {
+    "audit": "1",
+    "verdict": "infra",
+    "verification": "",
+    "failure": "audit-infra",
+    "branch": "verdict"
+  }
+]

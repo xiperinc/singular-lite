@@ -13,6 +13,9 @@ Depends on: []
 
 Describe the smallest independently verifiable change.
 
+`Gate command: true` above is a placeholder. Replace it with the command that
+checks this task's acceptance criteria before dispatch.
+
 ## Scope
 
 Owned files:

@@ -159,7 +159,53 @@ PY
 [[ -f "$doctor_home/.codex/models_cache.json" ]] \
   || { echo "ordinary doctor must never mutate model cache" >&2; exit 1; }
 
-# PMGO-004 in the machine surface. An environment that cannot terminate a
+# Machine capacity. The fixture pins `maxConcurrent: 2`. Doctor reports what
+# the machine supports next to that number and warns only when the two are far
+# apart — both directions were seen in the field (a fixed 3 idling a 12-core
+# host, a fixed 5 saturating it). Machine facts are injected, so this does not
+# depend on the host running the suite.
+GIB=1073741824
+machine_check() { # <cores> <available bytes> <load> -> the check as JSON
+  local report
+  report="$(SINGULAR_RESOURCE_CPU_COUNT="$1" SINGULAR_RESOURCE_AVAILABLE_MEMORY_BYTES="$2" \
+    SINGULAR_RESOURCE_LOAD_1M="$3" doctor_json)"
+  python3 -c '
+import json, sys
+by_id = {item["id"]: item for item in json.loads(sys.argv[1])["checks"]}
+print(json.dumps(by_id["resources.machine-capacity"]))' "$report"
+}
+python3 - "$(machine_check 5 $((8 * GIB)) 0)" "$(machine_check 12 $((24 * GIB)) 0)" \
+  "$(machine_check 2 $((8 * GIB)) 0)" "$(machine_check 5 $((8 * GIB)) 9)" \
+  "$(machine_check banana $((8 * GIB)) 0)" <<'PY'
+import json, sys
+matched, big, small, loaded, broken = (json.loads(arg) for arg in sys.argv[1:6])
+# 5 cores -> 3 cpu slots: an explicit 2 is in range.
+assert matched["status"] == "pass", matched
+assert matched["details"]["mode"] == "explicit", matched
+assert matched["details"]["cpuSlots"] == 3, matched
+assert matched["details"]["memorySlots"] == 6, matched
+assert matched["details"]["cpuCount"] == 5, matched
+assert "explicit worker ceiling 2" in matched["message"], matched
+# 12 cores -> 8: an explicit 2 leaves the machine idle.
+assert big["status"] == "warn", big
+assert "far below" in big["message"], big
+assert '"auto"' in big["remediation"], big
+# 2 cores -> 1: an explicit 2 is twice what the machine supports.
+assert small["status"] == "warn", small
+assert "far above" in small["message"], small
+# A saturated machine is reported as throttled, and that is not a failure.
+# Nothing is running in this fixture, so the hold is the one-unit floor.
+assert loaded["status"] == "warn", loaded
+assert loaded["details"]["admission"] == "floor", loaded
+assert loaded["details"]["progressFloor"] is True, loaded
+assert "load-high" in loaded["message"], loaded
+assert "minimum-progress floor" in loaded["message"], loaded
+# A broken probe is a warning with the probe named, never a failed doctor.
+assert broken["status"] == "warn", broken
+assert broken["details"]["probeFailures"] == ["cpu"], broken
+PY
+
+# Check the JSON process-control verdict. An environment that cannot terminate a
 # process group cannot clean up a timed-out agent, so this is a blocking check,
 # not a note: whatever launches unattended runs reads this report to decide.
 rc=0
@@ -176,7 +222,7 @@ assert "unattended-runs" in check["requiredFor"], check["requiredFor"]
 assert "Do not run unattended actuation here." in check["remediation"], check
 PY
 
-# PMGO-005 in the machine surface: the verdict is a field, so a supervisor
+# The PID probe verdict is a JSON field, so a supervisor
 # reading this report can tell "the process is gone" from "I was not allowed to
 # look" — which is the distinction that made doctor call a live server stale.
 mkdir -p "$repo/.singular-state"
@@ -256,6 +302,42 @@ assert any(
     "repo-consumer/human-gate.v0.schema.json" in error
     for error in bundle["details"]["errors"]
 )
+PY
+cp "$ROOT/schemas/human-gate.v0.schema.json" \
+  "$repo/schemas/orchestration/human-gate.v0.schema.json"
+
+# A consumer formatter (biome/prettier `--write .`, a pre-commit hook) rewrites
+# the mirrors without changing their JSON. Doctor still fails on the byte
+# difference, but names the real cause and the command that repairs it instead
+# of the generic "differs", which reads as a stale engine bundle.
+python3 - "$ROOT/schemas/human-gate.v0.schema.json" \
+  "$repo/schemas/orchestration/human-gate.v0.schema.json" <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+open(sys.argv[2], "w", encoding="utf-8").write(json.dumps(value, indent=4) + "\n")
+PY
+! cmp -s "$ROOT/schemas/human-gate.v0.schema.json" \
+    "$repo/schemas/orchestration/human-gate.v0.schema.json" \
+  || { echo "fixture did not reformat the schema mirror" >&2; exit 1; }
+rc=0
+report="$(doctor_json)" || rc=$?
+[[ "$rc" -ne 0 ]] || { echo "reformatted schema mirror must fail doctor" >&2; exit 1; }
+python3 - "$report" <<'PY'
+import json, sys
+bundle = next(
+    item for item in json.loads(sys.argv[1])["checks"]
+    if item["id"] == "schema.bundle"
+)
+assert bundle["status"] == "fail", bundle
+assert bundle["details"]["reformatted"] == [
+    "repo-consumer/human-gate.v0.schema.json"
+], bundle["details"]
+assert any(
+    "repo-consumer/human-gate.v0.schema.json: consumer copy was reformatted" in error
+    for error in bundle["details"]["errors"]
+), bundle["details"]["errors"]
+assert "singular init" in bundle["remediation"], bundle["remediation"]
+assert "exclude schemas/orchestration/" in bundle["remediation"], bundle["remediation"]
 PY
 cp "$ROOT/schemas/human-gate.v0.schema.json" \
   "$repo/schemas/orchestration/human-gate.v0.schema.json"

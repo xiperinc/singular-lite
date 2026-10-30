@@ -16,7 +16,7 @@
 #      JSON object composing the snapshot; validates against the shipped v0 schema.
 #
 # Guarantees pinned BEHAVIORALLY over environment fixtures (no absence greps, no
-# temporal negative / present-but-uncalled assertions — planner-contract rule 9):
+# temporal negative / present-but-uncalled assertions):
 #   - control arm: with all continuity knobs UNSET, every knob is reported inactive
 #     at its documented default (the M0 control knob-state).
 #   - treatment arm: with the treatment knobs SET, each is reported active with its

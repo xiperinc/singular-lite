@@ -1,38 +1,5 @@
 #!/usr/bin/env bash
-# Covers the post-acceptance critic-recheck LOCATOR brick
-# engine/ctx-critic-recheck-locate.sh: the pure, read-only resolvers the terminal
-# l1-drive.sh post-acceptance hook needs to feed the recheck runner (TASK-0031) the
-# two inputs NOT in scope at the acceptance site — the executable DAG node that owns
-# an accepted task's critiqued batch, and the path to the prior
-# singular.orchestration.plan-critique.v0 record produced for that node at planning
-# time. The acceptance hook has only run_id/task_id/run_dir/worktree; it carries
-# neither the originating node nor the critique-record path. These locators resolve
-# both from ALREADY-INTEGRATED artifacts (the durable node association recorded for
-# the task in the control-state event log, and the plan-critique record convention).
-#
-# It builds ONLY on already-integrated primitives (the planner.staged/planner.generated
-# task->node association events emitted into SINGULAR_EVENTS_FILE, and the
-# plan-critique.v0 record shape TASK-0012) and does NOT depend on the recheck runner
-# (TASK-0031, accepted but not yet integrated). The file defines NEW functions only and
-# is invoked by NO existing engine path, so with it present-but-uncalled the engine is
-# byte-identical to prior behavior (mirroring TASK-0027 / TASK-0028 / TASK-0029).
-#
-# Asserts:
-#   (a) present-but-uncalled: lib.sh auto-sources it (engine/ctx-*.sh) and it defines
-#       the two NEW public functions; no existing engine path invokes them.
-#   (b) singular_ctx_critic_recheck_locate_node <task_id> [worktree] is PURE/READ-ONLY:
-#       prints the resolved node when the durable association is present and
-#       unambiguous; prints EMPTY (exit 0) when the association is missing or ambiguous
-#       (the same task mapped to two different nodes); appends no event, writes no state.
-#   (c) singular_ctx_critic_recheck_locate_record <node> <task_id> [worktree] is
-#       PURE/READ-ONLY: prints the record path ONLY when the file exists and parses as a
-#       singular.orchestration.plan-critique.v0 record (via the durable per-node
-#       convention and via the stage-dir convention); prints EMPTY (exit 0) on a
-#       missing, unparseable, or wrong-schema record; appends no event, writes no state.
-#   (d) fail-safe invariance: an indeterminate node, or an absent/unparseable/wrong-schema
-#       record, resolves to empty output (never a crash, never a fabricated node or path).
-# The events log is pinned to an isolated SINGULAR_EVENTS_FILE and all inputs to tmp so
-# the suite never mutates real run state.
+# Regression contracts for ctx-critic-recheck-locate.
 set -uo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -195,6 +195,6 @@ grep -qi 'no prior candidates' "$out_nocand" \
 # ---------------------------------------------------------------------------
 callers="$(grep -rl 'singular_plan_revise_prompt' \
   "$ENGINE_HOME/engine" 2>/dev/null | grep -v '/ctx-plan-revise-prompt.sh$' || true)"
-: # temporal assertion neutralized (planner-contract rule 9: later slices may legitimately call this)
+: # temporal assertion neutralized (later slices may legitimately call this)
 
 echo "ctx-plan-revise-prompt tests passed"

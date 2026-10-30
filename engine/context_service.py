@@ -977,7 +977,7 @@ class ContextService:
         if source.raw is None or source.validity == "missing":
             raise ContextError(f"missing source: {ref}: {source.path}")
         if source.validity not in {"current", "current-reviewed"}:
-            raise ContextError(f"ineligible source reference under B1 policy: {ref}")
+            raise ContextError(f"ineligible source reference under manifest policy: {ref}")
         if not HASH_RE.match(version):
             raise ContextError("wrong-version: version must be sha256:<64 lowercase hex>")
         if version != source.source_hash:

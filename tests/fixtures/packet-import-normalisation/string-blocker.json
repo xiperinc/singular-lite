@@ -1,0 +1,50 @@
+{
+  "schema": "singular.orchestration.state-packet.v0",
+  "packetId": "PKT-fixture-parser",
+  "runId": "RUN-fixture-parser",
+  "taskId": "TASK-0001",
+  "area": "parser",
+  "role": "l2-developer",
+  "status": "accepted",
+  "baseRef": "0000000000000000000000000000000000000000",
+  "branch": "agent/parser/TASK-0001-parser",
+  "headSha": "1111111111111111111111111111111111111111",
+  "workspace": "/fixture/repo/.worktrees/TASK-0001",
+  "ownedFiles": [
+    "src/parser.py"
+  ],
+  "changedFiles": [
+    "src/parser.py"
+  ],
+  "commands": [
+    {
+      "cmd": "python3 -m unittest",
+      "exitCode": 0,
+      "logRef": ".singular-evidence/green.log",
+      "rationale": "Synthetic passing parser test."
+    }
+  ],
+  "tests": [
+    {
+      "name": "test_parser",
+      "phase": "red",
+      "status": "failed",
+      "logRef": ".singular-evidence/red.log"
+    }
+  ],
+  "evidence": [
+    {
+      "kind": "red-log",
+      "ref": ".singular-evidence/red.log"
+    },
+    {
+      "kind": "green-log",
+      "ref": ".singular-evidence/green.log"
+    }
+  ],
+  "blockers": [
+    "The parser help example can be expanded separately; it does not block this task."
+  ],
+  "nextAction": "import into control state and reconcile",
+  "createdAt": "2000-01-01T00:00:00Z"
+}

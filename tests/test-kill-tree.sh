@@ -2,7 +2,7 @@
 # Covers singular_kill_tree, singular_setsid_exec and singular_session_record_write
 # in engine/lib.sh.
 #
-# Field failure (PMGO-004): in a sandbox that denies `ps`, a timed-out run killed
+# Field failure: in a sandbox that denies `ps`, a timed-out run killed
 # its direct child and the DESCENDANT survived. The 0.16 kill built its target
 # list solely from `ps -A -o pid= -o ppid=`, ignored that command's return code,
 # and wrapped the whole interpreter in `2>/dev/null || true` — so a denied
@@ -164,7 +164,7 @@ with_sandbox ps singular_kill_tree "$c1_leader" 0 session 2>"$tmp/c1.err"
 ! grep -q 'UNVERIFIED' "$tmp/c1.err" \
   || fail "c1: reported UNVERIFIED with the group proven"
 dead_within "$c1_leader" "$c1_child" \
-  || fail "c1: the descendant survived a ps-denied kill (PMGO-004)"
+  || fail "c1: the descendant survived a ps-denied kill"
 # A verified group kill that could not enumerate says so informationally, and
 # must NOT have degraded.
 grep -q '"type":"kill.enumeration_unavailable"' "$SINGULAR_EVENTS_FILE" \

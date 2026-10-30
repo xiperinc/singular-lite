@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
-# Non-destructive promotion canary for the July 24 field-report regressions.
+# Non-destructive promotion canary for orchestration regressions.
 # Intentionally excluded from tests/run.sh because it composes focused tests
 # that the ordinary suite already executes separately.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CAPTURE="$ROOT/tests/fixtures/field-report/spokit-localization-26.capture.v0.json"
+CAPTURE="$ROOT/tests/fixtures/field-report/synthetic-26.capture.v0.json"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 repo="$tmp/repo"
 mkdir -p "$repo"
 git -C "$tmp" init -q repo
+printf ".singular-state/\n" >"$repo/.gitignore"
 printf '{"schemaVersion":"v2","targetBranch":"main"}\n' \
   >"$repo/singular.config.json"
 
-printf 'CANARY %-32s' "captured-26-node-replay"
+printf 'CANARY %-32s' "synthetic-26-node-replay"
 replay_log="$tmp/captured-replay.log"
 if ! python3 "$ROOT/tests/field_report_canary_replay.py" \
   --root "$ROOT" --repo "$repo" --capture "$CAPTURE" \
@@ -64,7 +65,7 @@ run_case "8-acknowledged-inherited" "test-gate-report.sh"
 run_case "9-adaptive-disk-concurrency" "test-resource-bootstrap.sh"
 run_case "10-human-artifact-invalidation" "test-human-gate.sh"
 
-# The 0.15.1 findings, from the 26-node localization program run on 2026-07-25.
+# Provider, evidence-path and DAG-diagnostic regression cases.
 # Each is a case of the engine holding the right information and discarding it.
 #
 # 11: a 503/529 was classified `overloaded` and then bucketed as `quota`, so a
@@ -79,7 +80,7 @@ run_case "11-provider-overload-class" "test-provider-failure-contract.sh"
 run_case "12-strict-gate-evidence-path" "test-gate-strict-evidence-path.sh"
 run_case "13-dag-evaluation-diagnostics" "test-dag-evaluation-diagnostics.sh"
 
-# 0.16.0 — the same field report's remaining findings.
+# Planner concurrency and graph validation regression cases.
 #
 # 14: concurrent L1 planners shared one origin run id, so run-status.sh (which
 #     keys its path on the id alone) let them race on a single record and
@@ -92,4 +93,4 @@ run_case "14-parallel-planner-visibility" "test-l1-parallel.sh"
 run_case "15-graph-promotability" "test-graph-promotability.sh"
 run_case "16-gate-validate-all-violations" "test-gate-validate-verb.sh"
 
-echo "FIELD-REPORT CANARY PASS: captured events/artifacts + equivalent 26-node run + 16 regression scenarios"
+echo "FIELD-REPORT CANARY PASS: synthetic events/artifacts + 26-node run + 16 regression scenarios"

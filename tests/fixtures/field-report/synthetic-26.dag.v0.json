@@ -1,0 +1,309 @@
+{
+  "schema": "singular.orchestration.dag.v0",
+  "requiredNodes": [
+    "node-00",
+    "node-25"
+  ],
+  "nodes": [
+    {
+      "id": "node-00",
+      "stage": "S0",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "test",
+      "dependsOn": [],
+      "requiredCompletion": "Synthetic step 0 verified"
+    },
+    {
+      "id": "node-01",
+      "stage": "S0",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "build",
+      "dependsOn": [
+        "node-00"
+      ],
+      "requiredCompletion": "Synthetic step 1 verified"
+    },
+    {
+      "id": "node-02",
+      "stage": "S0",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "build",
+      "dependsOn": [
+        "node-01"
+      ],
+      "requiredCompletion": "Synthetic step 2 verified"
+    },
+    {
+      "id": "node-03",
+      "stage": "S0",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "test",
+      "dependsOn": [
+        "node-02"
+      ],
+      "requiredCompletion": "Synthetic step 3 verified"
+    },
+    {
+      "id": "node-04",
+      "stage": "S0",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "build",
+      "dependsOn": [
+        "node-02"
+      ],
+      "requiredCompletion": "Synthetic step 4 verified"
+    },
+    {
+      "id": "node-05",
+      "stage": "S1",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "build",
+      "dependsOn": [
+        "node-03",
+        "node-04"
+      ],
+      "requiredCompletion": "Synthetic step 5 verified"
+    },
+    {
+      "id": "node-06",
+      "stage": "S1",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "test",
+      "dependsOn": [
+        "node-05"
+      ],
+      "requiredCompletion": "Synthetic step 6 verified"
+    },
+    {
+      "id": "node-07",
+      "stage": "S1",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "build",
+      "dependsOn": [
+        "node-06"
+      ],
+      "requiredCompletion": "Synthetic step 7 verified"
+    },
+    {
+      "id": "node-08",
+      "stage": "S1",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "human-gate",
+      "dependsOn": [
+        "node-07"
+      ],
+      "requiredCompletion": "Synthetic step 8 verified",
+      "authority": "operator",
+      "humanGate": {
+        "requestRef": "docs/orchestration/human-gates/node-08.human-gate.json",
+        "approvalRef": "docs/orchestration/human-gates/node-08.human-approval.json"
+      }
+    },
+    {
+      "id": "node-09",
+      "stage": "S1",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "test",
+      "dependsOn": [
+        "node-08"
+      ],
+      "requiredCompletion": "Synthetic step 9 verified"
+    },
+    {
+      "id": "node-10",
+      "stage": "S2",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "build",
+      "dependsOn": [
+        "node-09"
+      ],
+      "requiredCompletion": "Synthetic step 10 verified"
+    },
+    {
+      "id": "node-11",
+      "stage": "S2",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "build",
+      "dependsOn": [
+        "node-10"
+      ],
+      "requiredCompletion": "Synthetic step 11 verified"
+    },
+    {
+      "id": "node-12",
+      "stage": "S2",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "test",
+      "dependsOn": [
+        "node-11"
+      ],
+      "requiredCompletion": "Synthetic step 12 verified"
+    },
+    {
+      "id": "node-13",
+      "stage": "S2",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "build",
+      "dependsOn": [
+        "node-12"
+      ],
+      "requiredCompletion": "Synthetic step 13 verified"
+    },
+    {
+      "id": "node-14",
+      "stage": "S2",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "build",
+      "dependsOn": [
+        "node-13"
+      ],
+      "requiredCompletion": "Synthetic step 14 verified"
+    },
+    {
+      "id": "node-15",
+      "stage": "S3",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "test",
+      "dependsOn": [
+        "node-14"
+      ],
+      "requiredCompletion": "Synthetic step 15 verified"
+    },
+    {
+      "id": "node-16",
+      "stage": "S3",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "human-gate",
+      "dependsOn": [
+        "node-15"
+      ],
+      "requiredCompletion": "Synthetic step 16 verified",
+      "authority": "operator",
+      "humanGate": {
+        "requestRef": "docs/orchestration/human-gates/node-16.human-gate.json",
+        "approvalRef": "docs/orchestration/human-gates/node-16.human-approval.json"
+      }
+    },
+    {
+      "id": "node-17",
+      "stage": "S3",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "build",
+      "dependsOn": [
+        "node-16"
+      ],
+      "requiredCompletion": "Synthetic step 17 verified"
+    },
+    {
+      "id": "node-18",
+      "stage": "S3",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "test",
+      "dependsOn": [
+        "node-17"
+      ],
+      "requiredCompletion": "Synthetic step 18 verified"
+    },
+    {
+      "id": "node-19",
+      "stage": "S3",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "build",
+      "dependsOn": [
+        "node-18"
+      ],
+      "requiredCompletion": "Synthetic step 19 verified"
+    },
+    {
+      "id": "node-20",
+      "stage": "S4",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "build",
+      "dependsOn": [
+        "node-19"
+      ],
+      "requiredCompletion": "Synthetic step 20 verified"
+    },
+    {
+      "id": "node-21",
+      "stage": "S4",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "test",
+      "dependsOn": [
+        "node-20"
+      ],
+      "requiredCompletion": "Synthetic step 21 verified"
+    },
+    {
+      "id": "node-22",
+      "stage": "S4",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "build",
+      "dependsOn": [
+        "node-21"
+      ],
+      "requiredCompletion": "Synthetic step 22 verified"
+    },
+    {
+      "id": "node-23",
+      "stage": "S4",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "build",
+      "dependsOn": [
+        "node-22"
+      ],
+      "requiredCompletion": "Synthetic step 23 verified"
+    },
+    {
+      "id": "node-24",
+      "stage": "S4",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "test",
+      "dependsOn": [
+        "node-23"
+      ],
+      "requiredCompletion": "Synthetic step 24 verified"
+    },
+    {
+      "id": "node-25",
+      "stage": "S5",
+      "area": "fixture",
+      "layer": "verification",
+      "kind": "human-gate",
+      "dependsOn": [
+        "node-24"
+      ],
+      "requiredCompletion": "Synthetic step 25 verified",
+      "authority": "operator",
+      "humanGate": {
+        "requestRef": "docs/orchestration/human-gates/node-25.human-gate.json",
+        "approvalRef": "docs/orchestration/human-gates/node-25.human-approval.json"
+      }
+    }
+  ]
+}

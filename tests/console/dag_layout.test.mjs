@@ -1,4 +1,4 @@
-/* tests/console/dag_layout.test.mjs — regression cover for PMGO-001, the DAG
+/* tests/console/dag_layout.test.mjs — regression coverage for the DAG
    lens rendering a four-wide graph as one sequential rail.
 
    The fixture is the audit's contract: every node has its own stage, the stage

@@ -15,7 +15,7 @@
 #      hit rates with the refusal reason mix; it validates against the shipped v0
 #      schema.
 #
-# Guarantees pinned BEHAVIORALLY over a fixture (no absence greps, planner rule 9):
+# Guarantees pinned BEHAVIORALLY over a fixture (no absence greps):
 #   - strictly read-only: the whole input fixture tree is byte-identical after
 #     every call (no run artifact / index / event / lease / task file created,
 #     moved, or mutated), and engine/ctx-experiment-report.sh is byte-unchanged.

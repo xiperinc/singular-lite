@@ -6,29 +6,29 @@ https://github.com/user-attachments/assets/826bf112-645b-4293-8b63-cf1c8ad6038b
 
 singular is a bash + Python orchestration engine that drives autonomous AI coding agents
 in parallel against a repository. It implements a three-tier scheduling model
-(L0 origin loop → L1 area planners → L2 worker agents) with durable leases, state packets,
+(L0 scheduler → L1 drivers → L2 worker agents) with durable leases, state packets,
 gate/audit pipelines, and git-worktree isolation. The engine is installed once per machine
 and pinned per consumer repo — improvements propagate by bumping a version pin, not by
 re-copying scripts.
 
 ## How it works
 
-### Agent tiers
+### Scheduling tiers
 
 | Tier | Role |
 | --- | --- |
-| **L0 origin** | The single scheduler. Runs the reconcile cycle: import → recover → integrate → dispatch → snapshot. Holds the origin lock only during control work. |
-| **L1 area planners** | One planner per DAG node (area). Reads the node's context, plans a batch of L2 tasks, and stages them as proposals for L0 to import. |
+| **L0 origin** | Bash control loop (`autonomate.sh` / `reconcile.sh`), not a model agent. Imports packets, recovers leases, integrates completed work, schedules planning and dispatch, and writes snapshots. |
+| **L1 drivers** | Bash orchestration: `l1-plan-node.sh` invokes a model planner for a DAG node and stages its proposals; `l1-drive.sh` drives one task through worker, gate, audit and bounded recovery. L1 is not itself a persistent model agent. |
 | **L2 workers** | Execute a single task in an isolated git worktree on a per-task branch. Produce a state packet (owned files, changes, evidence). An auditor reviews the packet; the decider routes the outcome. |
 
 ### Reconcile cycle
 
 Each `singular reconcile --actuate` runs:
 
-1. **Import** — pull staged L1 task proposals into the DAG under the origin lock.
+1. **Import** — validate and import completed state packets from the inbox.
 2. **Recover** — reclaim stale leases whose workers have exited or timed out.
 3. **Integrate** — merge completed worker branches into the target branch under the git-op lock.
-4. **Dispatch** — pre-lease frontier tasks and spawn L2 workers.
+4. **Plan and dispatch** — generate tasks when needed, import staged planner proposals, pre-lease frontier tasks and launch L1 task drivers, which invoke L2 workers.
 5. **Snapshot** — write a human-readable project state snapshot.
 
 ### Leases and packets
@@ -66,6 +66,13 @@ drive must park instead of spending another product repair. See
 [`docs/review-policy.md`](docs/review-policy.md) and
 `singular review-policy --help`.
 
+Two guards are off by default. `SINGULAR_RED_PROOF` makes the host run a task's
+declared proof tests on the base and on the candidate before the audit
+([`docs/red-proof.md`](docs/red-proof.md)). `SINGULAR_ACCEPTANCE=every-path`
+applies the driver's acceptance rule again at packet import, integration,
+`singular accept-packet` and recovery
+([`docs/acceptance.md`](docs/acceptance.md)).
+
 `singular init` scaffolds `docs/orchestration/gates/gate.sh` as a starting point.
 The sidecar is never required — including on `schemaVersion: v2`. Without one
 the engine falls back to the exit code plus a deliberately narrow set of log
@@ -85,6 +92,40 @@ from another phase; `1` always reruns, `0` never. The verification
 classification the auditor must echo is a host fact — a mismatching echo is
 rewritten to the host value (`l1.audit_verification_normalized`) rather than
 paid for with another auditor pass.
+
+**What the host is strict about in a verdict, and what it repairs (0.23.6).**
+The verdict value, the task/branch identity, the verification classification
+and which findings block under the review policy carry authority and are never
+adjusted. Format that carries none is normalised before validation instead of
+being refused: properties the schema does not define inside a
+`classifiedFindings[]` or `verificationResults[]` item are dropped, and an
+`accepted` verdict that reports a prior finding `still-open` without repeating
+its text is completed from the host's own record of that finding (P2/P3 goes to
+`findings` as backlog; a blocking prior goes to `requiredFixes`, so the review
+policy returns `needs-fix`; a prior whose severity the host cannot establish is
+still refused). Every change is written to the verdict's `hostNormalization`
+member and the `l1.audit_verdict_normalized` event, and the response as received
+is kept as `audit.json.pre-format-normalize.json`. Unknown top-level members
+stay fatal. `SINGULAR_AUDIT_FORMAT_NORMALIZE=0` restores the strict behaviour.
+
+When the one format-repair retry is also refused but the response names the
+right task and branch, carries a legal verdict value and echoes host
+classifications, the drive ends as `awaiting-audit`, not `escalate-infra`: the
+gated candidate is retained, nothing is accepted, no product repair or review
+round is charged, and the refused response is moved off `audit.json`.
+`singular health` lists the candidate with the command that re-runs only the
+audit:
+
+```bash
+singular drive TASK-1234 --audit-only
+```
+
+That pass replays the retained worker packet instead of launching an
+implementer, reruns the gate on the unchanged head, and audits it from nothing.
+It refuses when the branch has moved. A task parked as `escalate-infra` by an
+earlier engine with the refused response still in `audit.json` (later drives
+answer `accepted-checkpoint-invalid-retained-state`) is adopted by the same
+command.
 
 Host verification is identity-bound. A worker-side request names the task,
 attempt, exact commit/tree, campaign, policy contract and suite; it does not
@@ -175,7 +216,7 @@ Prerequisites:
 
 ```bash
 # Clone and install the engine to ~/.singular
-git clone https://github.com/alex-reysa/singular-lite /path/to/singular-lite
+git clone https://github.com/xiperinc/singular-lite /path/to/singular-lite
 cd /path/to/singular-lite
 bash install.sh
 # -> ~/.singular/versions/<ver>/  ~/.singular/current  ~/.singular/bin/singular
@@ -183,11 +224,15 @@ bash install.sh
 export PATH="$HOME/.singular/bin:$PATH"
 ```
 
-Singular's launch namespace is intentionally clean: `SINGULAR_*`,
-`singular.config.json`, `.singular-version`, `.singular-state/`, and the
-`SINGULAR_HOME` install root (default `~/.singular`). It does not discover or
-import the pre-launch namespace replaced by this release. Start each consumer
-with `singular setup` and author a fresh DAG.
+Singular uses `SINGULAR_*`, `singular.config.json`, `.singular-version`,
+`.singular-state/`, and the `SINGULAR_HOME` install root (default `~/.singular`).
+Use `singular setup` for a new consumer. For an existing consumer, setup
+checks the schema, prints the migration plan, then runs the supported migration
+chain automatically; the migrations
+rewrite legacy schema identifiers while preserving historical gate verdicts.
+Setup also mirrors STOP into an existing legacy state directory. It does not
+copy that directory's contents into the current state root. See
+[upgrading an existing project](docs/upgrade.md).
 
 In each consumer repo:
 
@@ -327,6 +372,94 @@ All per-repo variation lives in the consumer repo, never in engine files:
   `capabilityProfiles{}`, `roleProfiles{}`, `roleRunners{}`, `evidence{}`, `bootstrap{}`,
   `resources{}`, `promoter`, `controlState{}`, and `legacyCompatibility{}`.
 
+### Worker concurrency: the resource governor
+
+`resources.maxConcurrent` (env `SINGULAR_MAX_CONCURRENT`) defaults to
+**`"auto"`**: every reconcile cycle sizes the worker ceiling from the machine it
+is running on and takes the smallest of three budgets.
+
+| Budget | Slots | Tunables (`resources{}` key / env, default) |
+| --- | --- | --- |
+| CPU | `min(autoMaxConcurrent, floor((cores - cpuReserveCores) * workersPerCore))`, at least 1 | `autoMaxConcurrent` / `SINGULAR_AUTO_MAX_CONCURRENT` `8`; `cpuReserveCores` / `SINGULAR_CPU_RESERVE_CORES` `2`; `workersPerCore` / `SINGULAR_WORKERS_PER_CORE` `1` |
+| Memory | `running workers + floor((available - memoryReserveBytes) / estimatedWorkerBytes)`, at least 1 | `estimatedWorkerBytes` / `SINGULAR_ESTIMATED_WORKER_BYTES` 1 GiB; `memoryReserveBytes` / `SINGULAR_MEMORY_RESERVE_BYTES` 2 GiB |
+| Disk | `floor((free - diskReserveBytes) / estimatedWorktreeBytes)` (unchanged; may be 0, which is low-disk mode) | `diskReserveBytes`, `estimatedWorktreeBytes` |
+
+A worker is an agent CLI that mostly waits on a remote model, so one per core is
+affordable; two cores are kept for the loop itself and the operator, and the cap
+of 8 is where serial integration and provider rate limits, not this machine,
+become the bottleneck. Available memory is `MemAvailable` on Linux and free +
+inactive + speculative + purgeable pages (`vm_stat`) on macOS. On a 12-core host
+with 9 GiB available that is `min(8, 7, disk)` = 7 workers.
+
+An **explicit integer** keeps the pre-governor rule exactly — `min(integer, disk
+slots)`, same record, same reasons — and is a fixed upper bound. Use it to pin a
+ceiling deliberately; `singular doctor` warns when it is at most half or at least
+twice what the machine supports.
+
+Separately from the ceiling, each cycle checks **live pressure** before admitting
+anything new. The signal is **CPU utilisation**: the busy fraction of all cores
+over a short window (`cpuSampleSeconds` / `SINGULAR_CPU_SAMPLE_SEC`, `1`),
+read from `top -l 2 -n 0` on macOS and from two readings of `/proc/stat` on
+Linux (iowait counts as idle). When it is above `cpuBusyHighWater`
+(`SINGULAR_CPU_BUSY_HIGH_WATER`, `0.90`), or available memory is below
+`memoryReserveBytes`, the cycle starts **no new worker and no new planner**;
+running work is never stopped, and integration, promotion and imports continue.
+Admission resumes once the CPU is below `cpuBusyLowWater`
+(`SINGULAR_CPU_BUSY_LOW_WATER`, `0.75`) or memory is back above the reserve
+plus one worker — the gap is deliberate, so the loop does not flap. This
+applies to explicit ceilings too; `"throttle": false`
+(`SINGULAR_RESOURCE_THROTTLE=0`) turns it off.
+
+**Why not the load average.** Until 0.23.6 the signal was the 1-minute load
+average per core. It counts threads blocked on I/O and lags by a minute: on a
+12-core macOS host it read 15–30 while the CPU was 55% idle, so the governor
+throttled an idle machine, and at another moment 30 with the CPU 0% idle, where
+throttling was right. Load per core is now only the **fallback**, used when the
+CPU cannot be sampled (the probe failed, or `SINGULAR_CPU_SAMPLE_SEC=0`), with
+its own marks `loadHighWater` (`SINGULAR_LOAD_HIGH_WATER`, `1.5`) and
+`loadLowWater` (`SINGULAR_LOAD_LOW_WATER`, `1.0`). `pressureSignal` in the plan
+says which one decided (`cpu-busy`, `load-average` or `none`). A hold taken on
+one signal is released by the other's low-water mark.
+
+Tests and scripts inject the facts instead of measuring: `--cpu-busy` /
+`SINGULAR_RESOURCE_CPU_BUSY` (a fraction in `[0,1]`), and a caller that injects
+the load (`--load-1m` / `SINGULAR_RESOURCE_LOAD_1M`) is not sampled at all, so
+it exercises the fallback deterministically. `singular health` and
+`singular doctor` reuse the loop's last sample when it is under 30 s old.
+
+**Minimum-progress floor.** A host saturated by *other* processes never falls
+back under the low-water mark, so a strict hold would stop the loop for good.
+When the hold would apply and the loop has nothing running at all — no active
+worker and no active planner — the cycle admits exactly one unit of work: one
+worker if a task is runnable, otherwise one planner (never both). The plan says
+so: `reason` is `load-high-floor` or `memory-low-floor` and `progressFloor` is
+`true` (`cpu-busy-floor` when the CPU signal took the hold). As soon as anything is running the hold is strict again, so the floor
+is one unit at a time, not one extra per cycle. `"progressFloor": 0`
+(`SINGULAR_PROGRESS_FLOOR=0`) restores the strict hold. A planner counts as
+running while its L1 lease is live, so a crashed planner's lease holds the
+floor shut until it is reclaimed (`SINGULAR_L1_STALE_MINUTES`).
+
+`origin.resource_plan` records the decision each cycle: `configuredSlots`,
+`effectiveSlots`, `availableSlots`, `cpuSlots`, `memorySlots`, `diskSlots`,
+`cpuBusy`, `pressureSignal`, `loadPerCore`, `availableMemoryBytes`, `mode`,
+`admission` (`open`, `throttled` or `floor`), `progressFloor`, and a `reason`
+naming what is binding — `cpu-bound`, `memory-bound`, `disk-bound`, `cpu-busy`,
+`load-high`, `memory-low`, `cpu-busy-floor`, `load-high-floor`,
+`memory-low-floor`, or for an explicit integer `configured-capacity-available` /
+`disk-limited-concurrency`. If the machine cannot be measured, `auto` falls back
+to 3 workers and says `probe-unavailable`; a failed probe never stops a cycle.
+`singular health` prints the same view, and `singular doctor` reports it as
+`resources.machine-capacity`.
+
+Planning follows the ceiling: with `SINGULAR_ENABLE_L1_PARALLEL=1`,
+`SINGULAR_MAX_L1_CONCURRENT` defaults to `auto` = half the effective worker
+ceiling (`plannerFraction` / `SINGULAR_L1_AUTO_FRACTION`, at least 1, at most
+the frontier), and `SINGULAR_MAX_DISPATCH` defaults to the effective ceiling.
+Parallel L1 planning itself stays opt-in: the serial planner asks one node for
+up to the whole dispatch budget while the fanout asks each node for
+`SINGULAR_L1_TASKS_PER_NODE` (default 1), so on a single-node frontier turning
+it on by default would plan less per cycle, not more.
+
 ### Per-role runners and review isolation
 
 `roleRunners` pins an adapter per role (`implementer`, `auditor`, `planner`,
@@ -347,7 +480,8 @@ decides when a DAG node's gate may be promoted — a bare name resolves to
 own built-in registry, so a repo with its own DAG matches nothing and stalls
 after layer 0, reporting only `promotion: no promotable frontier gates` — the
 same line a merely not-yet-ready frontier prints. `singular doctor` now names this
-directly (`graph.promotability`). `tools/promote-gate.sh` is a worked example.
+directly (`graph.promotability`). Configure a project promoter that registers
+your DAG nodes.
 Note that evaluation nodes are governed separately, by `authority` on the node:
 absent or `operator` means manual promotion, `agent-review-allowed` lets a valid
 `gate-review.v0` record promote them.
@@ -380,7 +514,8 @@ executable, while external skills, MCP servers, and plugins must be opted into
 explicitly. Evidence composition defaults to 256 KiB, excerpts to 2 KiB,
 cumulative raw retrieval to 256 KiB, and the audit input canary to 100,000
 tokens. Worktree scheduling reserves 2 GiB, estimates 256 MiB per worktree,
-and caps the starter at three workers. Semantic control snapshots default to a
+and sets `resources.maxConcurrent` to `"auto"`, using the resource governor's
+computed worker ceiling. Semantic control snapshots default to a
 300-second interval; set `controlState.commitIntervalSeconds` to `0` only for
 legacy every-cycle snapshots.
 
@@ -406,15 +541,31 @@ patterns ending in `*`; allowed values are written to
 
 ### Operator env knobs
 
-| Env knob | Default | Effect |
+| Env knob | Configured default | Effective limit / behavior |
 | --- | --- | --- |
-| `SINGULAR_MAX_CONCURRENT` | `3` | Maximum L2 workers running concurrently (an upper bound — adaptive disk scheduling may lower it, and zero effective slots enters low-disk mode). |
-| `SINGULAR_MAX_DISPATCH` | `5` | Maximum tasks dispatched per reconcile cycle. |
+| `SINGULAR_MAX_CONCURRENT` | `auto` | Maximum L2 workers running concurrently. `auto` sizes it every cycle as the minimum of the CPU, memory and disk budgets (see "Worker concurrency: the resource governor"). An integer is a fixed upper bound that only disk may lower; zero effective slots enters low-disk mode. |
+| `SINGULAR_MAX_DISPATCH` | `auto` | Maximum tasks dispatched per reconcile cycle. `auto` / unset follows the effective worker ceiling. |
+| `SINGULAR_ENABLE_L1_PARALLEL` | `0` | `1` plans several independent DAG nodes concurrently. Opt-in (the launchd launcher turns it on). |
+| `SINGULAR_MAX_L1_CONCURRENT` | `auto` | Parallel L1 planner cap when the fanout is on. `auto` is `SINGULAR_L1_AUTO_FRACTION` of the effective worker ceiling, at least 1; an integer is a fixed cap. |
+| `SINGULAR_L1_AUTO_FRACTION` | `0.5` | Share of the worker ceiling given to planners when the planner cap is `auto`. |
+| `SINGULAR_AUTO_MAX_CONCURRENT` | `8` | Hard cap on the `auto` worker ceiling. |
+| `SINGULAR_CPU_RESERVE_CORES` | `2` | Logical cores left out of the `auto` CPU budget. |
+| `SINGULAR_WORKERS_PER_CORE` | `1` | Workers allowed per remaining core. |
+| `SINGULAR_ESTIMATED_WORKER_BYTES` | `1073741824` | Memory one worker is assumed to need (agent CLI plus a gate run). |
+| `SINGULAR_MEMORY_RESERVE_BYTES` | `2147483648` | Available memory kept free; below it no new work is admitted. |
+| `SINGULAR_CPU_BUSY_HIGH_WATER` | `0.90` | CPU busy fraction (all cores, sampled over `SINGULAR_CPU_SAMPLE_SEC`) above which a cycle admits no new worker or planner. The primary live-pressure signal. |
+| `SINGULAR_CPU_BUSY_LOW_WATER` | `0.75` | CPU busy fraction below which admission resumes. |
+| `SINGULAR_CPU_SAMPLE_SEC` | `1` | CPU sampling window in seconds. `0` never samples, which makes load per core the signal. |
+| `SINGULAR_LOAD_HIGH_WATER` | `1.5` | Fallback signal, used only when CPU utilisation cannot be sampled: 1-minute load per core above which a cycle admits no new worker or planner. |
+| `SINGULAR_LOAD_LOW_WATER` | `1.0` | Fallback signal: load per core below which admission resumes. |
+| `SINGULAR_PROGRESS_FLOOR` | `1` | Under a live-pressure hold with no worker and no planner running, admit exactly one unit of work so a permanently saturated host cannot starve the loop. `0` = strict hold. |
+| `SINGULAR_RESOURCE_THROTTLE` | `1` | `0` disables the live-pressure admission gate (the ceiling still applies). |
+| `SINGULAR_L1_SKIP_NODES_WITH_OPEN_TASKS` | `0` | With parallel L1 planning, skip a frontier node that still has a task that is ready, in flight or accepted. For consumers whose planner batch covers a whole node: planning it again can only return "nothing to plan", which costs a planner slot per cycle and is recorded as a planner failure. Failed, blocked and parked tasks do not hold the node. |
 | `SINGULAR_DETACHED_DISPATCH` | `1` | **Default ON.** Reconcile spawns workers in their own session and returns in seconds; the reaper attributes outcomes on later cycles. Set `0` for the legacy synchronous batch wait. |
 | `SINGULAR_AUTO_INTEGRATE` | `1` | Automatically integrate (merge) completed worker branches in direct `reconcile --actuate`, `singular auto`, launchd, and console-driven cycles. |
-| `SINGULAR_PUSH` | `0` direct / `1` auto | Push integrated branches to the remote. Direct engine commands default local-only; `singular auto`/launchd set `1` unless overridden. |
-| `SINGULAR_MAX_HOURS` | `12` | Wall-clock budget for the autonomy loop (`singular auto`). |
-| `SINGULAR_MAX_RETRIES` | `3` | Per-task worker retries before the decider escalates. |
+| `SINGULAR_PUSH` | `0` direct / `1` auto | Push to `origin` after integration and control-state commits. Direct commands default to no push; `singular auto` and the launchd launcher enable it unless `SINGULAR_PUSH=0`. |
+| `SINGULAR_MAX_HOURS` | `20` | Wall-clock budget in hours for `singular auto`; the launchd launcher supplies its own value (below). |
+| `SINGULAR_MAX_RETRIES` | `3` | Effective product-repair ceiling: 1 for normal risk (including undeclared risk with no override), 2 for high risk. The driver takes the minimum of this setting and the risk-tier ceiling; lowering it can reduce repairs to 0. Review capacity is checked separately before each product pass. |
 | `SINGULAR_STALE_MINUTES` | `60` | Lease age (minutes) before a task without a live dispatch pid is reclaimed by the reaper. |
 | `SINGULAR_PLANNER_BACKOFF_SECONDS` | `900` | Wait after an ordinary planner failure before planning is attempted again. |
 | `SINGULAR_PLANNER_QUOTA_BACKOFF_SECONDS` | `1800` | Wait after a usage limit (429) or entitlement denial (403) — a window the account has to sit out. The loop sleeps through it without incrementing the circuit breaker. |
@@ -424,14 +575,45 @@ patterns ending in `*`; allowed values are written to
 | `SINGULAR_SESSION_AFFINITY` | `1` | Reuse a role's prior runtime session when all staleness gates pass; `0` always runs fresh. |
 | `SINGULAR_FIX_PROMPT_STRUCTURED` | `1` | Structured fix prompt on retries (authoritative findings); `0` = legacy `fix_hints` tail. |
 | `SINGULAR_DECIDER_FAST` | `1` | Resolve clear-cut failure classes by host policy table; `0` routes every failure through the model decider. |
-| `SINGULAR_WORKER_INFRA_MAX` | `1` | Extra worker re-runs on an infra failure before surfacing `worker-infra`. |
-| `SINGULAR_AUDIT_INFRA_MAX` | `2` | Extra auditor re-runs on an infra failure before surfacing `audit-infra`. |
+| `SINGULAR_WORKER_INFRA_MAX` | `1` | Effective limit: 1 extra worker run on infrastructure failure before `worker-infra`. The driver clamps any positive integer to 1; 0 disables retries. |
+| `SINGULAR_AUDIT_INFRA_MAX` | `2` | Effective limit: 1 extra auditor run on infrastructure failure before `audit-infra`. The driver clamps any positive integer to 1; 0 disables retries. |
+| `SINGULAR_AUDIT_FORMAT_NORMALIZE` | `1` | Normalise audit-verdict format before validation (drop unknown properties inside finding/verification items; carry still-open prior findings the host can classify). `0` refuses such verdicts as before. |
+| `SINGULAR_IMPORT_FAIL_PARK` | `3` | Consecutive identical import failures of the same inbox packet before it is parked: one `packet.import_parked` event, an ATTENTION line in `singular health`, and no further validation until the file changes. |
+| `SINGULAR_DISPATCH_REFUSAL_PARK_THRESHOLD` | `3` | Consecutive dispatches of one task that the driver refuses (exit 2) for the same reason before the task is parked: one `origin.dispatch_refusal_parked` event carrying the reason, an ATTENTION line in `singular health` with the reason and `singular unpark TASK`, and no further dispatch until it is unparked. A dispatch that gets past its preconditions, or a different reason, restarts the count. |
+| `SINGULAR_PROMOTION_SWEEP_MAX` | `3` | Promoter runs per reconcile cycle in the promotion sweep, which re-attempts promotion for every node whose tasks are complete and whose gate is unpublished. A node is attempted again only when its task set, a task status or the target HEAD changed since its last attempt. `0` disables the sweep; `SINGULAR_AUTO_PROMOTE_GATES=0` disables all automatic promotion. |
+| `SINGULAR_PLANNER_OUTPUT_REPAIR` | `1` | When a planner's task batch fails host validation (for example the task parser rejects a scope bullet), re-invoke the planner once with its own output, the exact diagnostic and the rule before counting a planner failure. `0` fails at once. Output still malformed afterwards is `failureClass: malformed-output`, distinct from provider and infrastructure failures. |
+| `SINGULAR_LOCK_WAIT_SEC` | `120` | Seconds a lock-taking operator verb (`unpark`, `supersede`, `recover candidate`, `integrate --task`, …) waits for a running loop cycle to release the origin lock before failing with `origin lock busy`. `--wait=SECONDS` / `--no-wait` set it for one command; `0` fails fast. |
+| `SINGULAR_LOCK_YIELD_SEC` | `20` | How long a reconcile cycle holds off at its start while an operator command is queued on the origin lock. `0` never yields. |
 | `SINGULAR_GATE_TIMEOUT_SEC` | `3600` | Wall-clock bound on the consumer's gate command; the whole process tree is killed on expiry and the result is `inconclusive-infrastructure`, never a product failure. `0` disables. Before this existed a hung gate held a worker slot indefinitely and made cooperative STOP never fire. |
 | `SINGULAR_KILL_GRACE_SEC` | `10` | Seconds a timed-out runner gets to run its EXIT trap — where the read-only restore guard lives — before the tree is SIGKILLed. |
 | `SINGULAR_READONLY_GUARD_MODE` | `restore` | `restore` puts the working tree back after a read-only run; `report` logs what it would do and changes nothing; `off` disarms it. |
 | `SINGULAR_READONLY_GUARD_KEEP_DAYS` | `30` | How long `singular gc` keeps guard journals, which hold quarantined content, before removing them. |
 | `SINGULAR_CONTEXT_SECTION_MAX_CHARS` | `4000` | Per-section cap on continuity content appended to prompts. |
 | `SINGULAR_PREFLIGHT_REQUIRE_ACCEPTANCE` | `1` | Preflight requires non-empty `acceptanceCriteria` on a task. |
+| `SINGULAR_RED_PROOF` | `off` | `observe` runs and records a task's declared proof on the base and the candidate; `enforce` also requires the outcome `proved` (or `waived`) before the audit. See [`docs/red-proof.md`](docs/red-proof.md). |
+| `SINGULAR_RED_PROOF_TIMEOUT_SEC` | `1200` | Time limit in seconds for each proof run; a run that reaches it is infrastructure trouble, never a product failure. |
+| `SINGULAR_ACCEPTANCE` | `driver-only` | `every-path` applies the acceptance rule at import, integration, `singular accept-packet` and recovery too, and parks a refused task once. See [`docs/acceptance.md`](docs/acceptance.md). |
+
+### Launchd launcher defaults
+
+`templates/launchd/run-orchestrator.sh` defaults to watchdog mode, which starts
+`singular auto`'s engine loop. Other execution modes invoke a single reconcile. It checks
+for Git, Go, Bash >= 4, a working Codex executable and a readable Codex
+credential file, even when the project's selected runner is another provider.
+
+| Setting | Launchd default | Meaning |
+| --- | --- | --- |
+| `SINGULAR_PUSH` | `1` | Enables pushes; set `SINGULAR_PUSH=0` to opt out. Direct commands default to `0`. |
+| `SINGULAR_L2_SANDBOX` | `danger-full-access` | Codex L2 sandbox selection; the Codex adapter otherwise defaults to `workspace-write`. |
+| `SINGULAR_TARGET_BRANCH` | `codex/singular-bootstrap-target` | Fallback integration target; configure the consumer's actual branch. |
+| `SINGULAR_ENABLE_L1_PARALLEL` | `1` | Enables parallel node planning; the engine otherwise defaults to `0`. |
+| `SINGULAR_MAX_HOURS` | `12` | Loop wall-clock budget in hours; the engine otherwise defaults to `20`. |
+
+These are launcher fallbacks, not changes to the engine or starter config.
+Project configuration is still loaded by the engine. Keep `SINGULAR_PUSH=0`
+in the effective configuration to disable pushes: a value in the config's
+`env` object overrides the process environment, and local shell configuration
+can override it again.
 
 ### Context knobs (0.20.0)
 
@@ -562,7 +744,7 @@ Python dependency. Enable it in the effective `singular.config.json`:
 
 Paths are canonical project-relative paths and are contained after symlink
 resolution. Role policy is applied before source metadata is exposed. The
-command role is an input from the host invocation boundary; the B2 CLI does not
+command role is an input from the host invocation boundary; the context CLI does not
 authenticate a caller by itself. An absent or false `enabled` value returns a
 versioned `disabled` result and performs no source discovery.
 
@@ -634,7 +816,7 @@ Build admits the complete task contract and open/violated run obligations
 before optional lexical matches. If mandatory bytes do not fit, it exits 3
 with `mandatory-overflow`; optional overflow is recorded in `omissions`. Byte
 accounting is exact UTF-8 at the host boundary. Provider system content, tool
-schemas, session history, and output remain explicitly unknown in B2 rather
+schemas, session history, and output remain explicitly unknown to the context service rather
 than being counted as zero. The output contract is
 `singular.context.bundle.v1` in `schemas/context-bundle.v1.schema.json`.
 Prompt bytes and their provenance are fields of the same hash-addressed JSON
@@ -646,7 +828,7 @@ doctor --json` projects the effective service policy and recent bundle details.
 Search, get, effective-config, and explain never write accounting or retrieval
 state.
 
-### Retrieval evaluation and campaign analysis (B5)
+### Retrieval evaluation and campaign analysis
 
 Two read-only evaluation surfaces sit on top of the same service. Neither needs
 a provider, and neither writes into the state directories it measures.
@@ -695,9 +877,8 @@ path and SHA-256 so a report can be re-derived. Exit 2 if the event stream or
 runs directory is absent; a declared-but-absent optional input becomes an
 `absent-input` unknown instead.
 
-The measured findings are in `docs/brain-build-plan/context-findings.md`;
-installation, activation, immutable runtime adoption, rollback and the memory
-approval policy are in `docs/brain-build-plan/context-adoption.md`.
+Installation, activation, immutable runtime adoption, rollback and the memory
+approval policy are in [the context adoption guide](docs/context-adoption.md).
 
 ### Reviewed persistent memory
 
@@ -949,6 +1130,7 @@ opt-in modules:
 singular-ext/
   storage-proof.sh    # example: durable-proof regime
   promote-gate.sh     # example: gate promoter
+  grok-implementer.sh # example: route the implementer to Grok
 ```
 
 Modules are listed in `singular.config.json` → `modules[]`. A repo that doesn't list them
@@ -973,10 +1155,10 @@ Two versions move independently:
 ## Development and tests
 
 ```bash
-bash tests/run.sh    # full regression suite (210+ tests), serial
+bash tests/run.sh    # full regression suite, serial
 SINGULAR_TEST_JOBS=6 bash tests/run.sh   # the same suite, six files at a time
 singular test         # the same suite as a supervised, attachable run
-bash tests/field-report-canary.sh  # required before promoting 0.11.2, 0.12.0, or 0.13.0
+bash tests/field-report-canary.sh  # required before promoting a release
 ```
 
 Every test file builds its own scratch repository, so files are independent by
@@ -985,8 +1167,8 @@ discovery order, so the output, the summary and `progress.jsonl` are identical
 to a serial run. A file that must not share the machine (it asserts wall-clock
 bounds, binds a fixed port, or drives a headless browser) declares
 `# singular-test: serial` in its first 40 lines and runs after the parallel
-batch. On the reference machine the suite takes 57 minutes serially and 12 with
-six jobs; this repository's own `gateCommand` uses four.
+batch. Duration depends on the checkout, host and concurrency; this repository's
+own `gateCommand` uses four jobs.
 
 `singular test` runs the resolved engine's own `tests/run.sh` as a supervised job
 and keeps the evidence in the current repo under
@@ -1038,10 +1220,9 @@ files, or generated run artifacts.
 
 singular executes repo-configured shell commands and launches local coding
 agents in git worktrees. Review `singular.config.json`, `singular.config.sh`, and
-task files before running it in an untrusted repo. Report vulnerabilities through
-GitHub's private vulnerability reporting for this repository; if that is
-unavailable, open a minimal public issue asking for a private channel and do not
-include exploit details.
+task files before running it in an untrusted repo. See [SECURITY.md](SECURITY.md)
+for the reporting-channel status. A working private reporting channel still
+requires the repository owners' decision and activation.
 
 ## License
 

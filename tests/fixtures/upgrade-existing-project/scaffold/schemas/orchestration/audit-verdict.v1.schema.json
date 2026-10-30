@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.audit-verdict.v1",
+  "title": "singular Auditor Verdict v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "taskId",
+    "runId",
+    "branch",
+    "verdict",
+    "evidenceReviewed",
+    "verificationResults",
+    "commandsRun",
+    "findings",
+    "requiredFixes",
+    "rationale"
+  ],
+  "properties": {
+    "schema": { "const": "singular.orchestration.audit-verdict.v1" },
+    "taskId": { "type": "string", "pattern": "^TASK-[0-9]{4,}$" },
+    "runId": { "type": "string", "minLength": 1 },
+    "branch": { "type": "string", "minLength": 1 },
+    "verdict": {
+      "type": "string",
+      "enum": ["accepted", "needs-fix", "blocked", "needs-human"]
+    },
+    "evidenceReviewed": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "verificationResults": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status", "command", "evidenceRefs", "rationale"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed-product",
+              "inconclusive-infrastructure",
+              "not-rerun-evidence-verified"
+            ]
+          },
+          "command": { "type": "string", "minLength": 1 },
+          "exitCode": { "type": "integer" },
+          "evidenceRefs": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "rationale": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "commandsRun": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "findings": { "type": "array", "items": { "type": "string" } },
+    "requiredFixes": { "type": "array", "items": { "type": "string" } },
+    "rationale": { "type": "string", "minLength": 1 },
+    "findingsStatus": {
+      "description": "Maps host-supplied prior finding IDs to resolved or still-open. Omit when no prior findings were supplied.",
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "enum": ["resolved", "still-open"]
+      }
+    },
+    "classifiedFindings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "severity", "summary"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "severity": {
+            "type": "string",
+            "enum": ["P0", "P1", "P2", "P3"]
+          },
+          "summary": { "type": "string", "minLength": 1 },
+          "trigger": { "type": "string" },
+          "impact": { "type": "string" },
+          "requirement": { "type": "string" },
+          "location": { "type": "string" }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": ["severity"],
+              "properties": {
+                "severity": { "enum": ["P0", "P1"] }
+              }
+            },
+            "then": {
+              "required": ["trigger", "impact", "requirement"],
+              "properties": {
+                "trigger": { "type": "string", "pattern": "\\S" },
+                "impact": { "type": "string", "pattern": "\\S" },
+                "requirement": { "type": "string", "pattern": "\\S" }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "reviewPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "logicalChange",
+        "round",
+        "maxRounds",
+        "originalVerdict",
+        "effectiveVerdict"
+      ],
+      "properties": {
+        "version": { "type": "integer" },
+        "logicalChange": { "type": "string", "minLength": 1 },
+        "round": { "type": "integer" },
+        "maxRounds": { "type": "integer" },
+        "originalVerdict": {
+          "type": "string",
+          "enum": ["accepted", "needs-fix", "blocked", "needs-human"]
+        },
+        "effectiveVerdict": {
+          "type": "string",
+          "enum": ["accepted", "needs-fix", "blocked", "needs-human"]
+        },
+        "blocking": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "backlog": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "downgraded": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "unclassifiedCount": { "type": "integer" },
+        "appliedAt": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

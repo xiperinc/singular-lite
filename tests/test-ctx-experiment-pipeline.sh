@@ -12,7 +12,7 @@
 # corpus exercising every metric family and drives
 # singular_ctx_experiment_pipeline_md over it, asserting the whole walk at once.
 #
-# Guarantees pinned BEHAVIORALLY over the corpus (no absence greps, planner rule 9):
+# Guarantees pinned BEHAVIORALLY over the corpus (no absence greps):
 #   - whole walk: from raw ctx.arm_assigned / ctx.paired_audit / ctx.critic_recheck
 #     / context.strategy_selected / context.resume_failed events + attempts indexes
 #     the rendered tables carry the expected per-arm escape-rate, cost,

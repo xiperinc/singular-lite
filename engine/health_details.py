@@ -13,6 +13,7 @@ import re
 from typing import Any
 
 from human_gate import validate_gate
+from task_lifecycle import regate_command
 
 
 CATEGORIES = (
@@ -99,6 +100,7 @@ def collect_lifecycle(tasks: Path, state: Path) -> dict[str, Any]:
     counts = collections.Counter(str(item.get("phase") or "unknown") for item in active)
 
     candidates: list[dict[str, Any]] = []
+    awaiting_audit: list[dict[str, Any]] = []
     accepted_runs: set[str] = set()
     preserved_history: list[dict[str, Any]] = []
     history_runs: set[str] = set()
@@ -116,6 +118,21 @@ def collect_lifecycle(tasks: Path, state: Path) -> dict[str, Any]:
             recovery = lease.get("recoveryAuthorization")
             recovery = recovery if isinstance(recovery, dict) else {}
             task_id = str(lease.get("taskId") or path.stem)
+            recheck = lease.get("auditRecheck")
+            if isinstance(recheck, dict) and lease.get("status") in ("blocked", "ready"):
+                # A gated candidate whose audit verdict could not be read. The
+                # command re-runs only the audit; no implementer pass.
+                awaiting_audit.append({
+                    "taskId": task_id,
+                    "runId": recheck.get("runId"),
+                    "headSha": recheck.get("headSha"),
+                    "branch": recheck.get("branch"),
+                    "reason": recheck.get("reason"),
+                    "detail": recheck.get("detail"),
+                    "recordedAt": recheck.get("recordedAt"),
+                    "recoveryCommand": recheck.get("recoveryCommand")
+                    or f"singular drive {task_id} --audit-only",
+                })
             for historical in history or []:
                 if not isinstance(historical, dict):
                     continue
@@ -160,10 +177,55 @@ def collect_lifecycle(tasks: Path, state: Path) -> dict[str, Any]:
                 "failureId": latest.get("failureId"),
                 "owner": recovery.get("authorizedBy") or lease.get("owner") or "origin",
                 "permittedNextAction": lease.get("nextAction") or candidate.get("nextAction"),
+                # Exact host command for one unchanged-candidate regate, or ""
+                # when none is currently eligible (see task_lifecycle).
+                "recoveryCommand": regate_command(lease, path),
                 "recoveryAction": recovery.get("action"),
                 "recoveryState": recovery.get("state"),
                 "failureBudgets": lease.get("failureBudgets") if isinstance(lease.get("failureBudgets"), dict) else None,
                 "failureLimits": lease.get("failureLimits") if isinstance(lease.get("failureLimits"), dict) else None,
+            })
+
+    # Inbox packets parked after repeated identical import failures. The
+    # packet stays queued and is retried when its file changes.
+    parked_imports: list[dict[str, Any]] = []
+    failures_dir = state / "import-failures"
+    if failures_dir.is_dir():
+        for path in sorted(failures_dir.glob("*.json")):
+            record, status = _json_record(path)
+            if status != "ok" or not record or record.get("parked") is not True:
+                continue
+            if not (state / "inbox" / str(record.get("packet") or "")).is_file():
+                continue
+            parked_imports.append({
+                "taskId": record.get("taskId"), "packet": record.get("packet"),
+                "error": record.get("error"), "count": record.get("count"),
+                "firstFailedAt": record.get("firstFailedAt"),
+                "lastFailedAt": record.get("lastFailedAt"),
+            })
+
+    # Tasks the reaper parked after consecutive dispatch refusals for one
+    # reason. Reported while the task is still parked; `unpark` clears it.
+    refused_dispatches: list[dict[str, Any]] = []
+    refusals_dir = state / "refusals" / "dispatch"
+    if refusals_dir.is_dir():
+        for path in sorted(refusals_dir.glob("*.json")):
+            record, status = _json_record(path)
+            if status != "ok" or not record or record.get("parked") is not True:
+                continue
+            task_id = str(record.get("taskId") or path.stem)
+            try:
+                head = (Path(tasks) / f"{task_id}.md").read_text(encoding="utf-8", errors="replace")[:4000]
+            except OSError:
+                continue  # superseded or removed: no longer this park's concern
+            if not re.search(r"^Status:\s*`?blocked`?\s*$", head, re.MULTILINE):
+                continue
+            refused_dispatches.append({
+                "taskId": task_id, "reason": record.get("reason"),
+                "count": record.get("count"), "conditionKey": record.get("conditionKey"),
+                "firstAt": record.get("firstAt"), "lastAt": record.get("lastAt"),
+                "parkedAt": record.get("parkedAt"),
+                "suggestedCommand": record.get("suggestedCommand") or f"singular unpark {task_id}",
             })
 
     preserved: list[dict[str, Any]] = list(preserved_history)
@@ -194,6 +256,9 @@ def collect_lifecycle(tasks: Path, state: Path) -> dict[str, Any]:
         "phaseCounts": dict(sorted(counts.items())),
         "implementersActive": counts.get("implementing", 0),
         "candidates": candidates,
+        "awaitingAudit": awaiting_audit,
+        "parkedImports": parked_imports,
+        "refusedDispatches": refused_dispatches,
         "preservedAttempts": preserved,
         "unknownRecords": unknown,
         "sources": {
@@ -219,6 +284,9 @@ def unavailable_lifecycle(
         "phaseCounts": {},
         "implementersActive": 0,
         "candidates": [],
+        "awaitingAudit": [],
+        "parkedImports": [],
+        "refusedDispatches": [],
         "preservedAttempts": [],
         "unknownRecords": [{
             "kind": "configuration",

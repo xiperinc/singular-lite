@@ -1,39 +1,5 @@
 #!/usr/bin/env bash
-# Covers the pure, read-only authored-knowledge NODE resolver
-# engine/ctx-rehydrate-authored-node.sh: the leaf primitive that resolves the
-# executable DAG node owning a task from the durable task->node association in the
-# control-state event log (stage S5-routing, node `rehydrate-path`, layer
-# engine_runtime).
-#
-# Context: TASK-0064's pure builder singular_ctx_rehydrate_authored_triggers
-# <role> <step> [node] [task] accepts an optional [node] slot, but its two live
-# consumers wired in by TASK-0065 (engine/l1-drive.sh, engine/ctx-rehydrate-event.sh)
-# both pass only `implementer implement "$task_id"`, omitting the node dimension
-# because a run's DAG node is not readily in scope at either site. Consequently any
-# authored entry whose `load-when` targets a node/stage can never become eligible and
-# the builder's [node] parameter is dead. This slice is the first, PURE half of
-# closing that gap: a read-only resolver that deterministically resolves the node
-# owning <task_id> from the same durable event-log convention TASK-0032's locator
-# reads. The follow-up wire-in that threads this resolver's output into the [node]
-# slot at BOTH call sites is OUT OF SCOPE here.
-#
-# The file DEFINES a new function only and is invoked by NO existing engine path, so
-# with it present-but-uncalled (auto-sourced by lib.sh's ctx-*.sh loader) the engine
-# is byte-identical to prior behavior (test-engine-clean.sh green).
-#
-# Asserts:
-#   (a) present-but-uncalled: lib.sh auto-sources it (engine/ctx-*.sh) and it defines
-#       the NEW public function; no existing engine path invokes it.
-#   (b) resolution: given a fixture event log in which <task_id> is associated with
-#       exactly one distinct non-empty node, prints exactly that node id (rc 0).
-#   (c) fail-safe on ambiguity: same task mapped to two+ distinct nodes -> empty
-#       output, rc 0 (never a fabricated or arbitrarily first-matched node).
-#   (d) fail-safe on absence: no association / missing / empty log -> empty, rc 0.
-#   (e) determinism: identical bytes + task id -> byte-identical output.
-#   (f) pure/read-only: appends no event, writes no state, never exits non-zero on
-#       well-formed OR malformed input (malformed lines skipped, not fatal).
-# The events log is pinned to an isolated SINGULAR_EVENTS_FILE and all inputs to tmp so
-# the suite never mutates real run state.
+# Regression contracts for ctx-rehydrate-authored-node.
 set -uo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -146,8 +112,7 @@ noev="$(singular_ctx_rehydrate_authored_node "TASK-0007")" \
 export SINGULAR_EVENTS_FILE="$tmp/state/events.ndjson"
 
 # ---------------------------------------------------------------------------
-# (a) wired-in at exactly the two expected consumer sites (TASK-0067). TASK-0066
-#     shipped this resolver present-but-uncalled; TASK-0067's node-dimension
+# (a) Both expected consumer sites use the resolver. Node-dimension
 #     wire-in threads it into the builder's [node] slot at BOTH live consumers —
 #     the injection (engine/l1-drive.sh) and the manifest-record
 #     (engine/ctx-rehydrate-event.sh). No OTHER engine path may reference it, so

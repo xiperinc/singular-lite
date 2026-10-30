@@ -4,11 +4,11 @@
    no DOM, no bundler and no console app around it. Nothing in here touches the
    document; callers turn cells into pixels.
 
-   Columns are dependency WAVES, not stages (PMGO-001). The old layout grouped
+   Columns are dependency WAVES, not stages. The old layout grouped
    nodes by stage, gave each stage a successive column, and computed depth from
-   same-stage dependencies only — so a plan that names a distinct stage per node
-   (AXON) rendered as one sequential rail even though its real graph is four
-   wide, and the server's stage sort could place a node left of its own
+   same-stage dependencies only — so a plan with a distinct stage per node
+   rendered as one sequential rail even when its dependency graph allowed parallel
+   work. The server's stage sort could also place a node left of its own
    prerequisite. Here rank comes from the WHOLE dependsOn graph via a Kahn sweep
    with longest-path relaxation, so `rank(n) = 1 + max(rank(deps))` and every
    equal-rank node is genuinely startable together. Stage identifiers take no

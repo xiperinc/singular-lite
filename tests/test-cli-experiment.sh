@@ -12,7 +12,7 @@
 #   * with the flag OFF (unset or 0), `singular experiment-report ...` refuses
 #     exactly as an unknown command did, and help output is byte-identical to
 #     the pre-hook binary (no `experiment-report` line leaks) — OFF-parity is
-#     asserted behaviorally, never by grepping the source (planner rule 9);
+#     asserted behaviorally, never by grepping the source;
 #   * bad/missing sub-subcommands produce a clear usage error, non-zero exit;
 #   * the command is strictly read-only: it creates / moves / mutates no run
 #     artifact, index, event, lease, or task file, and writes no

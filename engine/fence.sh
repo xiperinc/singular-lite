@@ -10,7 +10,7 @@ if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
 fi
 
 # `singular fence TASK-XXXX` -- the engine-executable exit from a quarantined
-# dispatch, and the answer to Q-OPEN-1 in claudedocs/design-pgid-fencing.md.
+# dispatch; it resolves ownership fencing without discarding retained work.
 #
 # A fence that can produce `quarantined` with no way out reintroduces the bug
 # class this whole sequence exists to remove, so the producer (reconcile's

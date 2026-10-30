@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.gate-review.v0",
+  "title": "singular Evaluation-Gate Review Evidence",
+  "description": "Independent review evidence for a `kind: evaluation` DAG node whose `authority` is agent-review-allowed. Written to docs/orchestration/gates/evidence/<node>.review.json; promote-gate validates it (verdict pass, node match, evidenceRefs exist, headSha an ancestor of the target head, age within SINGULAR_REVIEW_MAX_AGE_HOURS) before recording an agent-review gate result. Operator promotion (promote-gate --operator) never requires this file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "node", "reviewer", "verdict", "evidenceRefs", "rationale", "headSha", "recordedAt"],
+  "properties": {
+    "schema": { "const": "singular.orchestration.gate-review.v0" },
+    "node": { "type": "string", "minLength": 1 },
+    "reviewer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["agent", "subagent", "human"] },
+        "id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "verdict": { "type": "string", "enum": ["pass", "fail"] },
+    "evidenceRefs": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "rationale": { "type": "string", "minLength": 1 },
+    "headSha": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "recordedAt": { "type": "string", "format": "date-time" }
+  }
+}

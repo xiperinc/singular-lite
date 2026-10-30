@@ -146,7 +146,7 @@ def strict_provider_arg_violation(
 
 
 # ---------------------------------------------------------------------------
-# Finite provider context-control support matrix (TASK-1115).
+# Finite provider context-control support matrix (invocation context).
 #
 # This records what the HOST can actually control or observe at the invocation
 # boundary for a given native provider build, and how that claim is evidenced.

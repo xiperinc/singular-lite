@@ -1,29 +1,5 @@
 #!/usr/bin/env bash
-# Covers the REFINEMENT slice of the OPTIONAL authored-knowledge manifest
-# ingestion leaf (stage S5-routing, node `rehydrate-path`, layer engine_runtime).
-# `engine/ctx-rehydrate-authored-triggers.sh` ships a PURE, read-only,
-# present-but-uncalled trigger-set builder
-#
-#   singular_ctx_rehydrate_authored_triggers <role> <step> [node] [task-id]
-#
-# that emits the deterministic, order-stable, de-duplicated set of `load-when`
-# trigger tokens for the run — one per line — drawn from the run's identifying
-# dimensions (role, step, and, when supplied, node and task id). A follow-up
-# slice substitutes the two call sites' hardcoded literal `implement` (the
-# TASK-0062 injection wire-in and the TASK-0063 manifest-record merge) with this
-# set, making TASK-0059's `load-when` matcher usable across role / step / node /
-# task instead of only the literal `implement`.
-#
-#   - full set: `implementer implement rehydrate-path TASK-0063` emits the four
-#     tokens implementer / implement / rehydrate-path / TASK-0063.
-#   - backward compat: the literal `implement` token is present whenever the step
-#     is `implement`, so existing implement-scoped authored entries keep matching.
-#   - optional args: with only <role> <step> supplied, exactly {role, step} is
-#     emitted; an absent node or task id contributes no token (no empty tokens).
-#   - dedup + stable order: repeated dimensions collapse to one token and the
-#     output order is fixed across runs.
-#   - pure / read-only: reads no config or manifest, writes nothing, and never
-#     exits non-zero on well-formed input; identical inputs -> byte-identical.
+# Regression contracts for ctx-rehydrate-authored-triggers.
 set -uo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

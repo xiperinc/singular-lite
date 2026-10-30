@@ -35,15 +35,15 @@ jobs="${SINGULAR_TEST_JOBS:-1}"
 # Environmental preflights, before any test is discovered or run. Both fail
 # once, loudly, instead of letting every dependent test fail separately.
 #
-#   1. Bash >= 4 (PMGO-007). The suite and the engine need it; the harness
+#   1. Bash >= 4. The suite and the engine need it; the harness
 #      itself used to invoke tests with a bare `bash`, so macOS Bash 3.2
 #      produced cryptic per-test failures instead of one diagnosis. The shim
 #      re-execs this script under a vetted interpreter when needed, which is
 #      also why it is sourced before the env scrub below: that scrub unsets
 #      SINGULAR_BASH_BOOTSTRAPPED, harmlessly, because every test is launched
 #      with "$BASH" (already >= 4) and their own inline guards then no-op.
-#   2. A real Git working tree with history and disposable worktrees
-#      (PMGO-010). Most tests need all three; a `git archive` extraction has
+#   2. A real Git working tree with history and disposable worktrees.
+#      Most tests need all three; a `git archive` extraction has
 #      none of them.
 # shellcheck source=../engine/bash-guard.sh
 . "$TESTS_DIR/../engine/bash-guard.sh" || exit 2
@@ -146,6 +146,18 @@ fi
 # with a real CLI). Tests set every SINGULAR_* var they need internally.
 while IFS= read -r _v; do unset "$_v"; done < <(compgen -v | grep '^SINGULAR_' || true)
 unset _v
+# Hermetic machine. The resource governor sizes the worker ceiling from this
+# host's cores and available memory and holds dispatch while the host is
+# saturated — and a suite run is exactly when the host is saturated (most of
+# all under SINGULAR_TEST_JOBS). Without this, any test that expects reconcile
+# to dispatch would pass or fail with the load average. So the whole suite sees
+# one fixed, idle, small machine: 4 cores and 16 GiB available, which `auto`
+# sizes to 2 worker slots on every host. These pin FACTS, not policy — defaults
+# and thresholds stay the engine's own — and a test that is about the governor
+# injects its own facts with the resource-plan.sh flags, which win over these.
+export SINGULAR_RESOURCE_CPU_COUNT=4
+export SINGULAR_RESOURCE_AVAILABLE_MEMORY_BYTES=17179869184
+export SINGULAR_RESOURCE_LOAD_1M=0
 # NOTE: the env scrub cannot scrub what lib.sh re-reads from DISK. A test that
 # sources lib.sh with the CHECKOUT as its root also sources the operator's
 # .singular-state/config.local.sh, whose exports land after the scrub — and an

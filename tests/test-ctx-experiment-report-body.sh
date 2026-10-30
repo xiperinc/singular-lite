@@ -1,46 +1,5 @@
 #!/usr/bin/env bash
-# Covers the read-only experiment REPORT-BODY composer
-# engine/ctx-experiment-report-body.sh. Two corpus renderers are already
-# integrated — singular_ctx_experiment_pipeline_md (TASK-0087: the per-arm
-# escape/cost/bias, strategy, and attempts tables) and
-# singular_ctx_experiment_render_result_md (TASK-0098: the treatment-effect delta
-# and arm-integrity audit tables) — but to author experiment-report.md the
-# operator must invoke BOTH separately and hand-order/concatenate their output.
-# This brick composes them into ONE ordered report-body markdown the operator
-# pipes into the report.
-#
-# It ships NO metric of its own: it only ORDERS and CONCATENATES the two rendered
-# fragments VERBATIM (no recomputation, no reformatting of their table content)
-# under stable section headers, and emits markdown to STDOUT ONLY. It obtains both
-# fragments by delegating to the two integrated composers over the SAME resolved
-# corpus args.
-#
-# Two chained slices, all inside engine/ctx-experiment-report-body.sh:
-#   1. singular_ctx_experiment_report_body_compose <pipeline_md> <result_md>
-#      — assemble the two rendered fragments under stable section headers in a
-#        fixed order (per-arm metrics first, then treatment-effect + arm-integrity),
-#        preserving each fragment's content verbatim.
-#   2. singular_ctx_experiment_report_body_md [runs_dir] [events_file] [metrics_file]
-#      — obtain both fragments by delegating to singular_ctx_experiment_pipeline_md
-#        and singular_ctx_experiment_render_result_md over the SAME resolved corpus
-#        args, compose them via the helper, and emit the complete body to stdout.
-#
-# Guarantees pinned BEHAVIORALLY over a synthetic corpus (no absence greps,
-# planner-contract rule 9):
-#   - byte-identical composition: the per-arm section is byte-identical to
-#     singular_ctx_experiment_pipeline_md over the same resolved inputs, and the
-#     treatment-effect/arm-integrity section is byte-identical to
-#     singular_ctx_experiment_render_result_md over the same inputs, in a stable
-#     order under section headers (per-arm first).
-#   - determinism: the body is byte-identical across repeated runs on one corpus.
-#   - no-arg env-default delegation renders identically to the threaded-arg form.
-#   - fail-safe: an empty corpus renders a well-formed body with zeroed tables and
-#     a zero exit, never an error or partial output.
-#   - STDOUT ONLY / read-only: the corpus tree is byte-identical after every call
-#     (no file created, moved, or mutated — in particular no
-#     docs/context-build-plan/experiment-report.md and no run
-#     artifact/index/event/lease/task file), and the two composed sibling
-#     renderers plus their delegates are byte-unchanged.
+# Regression contracts for ctx-experiment-report-body.
 set -uo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

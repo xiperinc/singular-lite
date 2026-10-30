@@ -585,16 +585,69 @@ cmd_experiment_report() {
 
 # --- console lifecycle helpers (used only by cmd_console) ---------------------
 # NB: bash locals are dynamically scoped — these helpers read cmd_console's
-# locals ($server/$root/$home/$url_file/$pid_file/$log_file) when called from it.
+# locals ($server/$root/$home/$url_file/$pid_file/$port_file/$log_file) when
+# called from it.
 
-# Default port: SINGULAR_CONSOLE_PORT if set; else 8765 when free (stable,
-# bookmarkable); else an ephemeral free port.
+# A stable address per repo: the first candidate that is free wins, in order
+#   1. SINGULAR_CONSOLE_PORT (operator pin)
+#   2. the port this repo's console last served on (.singular-state/console.port)
+#   3. 8765
+#   4. an ephemeral free port
+# The server persists whichever port it binds to console.port, so a restart
+# (`--stop` then `--ensure`, a crash, a reboot) comes back at the same URL and an
+# open tab or bookmark keeps working. A candidate held by another process is
+# skipped with a note on stderr and the files are updated to the new address.
+#
+# "Free" means nothing accepts on it AND it can be bound with SO_REUSEADDR — the
+# same option the server binds with. A plain bind would report the port busy for
+# as long as the previous console's connections sit in TIME_WAIT, which is
+# exactly the stop-then-start case this exists for.
 console_pick_port() {
-  if [[ -n "${SINGULAR_CONSOLE_PORT:-}" ]]; then printf '%s' "$SINGULAR_CONSOLE_PORT"; return; fi
-  if python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",8765));s.close()' 2>/dev/null; then
-    printf '8765'; return
-  fi
-  python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'
+  local saved=""
+  [[ -f "$port_file" ]] && saved="$(tr -d '[:space:]' < "$port_file" 2>/dev/null || true)"
+  python3 - "${SINGULAR_CONSOLE_PORT:-}" "$saved" <<'PY'
+import socket, sys
+
+def free(port):
+    probe = socket.socket()
+    probe.settimeout(0.5)
+    try:
+        if probe.connect_ex(("127.0.0.1", port)) == 0:
+            return False          # something is listening there
+    except OSError:
+        pass
+    finally:
+        probe.close()
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        s.bind(("127.0.0.1", port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+pinned, saved = sys.argv[1].strip(), sys.argv[2].strip()
+if pinned and not (pinned.isdigit() and 0 < int(pinned) < 65536):
+    sys.stderr.write(f"singular console: SINGULAR_CONSOLE_PORT={pinned!r} is not a port (1-65535)\n")
+    sys.exit(2)
+seen = []
+for label, raw in (("SINGULAR_CONSOLE_PORT", pinned), ("saved port", saved), ("default port", "8765")):
+    if not (raw.isdigit() and 0 < int(raw) < 65536) or int(raw) in seen:
+        continue
+    port = int(raw)
+    seen.append(port)
+    if free(port):
+        print(port)
+        sys.exit(0)
+    if label != "default port":
+        sys.stderr.write(f"singular console: {label} {port} is in use by another process; choosing another\n")
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PY
 }
 
 # console_health_ok URL -> 0 iff GET URL/api/health answers 200 within 2s.
@@ -621,7 +674,7 @@ console_ensure() {
     rm -f "$url_file" "$pid_file"   # stale leftovers from a dead console
   fi
   mkdir -p "$(dirname "$log_file")"
-  local port; port="$(console_pick_port)"
+  local port; port="$(console_pick_port)" || return 1
   SINGULAR_ENGINE_HOME="$home" python3 - "$server" "$root" "$port" "$log_file" <<'PY'
 import os, sys
 server, root, port, log = sys.argv[1:5]
@@ -641,8 +694,12 @@ os.execvp(sys.executable, [sys.executable, server,
                            "--repo", root, "--host", "127.0.0.1", "--port", port])
 PY
   url="http://127.0.0.1:$port"
-  local i
+  local i served
   for i in $(seq 1 40); do   # poll /api/health up to 10s at 0.25s
+    # The server writes the address it actually bound (it falls back to a free
+    # port if ours was taken between the probe and the bind) — trust the file.
+    served="$(head -1 "$url_file" 2>/dev/null || true)"
+    [[ -n "$served" ]] && url="$served"
     if console_health_ok "$url"; then
       echo "$url"
       return 0
@@ -702,6 +759,7 @@ cmd_console() {
   [[ -f "$server" ]] || die "console plugin not present in engine $home (plugin/ not vendored yet)"
   local state_dir="$root/.singular-state"
   local url_file="$state_dir/console.url" pid_file="$state_dir/console.pid"
+  local port_file="$state_dir/console.port"
   local log_file="$state_dir/console.log"
   # One-shot JSON flags: no port selection, no banner — stdout stays pure JSON
   # so `singular console --snapshot | jq` works.
@@ -719,14 +777,14 @@ cmd_console() {
     --status) shift; if console_status "$@"; then return 0; else return 1; fi ;;
     --stop)   console_stop; return 0 ;;
   esac
-  local port; port="$(console_pick_port)"
+  local port; port="$(console_pick_port)" || return 1
   echo "singular console -> http://127.0.0.1:$port  (repo: $root)" >&2
   SINGULAR_ENGINE_HOME="$home" exec python3 "$server" --repo "$root" --host 127.0.0.1 --port "$port" "$@"
 }
 
 # --- supervised regression-suite runs (cmd_test) -----------------------------
 #
-# PMGO-009. `bash tests/run.sh` is ~185 test files over ~50 minutes with no
+# `bash tests/run.sh` runs the regression suite with no
 # lock, no durable result, and no way to ask "is that still running?". When the
 # session that started one stopped reporting, the next operator could not tell a
 # live suite from a dead one — and the safe-looking move (start another) is the
@@ -1285,7 +1343,7 @@ cmd_test() {
 
   # ...and a suite that exists is still only runnable from a CHECKOUT. Most tests
   # build disposable worktrees of HEAD, so tests/run.sh opens with a Git source
-  # preflight (PMGO-010) that a plain `cp -Rp` install tree can never satisfy.
+  # preflight that a plain `cp -Rp` install tree can never satisfy.
   # Refusing HERE — before a run dir, a manifest, a lock or a supervisor exists —
   # is the difference between one honest diagnosis and a supervised run that has
   # to be reconciled after reaching the same verdict from inside. This is
@@ -1372,7 +1430,7 @@ except Exception:
 
 # --- one idempotent path to a verified, stopped repository (cmd_setup) --------
 #
-# PMGO-006. Bringing a consumer repo to a safe, verified, STOPPED state used to
+# Bringing a consumer repo to a safe, verified, STOPPED state used to
 # mean holding seven unrelated facts at once: repo pin vs installed engine, repo
 # schema vs engine schema, whether a migration would rewrite authoritative
 # historical gates, which state root owns STOP, what doctor's evidence proves,
@@ -2002,7 +2060,7 @@ cmd_setup() {
       setup_step engine new "engine $checkout_version installed from $checkout ($home)"
     fi
   elif [[ -z "$pin" && -d "$SINGULAR_HOME/current" ]]; then
-    # Not in PMGO-006's list, but refusing here would contradict every other
+    # Refusing a current install here would contradict every other
     # command: resolve_engine_home falls back to $SINGULAR_HOME/current, and
     # step 7 then pins this repo to whatever that turned out to be.
     home="$SINGULAR_HOME/current"
@@ -2395,6 +2453,7 @@ Run anywhere (operate on the current repo):
   reconcile [--dry-run|--apply|--actuate|--status]   L0 reconciler
   auto [--once]                                       self-driving loop
   drive TASK-XXXX [--dry-run ...]                     one task through L1->L2->audit
+  drive TASK-XXXX --audit-only                        re-run only the audit of a candidate parked as awaiting-audit
   integrate [--task TASK-XXXX] [--dry-run]            merge accepted branches
   status                                              orchestration status
   recover [--scan|--prune]                            stale leases / orphans
@@ -2414,6 +2473,9 @@ Operate / recover:
   gates [--json]       per-node gate table from gate-result files
   human-gate request|approve|status                    hash-bound human approval records
   supersede TASK-XXXX [--by TASK-YYYY] [--force]      atomically supersede a task (all four surfaces)
+                       unpark, supersede, recover candidate and integrate wait up to
+                       SINGULAR_LOCK_WAIT_SEC (120) for a running loop cycle to release
+                       the origin lock: --wait=SECONDS sets the bound, --no-wait fails fast
   unpark TASK-XXXX [--reason TEXT]   return a parked task to the frontier (status, lease, retry budget)
   clear-backoff        remove the planner backoff (with event)
   breaker [show|reset] circuit-breaker state

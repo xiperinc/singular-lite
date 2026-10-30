@@ -1,21 +1,5 @@
 #!/usr/bin/env bash
-# Covers the FOURTH slice of the OPTIONAL authored-knowledge manifest ingestion
-# leaf (stage S5-routing, node `rehydrate-path`, layer engine_runtime).
-# `engine/ctx-rehydrate-authored-config.sh` ships a PURE, read-only,
-# present-but-uncalled config-gated entry point over the integrated render /
-# manifest composers (TASK-0060):
-#
-#   singular_ctx_rehydrate_authored_config_render   [trigger ...]
-#   singular_ctx_rehydrate_authored_config_manifest [trigger ...]
-#
-# Each emits the authored packet section / manifest entries ONLY when
-# SINGULAR_CTX_MANIFEST=1 AND singular.config.json declares a readable
-# `contextManifest` path — resolving that path and delegating to
-# `singular_ctx_rehydrate_authored_render <resolved> [trigger ...]` /
-# `singular_ctx_rehydrate_authored_manifest <resolved> [trigger ...]`. Any unmet
-# precondition (flag off, field absent, path missing/unreadable) yields empty
-# output. Pure / read-only / deterministic / fail-soft: mutates nothing on disk
-# and never exits non-zero on well-formed input.
+# Regression contracts for ctx-rehydrate-authored-config.
 set -uo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

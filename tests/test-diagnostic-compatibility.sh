@@ -184,6 +184,10 @@ env = {
     "SINGULAR_BASH_BIN": "/opt/homebrew/bin/bash",
     "SINGULAR_CODEX_BIN": str(repo / "missing-codex"),
     "SINGULAR_CONSOLE_NO_STATE": "1",
+    # Strict contract under test: reads never resolve configuration. The default
+    # (in-process reload on a changed input) is covered by
+    # plugin/scripts/test_singular_graph_server.py.
+    "SINGULAR_CONSOLE_CONFIG_RELOAD": "0",
 }
 (repo / "home").mkdir()
 proc = subprocess.Popen(

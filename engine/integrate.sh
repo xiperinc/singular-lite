@@ -44,6 +44,9 @@ while [[ $# -gt 0 ]]; do
     --from-reconcile) from_reconcile="yes"; shift ;;
     --run-id) run_id="$2"; shift 2 ;;
     --dirty-tasks) dirty_tasks_file="$2"; shift 2 ;;
+    --wait|--wait=*|--no-wait)
+      singular_lock_wait_parse_args "$1" || exit 2
+      shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -115,6 +118,8 @@ integration_gate_tmp=""
 integration_gate_worktree=""
 integration_gate_worktree_added="no"
 integration_campaign_lock_held="no"
+integration_task_premerge_snapshot=""
+integration_task_premerge_path=""
 
 # A staged integration tree is tested in a disposable detached worktree. Keep
 # its lifecycle explicit so a red gate, setup error, interrupt, or ordinary exit
@@ -158,14 +163,38 @@ singular_integration_gate_cleanup() {
 # reset clears MERGE_HEAD and the staged tree while deliberately preserving the
 # worktree. The task-status edit is engine-owned, so restore that one control
 # file from the pre-merge parent to avoid a false `integrated` lifecycle state.
+#
+# Neither route alone returns the task contract to its pre-merge bytes. The
+# acceptance header (`Status: accepted`) is control-state churn that reconcile
+# commits only at the end of the cycle, so at merge time it is normally an
+# UNCOMMITTED edit. Staging `Status: integrated` over it makes both
+# `git merge --abort` and the parent restore fall back to the committed
+# `Status: ready`, while the lease still binds the accepted bytes: the retained
+# candidate then fails its own identity check on every retry and recovery.
+# The pre-merge snapshot taken before the status edit is therefore written back
+# after either route.
+singular_integration_restore_task_contract() {
+  local task_path="${1:-}" restore_tmp=""
+  [[ -n "$task_path" && -n "$integration_task_premerge_snapshot" \
+      && -f "$integration_task_premerge_snapshot" \
+      && "$integration_task_premerge_path" == "$task_path" ]] || return 0
+  restore_tmp="$task_path.premerge.$$"
+  cp "$integration_task_premerge_snapshot" "$restore_tmp" \
+    && mv "$restore_tmp" "$task_path" || { rm -f "$restore_tmp" 2>/dev/null || true; return 1; }
+  rm -f "$integration_task_premerge_snapshot" 2>/dev/null || true
+  integration_task_premerge_snapshot=""
+  integration_task_premerge_path=""
+}
+
 singular_integration_abort_merge() {
   local task_path="${1:-}" parent="${2:-HEAD}" task_rel="" cleanup_rc=0
   if ! singular_git_lock_acquire; then
     return 1
   fi
   if git -C "$SINGULAR_ROOT" merge --abort >/dev/null 2>&1; then
+    singular_integration_restore_task_contract "$task_path" || cleanup_rc=$?
     singular_git_lock_release
-    return 0
+    return "$cleanup_rc"
   fi
   git -C "$SINGULAR_ROOT" reset --mixed "$parent" >/dev/null 2>&1 \
     || cleanup_rc=$?
@@ -176,6 +205,9 @@ singular_integration_abort_merge() {
     esac
     git -C "$SINGULAR_ROOT" restore --source="$parent" --worktree -- "$task_rel" \
       >/dev/null 2>&1 || cleanup_rc=$?
+    if [[ "$cleanup_rc" -eq 0 ]]; then
+      singular_integration_restore_task_contract "$task_path" || cleanup_rc=$?
+    fi
   fi
   if [[ -e "$SINGULAR_ROOT/.git/MERGE_HEAD" ]] \
       || ! git -C "$SINGULAR_ROOT" diff --cached --quiet; then
@@ -228,8 +260,12 @@ if [[ "$from_reconcile" == "yes" ]]; then
     exit 2
   }
 else
-  singular_acquire_lock "$run_id"
+  # Operator invocation (`singular integrate [--task T]`): wait, bounded, for a
+  # loop cycle to release the lock instead of failing at once (0.23.7).
+  singular_acquire_lock_wait "$run_id" "integrate"
 fi
+
+integration_acceptance_policy="$(singular_acceptance_mode)" || exit 2
 
 gate_cmd="${SINGULAR_DEFAULT_GATE_CMD}"
 integrated_this_run=0
@@ -287,6 +323,193 @@ integration_candidate_failed() {
       echo "refuse: could not preserve accepted candidate state for $task" >&2
       return 1
     }
+}
+
+# All acceptance decisions come from the shared program. Resolve the review
+# unit exactly as the driver does; a missing ledger is never an accepted round.
+integration_review_unit() {
+  local contract="$1" resolved dag_node
+  dag_node="$(singular_task_field "$contract" dagNode 2>/dev/null || true)"
+  [[ "$dag_node" != "None" && "$dag_node" != "null" ]] || dag_node=""
+  resolved="$(python3 "$SINGULAR_LIB_DIR/review_policy.py" \
+    --state-dir "$SINGULAR_STATE_DIR" resolve --task "$task_id" \
+    --dag-node "$dag_node" --tasks-dir "$SINGULAR_TASKS_DIR" --dry-run 2>/dev/null)" || return 1
+  printf '%s' "$resolved" | python3 -c \
+    'import json,sys; print(json.load(sys.stdin)["logicalChange"])'
+}
+
+integration_validate_acceptance() {
+  local contract="$1" logical_change policy_env result
+  integration_acceptance_reason="D:review-round-resolution-failed"
+  logical_change="$(integration_review_unit "$contract")" || return 1
+  policy_env="$(python3 -c 'import json,os
+print(json.dumps({k:v for k,v in os.environ.items() if k.startswith("SINGULAR_REVIEW_")}))')" || return 1
+  integration_acceptance_reason="validator:acceptance-validator-failed"
+  if ! result="$(python3 "$SINGULAR_LIB_DIR/acceptance_validator.py" \
+      "--red-proof=${SINGULAR_RED_PROOF:-off}" \
+      "--acceptance-mode=$integration_acceptance_policy" "--lease=$(singular_lease_path "$task_id")" \
+      "--task=$task_id" "--run=$run_packet" "--branch=$branch" \
+      "--head=$head_sha" "--campaign=$integration_campaign_binding" \
+      "--run-dir=$SINGULAR_RUNS_DIR/$run_packet" "--repo-root=$SINGULAR_ROOT" \
+      "--state-dir=$SINGULAR_STATE_DIR" "--logical-change=$logical_change" \
+      "--audit=$SINGULAR_RUNS_DIR/$run_packet/audit.json" "--task-contract=$contract" \
+      "--schema-dir=$SINGULAR_SCHEMA_DIR" "--config=$SINGULAR_JSON_CONFIG_FILE" \
+      "--policy-env-json=$policy_env" \
+      "--legacy-schema-mode=${SINGULAR_LEGACY_SCHEMA_MODE:-warn}" \
+      "--trusted-shell=${SINGULAR_BASH_BIN:-}" --require-audit=1 2>/dev/null)"; then
+    integration_acceptance_reason="$(printf '%s' "$result" | python3 -c 'import json,sys
+try:
+    result = json.load(sys.stdin)
+    print(result["conjunct"] + ":" + result["reason"])
+except Exception:
+    print("validator:acceptance-validator-failed")')"
+    return 1
+  fi
+  # The manifest binds the run copy. The published sidecar must be that same
+  # independently reviewed certificate, not a replacement verdict.
+  if ! cmp -s "$sidecar" "$SINGULAR_RUNS_DIR/$run_packet/audit.json"; then
+    integration_acceptance_reason="A:audit-sidecar-changed"
+    return 1
+  fi
+  return 0
+}
+
+# Pin the acceptance inputs across the integration gate. Re-validating alone
+# would permit a different, internally consistent certificate to replace them.
+# The frozen task contract is included. The live task is checked semantically
+# by the program, which permits only the engine-owned Status header to change.
+integration_acceptance_digest() {
+  local logical_change
+  logical_change="$(integration_review_unit "$task_file")" || return 1
+  python3 - "$SINGULAR_RUNS_DIR/$run_packet" "$packet" "$sidecar" \
+    "$SINGULAR_STATE_DIR/review-policy/ledger.json" "$logical_change" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+run = Path(sys.argv[1])
+paths = [Path(p) for p in sys.argv[2:4]]
+paths += [run / name for name in ("evidence-manifest.json", "audit.json", "audit-verification.json")]
+try:
+    report = json.loads((run / "audit-verification.json").read_text())
+    attempt = report["verificationRequest"]["attempt"]
+    paths += [run / f"{prefix}-{attempt}.{suffix}" for prefix, suffix in (
+        ("verification-request", "json"), ("verification-task-contract", "md"),
+        ("verification-policy", "json"))]
+    digest = hashlib.sha256()
+    # Other tasks may finish reviews while this candidate's gate runs. Only
+    # this review unit is an acceptance input for the candidate being merged.
+    ledger = json.loads(Path(sys.argv[4]).read_text())
+    unit = sys.argv[5]
+    digest.update(json.dumps([unit, ledger["logicalChanges"][unit]],
+                             sort_keys=True, separators=(",", ":")).encode())
+    for path in paths:
+        digest.update(hashlib.sha256(path.read_bytes()).digest())
+    print(digest.hexdigest())
+except (OSError, ValueError, KeyError, TypeError):
+    raise SystemExit(1)
+PY
+}
+
+integration_acceptance_refused() {
+  local reason="$1" advice payload count described
+  advice="An operator must repair the acceptance evidence, then retry singular integrate --task $task_id."
+  # The record names the failed part of the rule in words, not only its letter.
+  described="$(python3 "$SINGULAR_LIB_DIR/acceptance_validator.py" describe-refusal "$reason" \
+    2>/dev/null)" || described="$reason"
+  [[ -n "$described" ]] || described="$reason"
+  echo "refuse $task_id: $described. $advice" >&2
+  failed_integrations=$((failed_integrations + 1))
+  [[ "$dry_run" != "yes" ]] || return 0
+  # Explicit retries may diagnose a parked candidate again, but never create a
+  # second parking transition or breaker charge for that unresolved refusal.
+  if [[ "$(singular_lease_status "$task_id" 2>/dev/null || true)" == "blocked" \
+      && "$(singular_lease_field "$task_id" failureReason 2>/dev/null || true)" == "acceptance:$reason" ]]; then
+    return 0
+  fi
+  if [[ -f "$(singular_lease_path "$task_id")" ]]; then
+    singular_lease_set_status "$task_id" blocked || return 1
+  else
+    singular_lease_write "$task_id" "$branch" "" origin "" blocked "$run_packet" || return 1
+  fi
+  python3 - "$(singular_lease_path "$task_id")" "$reason" "$advice" <<'PYREFUSAL' || return 1
+import json, os, sys
+path, reason, advice = sys.argv[1:]
+with open(path, encoding="utf-8") as handle:
+    lease = json.load(handle)
+lease["failureReason"] = "acceptance:" + reason
+lease["nextAction"] = advice
+with open(path + ".tmp", "w", encoding="utf-8") as handle:
+    json.dump(lease, handle, indent=2)
+    handle.write("\n")
+os.replace(path + ".tmp", path)
+PYREFUSAL
+  if [[ -f "$task_file" ]]; then
+    singular_task_set_status "$task_file" blocked || return 1
+  fi
+  payload="$(python3 - "$run_id" "$task_id" "$reason" "$advice" "$described" <<'PY'
+import json, sys
+run, task, reason, advice, described = sys.argv[1:]
+print(json.dumps(dict(runId=run, taskId=task, reason=reason, detail=described,
+                      nextAction=advice)))
+PY
+)" || return 1
+  singular_append_event integration.acceptance_parked \
+    "acceptance rule refused integration ($described); task parked for an operator" \
+    "$payload" || return 1
+  # Reconcile reports failed_integrations to the loop's existing breaker.
+  # A direct command has no enclosing loop, so account for its refusal here.
+  if [[ "$from_reconcile" != "yes" ]]; then
+    count="$(singular_breaker_trip)" || return 1
+    singular_append_event autonomate.breaker_incremented \
+      "integration acceptance refusal; circuit breaker incremented" \
+      "{\"taskId\":\"$task_id\",\"breaker\":$count,\"reason\":\"integration-acceptance-refused\"}" || return 1
+  fi
+}
+
+integration_acceptance_unchanged() {
+  local current_digest
+  integration_validate_acceptance "$task_file" || return 1
+  integration_acceptance_reason="E:acceptance-evidence-changed"
+  current_digest="$(integration_acceptance_digest)" || return 1
+  [[ "$current_digest" == "$integration_acceptance_snapshot" ]]
+}
+
+# Only an explicit, now-valid retry may reopen our acceptance park. Restore
+# only a Status header whose bytes exactly reproduce the retained contract;
+# the ordinary candidate identity checks still run immediately afterwards.
+integration_restore_acceptance_park() {
+  [[ "$integration_acceptance_policy" == "every-path" && -n "$task_filter" ]] || return 0
+  python3 - "$SINGULAR_LIB_DIR" "$(singular_lease_path "$task_id")" "$task_file" <<'PYRESTORE'
+import hashlib
+from pathlib import Path
+import sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+import task_lifecycle
+
+path = Path(sys.argv[3])
+with task_lifecycle.locked(Path(sys.argv[2])) as lease:
+    candidate = lease.get("acceptedCandidate")
+    if (lease.get("status") == "blocked"
+            and str(lease.get("failureReason", "")).startswith("acceptance:")
+            and isinstance(candidate, dict)
+            and Path(candidate.get("taskContractPath", "")).resolve() == path.resolve()):
+        for status in ("accepted", "ready"):
+            data, current = task_lifecycle.task_contract_status_bytes(path, status)
+            if current != "blocked" or hashlib.sha256(data).hexdigest() != candidate.get("taskContractSha256"):
+                continue
+            temporary = path.with_name(path.name + ".tmp")
+            temporary.write_bytes(data)
+            temporary.replace(path)
+            lease["status"] = "accepted"
+            lease.pop("failureReason", None)
+            lease["nextAction"] = "integrate the accepted candidate"
+            lease["updatedAt"] = task_lifecycle.now()
+            print("restored:blocked->" + status)
+            break
+PYRESTORE
 }
 
 # Resolve the one target-history commit that carries a durable integration
@@ -382,10 +605,29 @@ for d in "${dirs[@]}"; do
   run_packet="$(basename "$packet" .json)"
   sidecar="${packet%.json}.audit.json"
 
+  task_file="$SINGULAR_TASKS_DIR/$task_id.md"
+  integration_acceptance_snapshot=""
+  if [[ "$integration_acceptance_policy" == "every-path" ]]; then
+    integration_acceptance_reason="E:acceptance-evidence-unavailable"
+    if ! integration_acceptance_snapshot="$(integration_acceptance_digest)" \
+        || ! integration_validate_acceptance "$task_file"; then
+      # Ask the rule for the specific missing input even if snapshotting failed.
+      if [[ -z "$integration_acceptance_snapshot" ]]; then
+        integration_validate_acceptance "$task_file" || true
+      fi
+      integration_acceptance_refused "$integration_acceptance_reason" || exit 2
+      continue
+    fi
+  fi
+
   # Audit sidecar must say accepted, unless a decider accept-waiver is recorded
   # in the packet evidence and durable decision trail.
   acceptance_mode="$(singular_packet_acceptance_mode "$packet" "$sidecar" 2>/dev/null || true)"
   if [[ -z "$acceptance_mode" ]]; then
+    if [[ "$integration_acceptance_policy" == "every-path" ]]; then
+      integration_acceptance_refused "G:host-verification-packet-binding-invalid" || exit 2
+      continue
+    fi
     echo "skip $task_id: no accepted auditor verdict or recorded accept-waiver"
     skipped=$((skipped + 1))
     continue
@@ -511,6 +753,21 @@ PY
   fi
   if [[ -f "$task_file" && "$dry_run" != "yes" && "$already_merged" != "yes" ]]; then
     candidate_lifecycle_enabled="yes"
+    if [[ "$existing_candidate" == "yes" ]]; then
+      # A lease written by 0.23.4 can bind `Status: accepted` bytes while a red
+      # integration left `Status: ready` on disk. Re-assert the engine-owned
+      # header when (and only when) that reproduces the bound contract exactly.
+      contract_restore="$(integration_restore_acceptance_park 2>/dev/null || true)"
+      if [[ -z "$contract_restore" ]]; then
+        contract_restore="$(python3 "$SCRIPT_DIR/task_lifecycle.py" candidate-contract-restore \
+          --lease "$(singular_lease_path "$task_id")" --task-file "$task_file" 2>/dev/null || true)"
+      fi
+      if [[ "$contract_restore" == restored:* ]]; then
+        singular_append_event "integration.task_contract_restored" \
+          "retained candidate task status header restored to its bound bytes" \
+          "{\"runId\":\"$run_id\",\"taskId\":\"$task_id\",\"transition\":\"${contract_restore#restored:}\"}" || true
+      fi
+    fi
     if ! singular_lifecycle_retain_candidate "$task_id" "$packet" "$sidecar" "$task_file" \
         "$run_packet" "$branch" "$head_sha" "$candidate_tree" "$candidate_campaign_binding" \
         "$acceptance_mode" >/dev/null; then
@@ -710,7 +967,15 @@ PY
   # this transition happened after the merge commit and silently made the
   # promotion checkout differ from the tree that had passed regression.
   task_file="$SINGULAR_TASKS_DIR/$task_id.md"
+  integration_task_premerge_snapshot=""
+  integration_task_premerge_path=""
   if [[ -f "$task_file" ]]; then
+    # Exact pre-merge bytes, including an uncommitted acceptance header, so an
+    # aborted integration can put back what the lease actually bound.
+    if cp "$task_file" "$run_dir/task-contract-premerge-$task_id.md" 2>/dev/null; then
+      integration_task_premerge_snapshot="$run_dir/task-contract-premerge-$task_id.md"
+      integration_task_premerge_path="$task_file"
+    fi
     singular_task_set_status "$task_file" "integrated"
     if singular_git_lock_acquire; then
       task_status_stage_ec=0
@@ -935,6 +1200,9 @@ PY
       elif ! "$SCRIPT_DIR/secret-scan.sh" --worktree "$SINGULAR_ROOT" --staged \
           >"$run_dir/secret-scan-merge-$task_id.log" 2>&1; then
         finalize_reason="secret-detected"
+      elif [[ "$integration_acceptance_policy" == "every-path" ]] \
+          && ! integration_acceptance_unchanged; then
+        finalize_reason="acceptance-refused"
       elif [[ "$candidate_lifecycle_enabled" == "yes" ]] \
           && ! integration_proof_id="$(singular_lifecycle_candidate_tested \
             "$task_id" "$head_sha" "$candidate_tree" "$packet_campaign_binding" \
@@ -977,6 +1245,10 @@ PY
         echo "refuse: finalization failed and merge cleanup is incomplete" >&2
         exit 2
       }
+    fi
+    if [[ "$finalize_reason" == "acceptance-refused" ]]; then
+      integration_acceptance_refused "$integration_acceptance_reason" || exit 2
+      continue
     fi
     singular_record_recovery \
       "exact-tree integration finalization failed ($finalize_reason) for $task_id" \
@@ -1063,7 +1335,7 @@ if [[ "$dry_run" == "yes" ]]; then
   integration_status_outcome="dry-run"
   echo "eligible=$eligible (dry-run; no merges performed)"
   echo "skipped=$skipped"
-  exit 0
+  exit "$((failed_integrations != 0))"
 fi
 
 # Integrate-time gate promotion (0.5.0, SINGULAR_AUTO_PROMOTE_GATES=1 default):

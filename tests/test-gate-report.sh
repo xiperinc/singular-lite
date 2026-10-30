@@ -267,7 +267,7 @@ print(data["outcome"], ",".join(data["infrastructureSignals"]))
 PY
 }
 
-# TS2688 is the exact signature that killed TASK-0006: a worktree without the
+# TS2688 signals a missing dependency: a worktree without the
 # monorepo's nested node_modules cannot resolve the @types tsconfig asks for.
 [[ "$(classify "error TS2688: Cannot find type definition file for 'node'.")" \
    == "inconclusive-infrastructure missing-type-definitions" ]] \

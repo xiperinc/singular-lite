@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.audit-verdict.v0",
+  "title": "singular Auditor Verdict",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "taskId",
+    "runId",
+    "branch",
+    "verdict",
+    "evidenceReviewed",
+    "commandsRun",
+    "findings",
+    "requiredFixes",
+    "rationale"
+  ],
+  "properties": {
+    "schema": { "const": "singular.orchestration.audit-verdict.v0" },
+    "taskId": { "type": "string", "pattern": "^TASK-[0-9]{4,}$" },
+    "runId": { "type": "string", "minLength": 1 },
+    "branch": { "type": "string", "minLength": 1 },
+    "verdict": {
+      "type": "string",
+      "enum": ["accepted", "needs-fix", "blocked", "needs-human"]
+    },
+    "evidenceReviewed": { "type": "array", "items": { "type": "string" } },
+    "commandsRun": { "type": "array", "items": { "type": "string" } },
+    "findings": { "type": "array", "items": { "type": "string" } },
+    "requiredFixes": { "type": "array", "items": { "type": "string" } },
+    "rationale": { "type": "string", "minLength": 1 },
+    "findingsStatus": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "enum": ["resolved", "still-open"] }
+    }
+  }
+}

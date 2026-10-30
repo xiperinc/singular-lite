@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.provider-error.v0",
+  "title": "singular Normalized Provider Error",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "provider",
+    "runId",
+    "role",
+    "source",
+    "eventType",
+    "kind",
+    "httpStatus",
+    "code",
+    "retryable",
+    "excerpt",
+    "rawEventSha256",
+    "recordedAt"
+  ],
+  "properties": {
+    "schema": { "const": "singular.orchestration.provider-error.v0" },
+    "provider": {
+      "type": "string",
+      "enum": ["codex", "claude", "gemini", "opencode", "cursor", "openrouter", "grok"]
+    },
+    "runId": { "type": "string", "minLength": 1 },
+    "role": { "type": "string", "minLength": 1 },
+    "source": { "const": "terminal-envelope" },
+    "eventType": { "type": "string", "minLength": 1 },
+    "kind": {
+      "type": "string",
+      "enum": ["usage-limit", "overloaded", "entitlement", "provider-error"]
+    },
+    "httpStatus": {
+      "type": ["integer", "null"],
+      "minimum": 100,
+      "maximum": 599
+    },
+    "code": { "type": ["string", "null"] },
+    "retryable": { "type": "boolean" },
+    "excerpt": { "type": "string", "maxLength": 512 },
+    "rawEventSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "rawEventRef": { "type": "string", "minLength": 1 },
+    "recordedAt": { "type": "string", "format": "date-time" }
+  }
+}

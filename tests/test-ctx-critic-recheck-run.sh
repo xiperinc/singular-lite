@@ -1,40 +1,5 @@
 #!/usr/bin/env bash
-# Covers the POST-ACCEPTANCE critic-recheck RUNNER brick
-# engine/ctx-critic-recheck-run.sh: the resume-capable, read-only critic-recheck
-# EXECUTOR that resumes the plan critic over an ACCEPTED task's diff and records
-# the per-finding dispositions. It is the post-acceptance sibling of the in-loop
-# re-critique runner singular_plan_recritic_run (TASK-0026): TASK-0026 re-critiques
-# REVISED candidates in-loop; this runner rechecks an ACCEPTED task after
-# acceptance. It composes ONLY already-integrated helpers — the TASK-0027 sampling
-# gate, the TASK-0029 resume decider + strategy recorder, and the TASK-0028
-# classifier/recorder — plus the shared runner/session primitives.
-#
-#   singular_ctx_critic_recheck_run <node> <run_id> <task_id> <run_dir> \
-#       <prior_critique_record> [worktree]
-#
-# Asserts:
-#   (A) OFF by default (SINGULAR_CRITIC_RECHECK_PCT unset/0/garbage) -> the TASK-0027
-#       sampling gate returns not-sampled, so the runner is a no-op: NO runner call,
-#       NO event, NO state write (byte-identical), returns 0.
-#   (B) Sampled + valid plan-critic session -> the recheck runs the DEFAULT runner
-#       READ-ONLY WITH --resume-session <sid> over the accepted worktree, records a
-#       role=plan-critic RESUME strategy event carrying taskId + sessionId, and
-#       emits EXACTLY ONE ctx.critic_recheck event whose per-finding dispositions
-#       reflect the resumed critic's self-report.
-#   (C) Sampled + no session -> the decider returns `fresh <reason>`; the runner
-#       runs FRESH (no --resume-session), records a role=plan-critic FRESH strategy
-#       event (the exact reason, no sessionId), and emits one ctx.critic_recheck.
-#   (D) rc-86 (resume refused) -> a role=plan-critic fresh-fallback event is
-#       recorded and the recheck re-runs FRESH (>=2 runner calls, final call WITHOUT
-#       --resume-session); still exactly one ctx.critic_recheck event; returns 0.
-#   (E) infra/no-output recheck -> fail-OPEN fresh fallback, and EVERY prior finding
-#       is still recorded via the conservative `survives` default (never dropped);
-#       exactly one ctx.critic_recheck event; returns 0.
-#   (F) evidence invariance -> no accept/reject/promote/quarantine event is ever
-#       emitted; only the strategy + ctx.critic_recheck (+ fallback) events land.
-#   (G) present-but-uncalled -> no existing engine path invokes the new function.
-# The events log is pinned to an isolated SINGULAR_EVENTS_FILE and temp dirs so the
-# suite never mutates real run state.
+# Regression contracts for ctx-critic-recheck-run.
 set -uo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -391,7 +356,7 @@ pass "(E) no parseable output -> conservative survives default, one ctx.critic_r
 # ===========================================================================
 callers="$(grep -rl 'singular_ctx_critic_recheck_run' "$ENGINE_HOME/engine" 2>/dev/null \
   | grep -v '/ctx-critic-recheck-run.sh$' || true)"
-: # temporal assertion neutralized (planner-contract rule 9: later slices may legitimately call this)
+: # temporal assertion neutralized (later slices may legitimately call this)
 pass "(G) invariance: the new runner is present-but-uncalled by any existing engine path"
 
 echo "ctx-critic-recheck-run tests passed"

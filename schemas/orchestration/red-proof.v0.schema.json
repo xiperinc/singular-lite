@@ -1,0 +1,440 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.red-proof.v0",
+  "title": "Host red-proof observations",
+  "type": "object",
+  "required": [
+    "schema",
+    "mode",
+    "taskId",
+    "runId",
+    "testPolicy",
+    "baseSha",
+    "headSha",
+    "treeSha",
+    "attempt",
+    "command",
+    "commandSha256",
+    "proofFiles",
+    "outcome",
+    "isolation"
+  ],
+  "properties": {
+    "schema": {
+      "const": "singular.orchestration.red-proof.v0"
+    },
+    "mode": {
+      "enum": [
+        "observe",
+        "enforce"
+      ]
+    },
+    "taskId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "testPolicy": {
+      "enum": [
+        "strict_test_first",
+        "characterization_first",
+        "test_after_waiver",
+        "not_applicable"
+      ]
+    },
+    "baseSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40,64}$"
+    },
+    "headSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40,64}$"
+    },
+    "treeSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40,64}$"
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "command": {
+      "type": "string",
+      "minLength": 1
+    },
+    "commandSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "proofFiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "outcome": {
+      "enum": [
+        "proved",
+        "not-demonstrated",
+        "green-failed",
+        "inconclusive-infrastructure",
+        "base-cannot-run",
+        "waived"
+      ]
+    },
+    "isolation": {
+      "const": "none"
+    },
+    "base": {
+      "type": "object",
+      "required": [
+        "outcome",
+        "rawExitCode",
+        "timedOut",
+        "logRef",
+        "logSha256",
+        "setupError",
+        "sourceIntegrity"
+      ],
+      "properties": {
+        "outcome": {
+          "enum": [
+            "red",
+            "not-demonstrated",
+            "green",
+            "green-failed",
+            "inconclusive-infrastructure"
+          ]
+        },
+        "rawExitCode": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "timedOut": {
+          "type": "boolean"
+        },
+        "logRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "logSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "setupError": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sourceIntegrity": {
+          "type": "object",
+          "required": [
+            "status",
+            "changedPaths"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "verified",
+                "violation",
+                "not-checked"
+              ]
+            },
+            "changedPaths": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "baseAttempts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "required": [
+          "outcome",
+          "rawExitCode",
+          "timedOut",
+          "logRef",
+          "logSha256",
+          "setupError",
+          "sourceIntegrity"
+        ],
+        "properties": {
+          "outcome": {
+            "enum": [
+              "red",
+              "not-demonstrated",
+              "green",
+              "green-failed",
+              "inconclusive-infrastructure"
+            ]
+          },
+          "rawExitCode": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "timedOut": {
+            "type": "boolean"
+          },
+          "logRef": {
+            "type": "string",
+            "minLength": 1
+          },
+          "logSha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "setupError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "durationMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sourceIntegrity": {
+            "type": "object",
+            "required": [
+              "status",
+              "changedPaths"
+            ],
+            "properties": {
+              "status": {
+                "enum": [
+                  "verified",
+                  "violation",
+                  "not-checked"
+                ]
+              },
+              "changedPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "required": [
+        "outcome",
+        "rawExitCode",
+        "timedOut",
+        "logRef",
+        "logSha256",
+        "setupError",
+        "sourceIntegrity"
+      ],
+      "properties": {
+        "outcome": {
+          "enum": [
+            "red",
+            "not-demonstrated",
+            "green",
+            "green-failed",
+            "inconclusive-infrastructure"
+          ]
+        },
+        "rawExitCode": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "timedOut": {
+          "type": "boolean"
+        },
+        "logRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "logSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "setupError": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sourceIntegrity": {
+          "type": "object",
+          "required": [
+            "status",
+            "changedPaths"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "verified",
+                "violation",
+                "not-checked"
+              ]
+            },
+            "changedPaths": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "candidateAttempts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "required": [
+          "outcome",
+          "rawExitCode",
+          "timedOut",
+          "logRef",
+          "logSha256",
+          "setupError",
+          "sourceIntegrity"
+        ],
+        "properties": {
+          "outcome": {
+            "enum": [
+              "red",
+              "not-demonstrated",
+              "green",
+              "green-failed",
+              "inconclusive-infrastructure"
+            ]
+          },
+          "rawExitCode": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "timedOut": {
+            "type": "boolean"
+          },
+          "logRef": {
+            "type": "string",
+            "minLength": 1
+          },
+          "logSha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "setupError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "durationMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sourceIntegrity": {
+            "type": "object",
+            "required": [
+              "status",
+              "changedPaths"
+            ],
+            "properties": {
+              "status": {
+                "enum": [
+                  "verified",
+                  "violation",
+                  "not-checked"
+                ]
+              },
+              "changedPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "outcome": {
+            "const": "waived"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "testPolicy": {
+            "enum": [
+              "test_after_waiver",
+              "not_applicable"
+            ]
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "base",
+          "candidate",
+          "baseAttempts",
+          "candidateAttempts"
+        ]
+      }
+    }
+  ]
+}

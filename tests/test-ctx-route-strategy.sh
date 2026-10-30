@@ -21,7 +21,7 @@
 #   - Fail closed: unrecognized or empty role/step -> resume, NEVER continue.
 #       (A primary-lineage role with a non-continuation step is still resume; a
 #        specialist role is resume regardless of step.)
-#   - Taint consistency (behavioral pin, planner-contract rule 9): feeding the
+#   - Taint consistency (behavioral pin): feeding the
 #       classifier's output into singular_ctx_route_strategy_tainted yields 0 for
 #       every `continue` and 1 for every `resume`.
 # The predicate is defined only; NO existing engine path invokes it, so with the
@@ -105,7 +105,7 @@ pass "fail closed: unrecognized/empty role or step -> resume, never continue"
 
 # --- Taint consistency: continue is untainted, resume is tainted --------------
 # For EVERY fixture input, feeding the classifier output into _tainted yields
-# 0 for continue and 1 for resume (planner-contract rule 9, behavioral pin).
+# 0 for continue and 1 for resume (behavioral pin).
 taint_check() { # <role> <step>
   local strat tainted
   strat="$(singular_ctx_route_strategy_classify "$1" "$2")"

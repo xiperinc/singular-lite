@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# `singular unpark` is the public operator re-entry. Field run 2026-09-14: it
-# left the failed attempt's attemptLifecycle/terminalDisposition on the lease,
-# reserve() refused every redispatch ("terminal or started work requires
-# explicit successor authority"), and after a hand archive the next driver
-# refusal DELETED the lease (planned + productPassStarted=false) with its
-# history. This pins: unpark archives history, reserve admits, and a refused
+# `singular unpark` is the public operator re-entry. Stale attemptLifecycle
+# and terminalDisposition values must not prevent reserve() from redispatching.
+# This pins: unpark archives history, reserve admits, and a refused
 # driver releases (never deletes) a lease that carries history.
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi

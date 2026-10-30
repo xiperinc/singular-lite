@@ -252,7 +252,7 @@ body.side-rail { --side-col: var(--side-w-rail); }
   position: fixed;
   inset: 0;
   display: grid;
-  grid-template-rows: 44px minmax(0, 1fr) var(--inspector-row, 0px) 32px;
+  grid-template-rows: calc(44px + var(--conn-banner-h, 0px)) minmax(0, 1fr) var(--inspector-row, 0px) 32px;
   grid-template-columns: var(--side-col) minmax(0, 1fr);
   grid-template-areas:
     "side top"
@@ -267,7 +267,8 @@ body.side-rail { --side-col: var(--side-w-rail); }
 #app[data-inspector-docked="true"] { --inspector-row: var(--inspector-height, 320px); }
 #app[data-inspector-docked="true"][data-inspector-collapsed="true"] { --inspector-row: 56px; }
 
-#top-bar { grid-area: top; }
+#top-bar { grid-area: top; align-self: start; }
+#conn-banner { grid-area: top; align-self: end; }
 #side-bar { grid-area: side; }
 #status-dock { grid-area: dock; }
 
@@ -341,6 +342,49 @@ body.side-rail { --side-col: var(--side-w-rail); }
 #conn-dot[data-state="down"] { background: var(--tone-red); }
 #refresh-age { font-family: var(--mono); font-size: 11px; }
 
+/* ---- Data-health banner (0.23.5) — core/health.js. Sits in the top grid row
+   under the 44px bar; the row grows by --conn-banner-h (set from the banner's
+   measured height) so it never covers the content it is warning about. ---- */
+#conn-banner {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  min-height: 32px; padding: 5px 16px;
+  font-size: 12px; line-height: 1.35;
+  color: var(--tone-amber-fg);
+  background: var(--tone-amber-bg);
+  border-bottom: 1px solid var(--tone-amber-border);
+}
+#conn-banner[hidden] { display: none; }
+#conn-banner[data-state="offline"] {
+  color: var(--tone-red-fg); background: var(--tone-red-bg); border-bottom-color: var(--tone-red-border);
+}
+#conn-banner .cb-dot { width: 7px; height: 7px; border-radius: 999px; flex: 0 0 auto; background: var(--tone-amber-dot); }
+#conn-banner[data-state="offline"] .cb-dot { background: var(--tone-red-dot); }
+#conn-banner .cb-title { font-weight: 600; flex: 0 0 auto; }
+/* Two lines at most; the full text is the element's title. */
+#conn-banner .cb-detail {
+  flex: 1 1 320px; min-width: 0; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
+}
+#conn-banner .cb-retry { flex: 0 0 auto; font-size: 11px; opacity: 0.85; }
+#conn-banner code, .load-error code {
+  font-family: var(--mono); font-size: 11px; padding: 1px 5px; border-radius: 4px;
+  background: rgba(0, 0, 0, 0.06); user-select: all;
+}
+
+/* A surface's "no data yet" placeholder while reads are failing (loadingHtml). */
+.load-error { display: grid; gap: 6px; max-width: 720px; padding: 10px 0; color: var(--ink); font-size: 13px; }
+.load-error-title { font-weight: 600; color: var(--tone-red-fg); }
+.load-error-why { color: var(--body); overflow-wrap: anywhere; }
+.load-error-foot { display: flex; align-items: center; gap: 10px; }
+.load-error-auto { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+/* Last good data kept on screen while it cannot be refreshed, or simply old
+   (app.js tickAge): visibly not current, still readable. */
+body[data-stale="true"] .surface { filter: saturate(0.45); opacity: 0.82; }
+body[data-stale="true"] #health-flag, body[data-stale="true"] #stop-chip { filter: saturate(0.2); opacity: 0.6; }
+.dock-conn[data-stale="true"] { color: var(--tone-amber-fg); background: var(--tone-amber-bg); font-weight: 600; }
+.dock-conn[data-stale="true"] .dock-conn-lbl, .dock-conn[data-stale="true"] #refresh-age { color: inherit; }
+
 /* ---- Historical banner (0.8.0) — the plan-thread switcher moved to the
    sidebar's threads list in 0.10.0 (see #side-bar below). ---- */
 
@@ -368,7 +412,7 @@ body.side-rail { --side-col: var(--side-w-rail); }
    down column 1). --side-col still governs the width, so the rail toggle works
    here too. */
 body.historical #app {
-  grid-template-rows: 44px auto minmax(0, 1fr) var(--inspector-row, 0px) 32px;
+  grid-template-rows: calc(44px + var(--conn-banner-h, 0px)) auto minmax(0, 1fr) var(--inspector-row, 0px) 32px;
   grid-template-columns: var(--side-col) minmax(0, 1fr);
   grid-template-areas:
     "side top"

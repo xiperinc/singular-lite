@@ -1,40 +1,5 @@
 #!/usr/bin/env bash
-# Covers TASK-0106 — closing the injection/recording gap of the executable DAG
-# node `subgraph-rehydrate` (stage S6-graph, layer engine_runtime). TASK-0105
-# made the ROUTE DECIDE `rehydrate` over the subgraph manifest on the treatment
-# arm, but the packet the model receives (engine/l1-drive.sh
-# rehydrate_inject_packet) and the manifest the strategy event records
-# (engine/ctx-rehydrate-event.sh singular_ctx_rehydrate_event_data) were still
-# FLAT. This slice adds a shared selector and wires it into BOTH sites so the
-# injected packet and the recorded manifest carry the SAME subgraph sources by
-# construction.
-#
-#   singular_ctx_route_subgraph_render <task_id> <packet|manifest>
-#     - When singular_ctx_rehydrate_subgraph_arm_mode <task_id> <graphDir> ==
-#       subgraph (graphDir = ${SINGULAR_CTX_GRAPH_DIR:-.singular-state/graph}),
-#       resolve node = singular_graph_node_id(singular_graph_identity task <task_id>)
-#       and print singular_ctx_rehydrate_subgraph_assemble <graphDir> <node> <mode>,
-#       returning 0.
-#     - Otherwise print nothing and return non-zero (caller keeps its FLAT path).
-#
-# Asserts:
-#   (A) selector: exists; OFF (knob unset/0) -> non-zero + empty for both modes;
-#       ON + treatment arm + present non-empty corpus -> byte-identical to the
-#       subgraph assembler at the DETERMINISTIC task node id, for both modes;
-#       control arm / absent-empty corpus -> non-zero + empty. Both call sites
-#       therefore resolve the SAME node by construction.
-#   (B) inject hook (engine/l1-drive.sh rehydrate_inject_packet): on the subgraph
-#       branch the fresh rehydrate attempt's $active_prompt receives the SUBGRAPH
-#       packet under the reference-only / NOT-authoritative provenance header, NOT
-#       the flat packet; on every off path it stays byte-identical to the flat
-#       injection.
-#   (C) record hook (engine/ctx-rehydrate-event.sh singular_ctx_rehydrate_event_data):
-#       on the subgraph branch the recorded strategy-event manifest is the SUBGRAPH
-#       manifest; on every off path it stays the flat manifest.
-#   (D) SINGULAR_REHYDRATE gate: rehydrate_inject_packet is a no-op unless
-#       worker_strategy==rehydrate (only reachable behind SINGULAR_REHYDRATE=1).
-#   (E) evidence invariance: rehydrate stays tainted; the injected subgraph section
-#       stays reference-only / NOT authoritative.
+# Regression coverage for matching injected subgraph packets and recorded manifests.
 set -uo pipefail
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then

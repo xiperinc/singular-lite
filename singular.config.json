@@ -1,6 +1,6 @@
 {
   "schemaVersion": "v2",
-  "engineVersion": "0.23.4",
+  "engineVersion": "0.24.0",
   "targetBranch": "agent/integration",
   "gateCommand": "SINGULAR_TEST_JOBS=4 bash tests/run.sh",
   "runner": "claude-run.sh",
@@ -145,7 +145,7 @@
   "resources": {
     "diskReserveBytes": 2147483648,
     "estimatedWorktreeBytes": 268435456,
-    "maxConcurrent": 3
+    "maxConcurrent": "auto"
   },
   "controlState": {
     "commitIntervalSeconds": 300

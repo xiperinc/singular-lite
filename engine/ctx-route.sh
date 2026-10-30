@@ -1,55 +1,5 @@
 #!/usr/bin/env bash
-# ctx-route.sh — the composed orchestrator spine of the routing-module node: the
-# leaf-before-orchestrator step this node deferred to last, exactly as
-# engine/ctx-plan-revise-loop.sh (TASK-0023) composed its leaves after they were
-# integrated. It WRAPS (does not rewrite) the two baseline resume deciders and
-# frames their `resume`/`fresh` verdict as one of the five routing strategies,
-# adding the taint/independence pin and the three fail-closed resume gates on top.
-#
-# Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines a new
-# function only; NO existing engine path invokes it, so with SINGULAR_CTX_ROUTING
-# OFF (default 0) and the file present-but-uncalled the engine is byte-identical
-# to the legacy decide paths. The l1-drive.sh second-wave hook and the
-# ctx-metrics.sh strategy/outcome split are later slices and are OUT OF SCOPE.
-#
-#   singular_ctx_route <role> <step> <meta> <key> <run_id> <runner> <prompt_sha> \
-#                     <worktree> <lineage_head> <transcript> <lease_key> \
-#                     <base_sha> [role-relevant-paths...]
-#
-# Prints EXACTLY one line `<strategy> <arg-or-reason>` where <strategy> is one of
-# continue|resume|fork|fresh|rehydrate, every decision carrying its reason (or,
-# for resume, the session id). Never exits non-zero. `fork` and `continue`/
-# `rehydrate` are reserved in the alphabet; the wrapped deciders only ever emit
-# `resume`/`fresh`, so this spine emits `resume` or `fresh` this stage.
-#
-# Argument roles:
-#   <role>          task role (implementer/reviewer/advocate/skeptic/…) or planner
-#   <step>          the step being routed (final-audit/paired-audit are pinned)
-#   <meta>          session-meta path handed to the wrapped decider
-#   <key>           task role -> taskId; planner role -> node
-#   <run_id>        task role -> runId; ignored for planner
-#   <runner>        runner basename (decider gate)
-#   <prompt_sha>    task-role prompt sha (decider gate); ignored for planner
-#   <worktree>      worktree for the lineage / diff gates
-#   <lineage_head>  current target-branch head (decider lineage + diff-gate head)
-#   <transcript>    provider session transcript path (window gate)
-#   <lease_key>     generalized session-lease key (lease gate)
-#   <base_sha>      headShaAtCreate for the diff gate (churn base; head=lineage_head)
-#   [paths...]      role-relevant pathspec scoping the diff gate
-#
-# Composition when SINGULAR_CTX_ROUTING=1 (fail-closed, first refusal wins):
-#   1. Independence pin FIRST (singular_ctx_route_independence_admit): an
-#      independence-required step (final-audit, paired-audit) is PINNED to fresh —
-#      a would-be resume/rehydrate is refused as `fresh tainted`, structurally,
-#      with no knob able to reroute it.
-#   2. Otherwise delegate the baseline resume/fresh decision to the role's wrapped
-#      decider, and on a would-be `resume` apply the additional resume gates, each
-#      downgrading to `fresh <reason>`: a live generalized session lease
-#      (`fresh session-lease`), window pressure (`fresh window-pressure`), diff
-#      volume (`fresh diff-volume`).
-# Routing is composed boolean gates plus the wrapped decider, never a numeric
-# score. The gates only ADD refusals; none can turn a fresh-required decision into
-# a resumable one.
+# Choose session continuation, resume, fork, fresh start or rehydration under the context policy.
 singular_ctx_route() {
   local role="$1" step="$2" meta="$3" key="$4" run_id="$5" runner="$6" \
         prompt_sha="$7" worktree="$8" lineage_head="$9"

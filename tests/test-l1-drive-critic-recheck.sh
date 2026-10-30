@@ -9,8 +9,8 @@ set -euo pipefail
 # accept decision recorded, inbox packet written, l1.task_accepted appended, and
 # beside the integrated paired-audit hook) that resolves the node + prior
 # plan-critique record via singular_ctx_critic_recheck_locate_node /
-# singular_ctx_critic_recheck_locate_record (TASK-0032) and, when BOTH resolve,
-# delegates into singular_ctx_critic_recheck_run (TASK-0031) guarded by `|| true`.
+# singular_ctx_critic_recheck_locate_record and, when BOTH resolve,
+# delegates into singular_ctx_critic_recheck_run guarded by `|| true`.
 # The hook adds no recheck logic of its own.
 #
 #   (a) default-OFF (SINGULAR_CRITIC_RECHECK_PCT unset AND =0), even WITH a

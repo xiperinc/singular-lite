@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 0.17.0 (PMGO-001): the DAG lens's placement maths lives in a pure, import-free
+# 0.17.0: the DAG lens's placement maths lives in a pure, import-free
 # module (plugin/assets/plan/dag_layout.js) so dependency-wave layout can be
 # asserted without a browser. This wrapper hands tests/console/dag_layout.test.mjs
 # to node's built-in runner and guards the one invariant that would silently

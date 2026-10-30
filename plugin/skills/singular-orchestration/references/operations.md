@@ -1,27 +1,88 @@
-# Operations — knobs, autonomy runbook, troubleshooting
+# Operations — commands, knobs, troubleshooting
 
 Read this when tuning a run, supervising a long autonomous loop, or
-debugging a stuck/misbehaving orchestration. Everything here reflects
-engine 0.5.x behavior and lessons from production runs (including the
-singular-frontend field audit that drove the 0.5.0 hardening).
+debugging a stuck/misbehaving orchestration. This reference describes engine
+0.24.0. The loop is optional; use individual commands when that
+matches the requested scope.
+
+## Current command reference
+
+Top-level commands dispatched by `cli/singular` for engine 0.24.0.
+Rows describe command families; subcommands and examples are not exhaustive.
+Mutating commands still require the user's intended scope. In particular,
+raw lease operations and acceptance/recovery commands are not substitutes
+for a completed audit and review record.
+
+| Command | Purpose / representative arguments |
+| --- | --- |
+| `singular reconcile` | One scheduler cycle: `--dry-run`, `--apply`, `--actuate`, `--status` or `--drain`. |
+| `singular auto` | Optional repeating scheduler: `--once` or `--detach`. Push defaults to on. |
+| `singular drive` | Drive `TASK-XXXX`; `--audit-only` reruns the candidate audit. |
+| `singular integrate` | Merge eligible accepted branches; `--task TASK-XXXX` selects one, `--dry-run` previews. |
+| `singular status` | Reconciler status. |
+| `singular recover` | Stale-state recovery (`--scan`, `--prune`) and candidate recovery. |
+| `singular validate-dag` | Validate the DAG. |
+| `singular next-area` | First ready DAG node. |
+| `singular next-areas` | Ready frontier; `--explain` includes exclusions. |
+| `singular area-gate` | Read a node's gate status: `NODE`. |
+| `singular gate` | `validate FILE` reports gate-result contract violations. |
+| `singular promote-gate` | Invoke the configured gate promoter for `NODE`. |
+| `singular human-gate` | Request, approve or inspect hash-bound human approval. |
+| `singular supersede` | Replace a task: `TASK-XXXX --by TASK-YYYY --reason TEXT`. |
+| `singular unpark` | Return a parked task to ready; resets product repairs, not completed review rounds. |
+| `singular clear-backoff` | Clear planner backoff and record the event. |
+| `singular breaker` | `show` or `reset` the no-progress breaker. |
+| `singular stop` | Write STOP; `--wait` waits up to 300 seconds for the auto loop to exit (`--wait=SECONDS` sets the bound). |
+| `singular resume` | Remove STOP; does not relaunch the loop. |
+| `singular wake` | Clear backoff/breaker/STOP and end the nap; `--keep-stop` preserves STOP. |
+| `singular gates` | Per-node gate table; `--json` for structured output. |
+| `singular health` | Health digest; `--json` for structured output. |
+| `singular gc` | Prune integrated worktrees, cap run history and rotate events; `--dry-run` previews. |
+| `singular plan` | `archive` a plan or `list` archived plans. |
+| `singular ask` | Ask the supervisor a question; `--wait` waits for its answer. |
+| `singular report` | Request a supervisor briefing. |
+| `singular lease` | Raw `list`, `show TASK`, `create` or `set-status TASK STATUS` operations. |
+| `singular fence` | `TASK-XXXX [--observe-only]`: by default, terminates the recorded worker process group when its leader is alive, then marks the dispatch parked if absence is proven or quarantined otherwise. No quarantine precondition; a healthy worker can be stopped. `--observe-only` reports without terminating or changing the dispatch. |
+| `singular accept-packet` | Accept an existing packet at `PATH` on deterministic checks alone, with no auditor run: writes an accepted audit verdict and marks the packet, lease and task accepted. Integration then merges eligible accepted work and, under `singular auto` or launchd defaults, pushes it. This does not supply an independent review round. Under `SINGULAR_ACCEPTANCE=every-path` it writes no verdict. The retained independent audit, the review round and the host report must already satisfy the acceptance rule, and a refusal exits 2 and parks the task. |
+| `singular campaign` | `start`, `end`, `verify`, `status` or `canary` for a frozen runtime campaign. |
+| `singular metrics` | Read context metrics; `--json` for structured output. |
+| `singular graph` | Context graph operations; requires `SINGULAR_CTX_GRAPH=1` at CLI dispatch. |
+| `singular experiment-report` | Raw experiment metrics; requires `SINGULAR_CTX_EXPERIMENT=1` at CLI dispatch. |
+| `singular console` | Serve or inspect the console; see [console.md](console.md). |
+| `singular setup` | Prepare a stopped repo and report its next action. |
+| `singular init` | Scaffold config, orchestration files and version pin. |
+| `singular doctor` | Preflight checks; `--json` for the structured report. |
+| `singular manifest` | Opt-in routing-manifest `gen`, `check`, `lint` and `bless`. |
+| `singular context` | Local retrieval: build/search/get/explain, effective configuration and evaluation reports. |
+| `singular memory` | Governed project memory proposals, review, lifecycle and checkpoints. |
+| `singular review-policy` | Effective policy, review capacity, reservations, ledger and operator interventions. |
+| `singular test` | Supervised engine regression run; requires an engine checkout. |
+| `singular update` | Pin the consumer to an engine version. |
+| `singular migrate` | Run schema migrations; `--dry-run` prints the chain. |
+| `singular version` | Show CLI and resolved engine versions. |
+| `singular help` | General CLI usage; optional command families may be hidden when disabled. |
 
 ## Core env knobs
 
-Set durable values in `singular.config.json` `env{}`; use shell env for
-one-off overrides. Operator secrets/overrides go in
-`.singular-state/config.local.sh` (gitignored).
+Configuration loads in increasing precedence: incoming process environment,
+`singular.config.json` (including `env{}`), `singular.config.sh`, then
+`.singular-state/config.local.sh` (gitignored). A shell assignment cannot
+override the same key pinned in a later layer. The bootstrap-only
+`SINGULAR_BASH_BIN` is an exception: repo config cannot select Bash.
+The table gives engine defaults unless an entry point is named; launcher
+settings are listed in [SKILL.md](../SKILL.md#launchd-defaults-macos).
 
 | Knob | Default | Effect |
 | --- | --- | --- |
-| `SINGULAR_MAX_CONCURRENT` | `5` | Max L2 workers running concurrently. |
-| `SINGULAR_MAX_DISPATCH` | `5` | Max tasks dispatched per reconcile cycle. |
-| `SINGULAR_ENABLE_L1_PARALLEL` | `0` | `1` runs one L1 planner per frontier node concurrently. Turn this ON for parallel planning. |
+| `SINGULAR_MAX_CONCURRENT` | `auto` | Max L2 workers running concurrently. `auto` sizes it from the machine every cycle: min of CPU (cores - 2, capped at 8), memory (available - 2 GiB, 1 GiB per worker) and disk. An integer pins a fixed ceiling. Either way, no new worker or planner starts while load per core is above 1.5 or memory is under the reserve (`SINGULAR_LOAD_HIGH_WATER` / `SINGULAR_LOAD_LOW_WATER`, `SINGULAR_RESOURCE_THROTTLE=0` to disable). |
+| `SINGULAR_MAX_DISPATCH` | `auto` | Max tasks dispatched per reconcile cycle; follows the effective worker ceiling. |
+| `SINGULAR_ENABLE_L1_PARALLEL` | `0` | `1` enables parallel planning of ready nodes, bounded by planner and resource limits; enable only for suitable independent work. |
 | `SINGULAR_DETACHED_DISPATCH` | `1` | Reconcile pre-leases and spawns workers in their own sessions, returning in seconds; a reaper attributes outcomes on later cycles. `0` = legacy synchronous wait. |
 | `SINGULAR_AUTO_INTEGRATE` | `1` | Merge completed worker branches during actuate cycles. |
-| `SINGULAR_PUSH` | `0` / `1` | Push integrated branches to the remote. Defaults to `0` for directly-invoked engine commands (`singular reconcile` etc.) and `1` under `singular auto` and launchd. |
-| `SINGULAR_MAX_HOURS` | `12` | Wall-clock budget for `singular auto`. |
+| `SINGULAR_PUSH` | `0` / `1` | Push the target and worker branches after integration, and the target branch after a reconcile control-state commit, to `origin`. Defaults to `0` for direct commands (`singular reconcile --actuate`, `singular integrate`) and `1` under `singular auto` and launchd. Set effective `SINGULAR_PUSH=0` to disable pushing; explicit `1` also enables it on direct commands. |
+| `SINGULAR_MAX_HOURS` | `20` | Wall-clock budget for `singular auto`; the launchd launcher supplies `12`. |
 | `SINGULAR_MAX_CONSEC_FAILS` | `5` | Circuit breaker: consecutive no-progress cycles before `singular auto` halts. |
-| `SINGULAR_MAX_RETRIES` | `3` | Per-task worker retries before the decider escalates. |
+| `SINGULAR_MAX_RETRIES` | `3` configured | The driver caps product repairs at 1 for normal/low risk and 2 for high/critical or unknown risk. Risk tier is selected in order: `SINGULAR_TASK_RISK_TIER`, the task's `Risk tier:` header, `SINGULAR_DEFAULT_RISK_TIER`, config `retryPolicy.defaultRiskTier`, then `normal`. This setting can lower that ceiling, never raise it; review capacity is checked separately. |
 | `SINGULAR_STALE_MINUTES` | `60` | Lease age before a task without a live dispatch pid is reclaimed. |
 | `SINGULAR_TARGET_BRANCH` | (config) | Integration target branch. |
 | `SINGULAR_BASH_BIN` | `bash` / current fallback | Absolute Bash ≥4 path set in the shell/service environment before launch. Bootstrap-only; committed repo config is ignored. |
@@ -29,10 +90,12 @@ one-off overrides. Operator secrets/overrides go in
 | `SINGULAR_SESSION_AFFINITY` | `1` | Reuse a role's prior runtime session when staleness gates pass. |
 | `SINGULAR_FIX_PROMPT_STRUCTURED` | `1` | Structured fix prompt (authoritative open findings) on retries. |
 | `SINGULAR_DECIDER_FAST` | `1` | Clear-cut failure classes resolved by host policy table without a model round-trip. |
-| `SINGULAR_WORKER_INFRA_MAX` / `SINGULAR_AUDIT_INFRA_MAX` | `1` / `2` | Extra re-runs on infra failures before surfacing them. |
+| `SINGULAR_WORKER_INFRA_MAX` / `SINGULAR_AUDIT_INFRA_MAX` | `1` / `2` configured | The driver clamps each to at most 1 extra infrastructure retry; `0` disables it. These retries do not spend product repairs. |
 | `SINGULAR_PREFLIGHT_REQUIRE_ACCEPTANCE` | `1` | Preflight rejects tasks without acceptance criteria. |
+| `SINGULAR_ACCEPTANCE` | `driver-only` | `every-path` applies the driver's acceptance rule also to packet import (reconcile), `integrate` and `accept-packet`, and hands stranded-packet recovery to that strict `accept-packet`. A refusal names the failing conjunct and reason, and parks the task once. Regating checks the rule only when `SINGULAR_RED_PROOF=enforce` is also set and the task declares a proof. Accept-waivers are refused. See `docs/acceptance.md`. |
+| `SINGULAR_RED_PROOF` | `off` | `observe` or `enforce`: the host runs a task's declared `Proof command:` (unless its test policy waives it) on the base (with only the proof tests from the candidate) and on the candidate, and records the outcome; under `enforce` a declared proof must end `proved` (or `waived`) before the audit. See `docs/red-proof.md`. |
 | `SINGULAR_CONSOLE_PORT` | `8765` (free-port fallback) | Port for `singular console`. |
-| `SINGULAR_MAX_L1_CONCURRENT` | `3` | L1 planner fan-out cap when `SINGULAR_ENABLE_L1_PARALLEL=1` — raise it alongside worker concurrency or parallelism pins at this cap. |
+| `SINGULAR_MAX_L1_CONCURRENT` | `auto` | L1 planner fan-out cap when `SINGULAR_ENABLE_L1_PARALLEL=1`. `auto` is half the effective worker ceiling (at least 1), so it follows worker concurrency; an integer pins it. |
 | `SINGULAR_DECIDER_TIMEOUT_SEC` | `1200` | Wall-clock bound on a model decider run. |
 | `SINGULAR_CLAUDE_TIMEOUT_SEC` | `1200` | claude runner kill-tree timeout (`0` off). |
 | `SINGULAR_CODEX_TIMEOUT_SEC` | `2400` | codex runner kill-tree timeout (`0` off; new 0.5.0 — codex runs were unbounded). |
@@ -190,8 +253,8 @@ is rewritten, no second suite starts.
 
 ## Supervised regression runs (`singular test`)
 
-The engine's own suite is a long job (`<engine home>/tests/run.sh`, ~185 test
-files) that outlives the session which started it. `singular test` makes it a
+The engine's own suite (`<engine home>/tests/run.sh`) can outlive the session
+which started it. `singular test` makes it a
 supervised, attachable run whose evidence lands in the current repo under
 `.singular-state/test-runs/<runId>/` (`manifest.json`, `suite.log`, `logs/`,
 `progress.jsonl`).
@@ -237,22 +300,20 @@ Starting a run on an engine home that cannot host the suite fails once, by name,
 checkout. `--status` and `--wait` are exempt in both cases: reporting on a past
 run needs no runnable suite.
 
-## Context knobs (0.4.x)
+## Context knobs
 
-Raw engine defaults stay `0` for back-compat; the recommended production
-set (validated by the 0.4.0 experiment: 75 treatment tasks, 0 escaped
-defects vs 1/30 control; median task wall-clock 9.6 min vs 19.1 min):
+These are current defaults; the table makes no claim of measured benefit.
 
-| Knob | Recommended | Effect |
+| Knob | Default | Effect |
 | --- | --- | --- |
-| `SINGULAR_PLANNER_SESSION` | `1` | Per-node planner session persistence/resume behind fail-closed lineage gates. |
-| `SINGULAR_PLAN_CRITIQUE` | `1` | Fresh read-only skeptic critic over staged planner batches before import. |
-| `SINGULAR_PLAN_REVISE_MAX` | `2` | Bounded revise→re-critique loop for `revise` verdicts. |
+| `SINGULAR_PLANNER_SESSION` | `1` | Per-node planner session persistence/resume behind lineage checks. |
+| `SINGULAR_PLAN_CRITIQUE` | `1` | Fresh read-only critic over staged planner batches before import. |
+| `SINGULAR_PLAN_REVISE_MAX` | `1` | Maximum revise/re-critique cycles for `revise` verdicts. |
 | `SINGULAR_CTX_PACKET` | `1` | Planner context packets flow into worker/fix/audit prompts. |
-| `SINGULAR_CTX_ROUTING` | `1` | Explicit 5-strategy session routing with reason-coded events. |
-| `SINGULAR_CTX_ARTIFACT_SCAN` | `1` | Secret scan over durable artifacts; hits quarantine out of prompts. |
-| `SINGULAR_PAIRED_AUDIT_PCT` | `25` | Sampled post-acceptance fresh audits (bias measurement). |
-| `SINGULAR_REHYDRATE`, `SINGULAR_CTX_MANIFEST`, `SINGULAR_CTX_GRAPH`, `SINGULAR_CTX_EXPERIMENT`, `SINGULAR_CTX_ARMSTATE` | opt-in | Rehydration packets, authored-knowledge manifests, context graph (`singular graph`), experiment reporting (`singular experiment-report`), arm provenance. |
+| `SINGULAR_CTX_ROUTING` | `1` | Session strategy routing with reason-coded events. |
+| `SINGULAR_CTX_ARTIFACT_SCAN` | off (unset/`0`) | Optional secret scan and quarantine of durable artifacts; failures are non-fatal and do not change acceptance. |
+| `SINGULAR_PAIRED_AUDIT_PCT` | `0` | Optional sampled post-acceptance audits for observation; their verdicts do not change acceptance. |
+| `SINGULAR_REHYDRATE`, `SINGULAR_CTX_MANIFEST`, `SINGULAR_CTX_GRAPH`, `SINGULAR_CTX_EXPERIMENT`, `SINGULAR_CTX_ARMSTATE` | off (unset/`0`) | Opt-in rehydration, authored-knowledge manifests, context graph, experiment reporting and arm provenance. |
 
 Key events (in `.singular-state/events.ndjson`, countable via
 `singular metrics`): `context.strategy_selected`, `context.resume_failed`,
@@ -278,9 +339,10 @@ Bound the runners with `SINGULAR_SUPERVISOR_TIMEOUT_SEC` (900) and
 `SINGULAR_ASK_TIMEOUT_SEC` (600). Both verbs spawn a readonly one-shot agent
 over a state digest; the ask/briefing runs appear in the console **Consoles**
 surface as assistant-kind sessions, and Home renders the latest briefing plus a
-propose-only chat (per-key Apply chips are the only write path).
+propose-only chat. Apply chips write settings; ask/report requests create
+supervisor run artifacts as described in [console.md](console.md).
 
-## Autonomy runbook
+## Optional autonomous operation
 
 `singular auto` halts on: STOP sentinel, wall-clock budget
 (`SINGULAR_MAX_HOURS`), circuit breaker (`SINGULAR_MAX_CONSEC_FAILS`
@@ -288,36 +350,21 @@ consecutive no-progress cycles), or DAG exhaustion. `--once` runs a single
 iteration. Note the STOP asymmetry: a STOP file makes reconcile cycles skip
 dispatch (a pause), but makes a running `singular auto` loop *exit* — after
 `singular resume` you must relaunch the loop. Since 0.5.0 STOP takes effect
-mid-nap (within `SINGULAR_SLEEP_POLL_SEC`), `singular stop --wait` blocks until
-the loop exits, and `singular auto --detach` is the supported daemonized
+mid-nap (within `SINGULAR_SLEEP_POLL_SEC`). `singular stop --wait` waits up to
+300 seconds for loop exit and returns non-zero on timeout; `--wait=SECONDS`
+sets a different bound. `singular auto --detach` is the supported daemonized
 launch (setsid double-fork, `.singular-state/autonomate.log`, pidfile
 liveness check) — never hand-roll nohup. For always-on operation there is
-a launchd template under `templates/launchd/` (macOS).
+a launchd template under `templates/launchd/` (macOS). Its push and sandbox
+defaults differ from direct commands; see [SKILL.md](../SKILL.md#launchd-defaults-macos).
 
-When supervising a long run yourself (an agent driving repeated
-`reconcile --actuate` cycles), the proven loop shape is:
+For supervision, inspect `singular health --json` and worker outcomes before
+starting another cycle or intervening. Detached dispatch returns while tasks
+are still running; a planner refusal does not imply those tasks have stopped.
+Gate promotion depends on completion evidence and evaluation authority (see
+[SKILL.md](../SKILL.md#5-completion-gates-recovery)), not on a planner's claim.
 
-1. **Actuate** with `SINGULAR_AUTO_INTEGRATE=1`.
-2. **Always wait on dispatched task exits first** before evaluating the
-   cycle — a standing planner refusal on one node must not short-circuit
-   waiting on workers that are still running.
-3. **Promote gates on node-complete signals only when** the proposal inbox
-   is empty AND all of the node's task files are integrated (a
-   duplicate-candidate with an un-integrated packet once nearly produced a
-   false gate).
-4. **Evaluation nodes promote only by authority** — `--operator` or an
-   `agent-review-allowed` node with a valid review file (enforced by the
-   engine since 0.5.0; see SKILL.md §5).
-5. **Planner failures count toward loop exit only when the cycle produced
-   nothing** (no imports, no integrations, no dispatches).
-6. Launch the supervisor detached in its own session (e.g. a
-   setsid/double-fork wrapper) — plain backgrounded shells die with the
-   parent. Log to a file and monitor the file.
-7. Health checks each pass: supervisor pid alive, worker pids vs leases,
-   **free disk** (a 100%-full volume manifests as all-tests-red gate runs,
-   not a disk error).
-
-## Recovery recipes (0.5.0 verbs)
+## Recovery recipes
 
 One numbered recipe per incident class: symptom → verify → command →
 expected outcome. Never hand-edit state files; every recipe is a verb.
@@ -327,7 +374,8 @@ expected outcome. Never hand-edit state files; every recipe is a verb.
    .tasks` and read the task file. A task parked on an ENVIRONMENT failure
    (`escalate-infra`, or `escalate-parked` after `audit-infra`/`worker-infra`)
    is not broken work — repair the environment, then `singular unpark TASK-XXXX`
-   to return it to the frontier with its retry budget reset. Supersede is for
+   to return it to the frontier with its product-pass budget reset. Completed
+   review rounds are retained; unpark does not grant review capacity. Supersede is for
    work that should be replaced, not for work that was blocked. Run:
    `singular supersede TASK-XXXX --by
    TASK-YYYY --reason "…"` (add `--force` only if a live dispatch must die).
@@ -383,9 +431,9 @@ before intervening.
 **Provider quota wall.** Switch runners: use the console Providers tab's
 "Use as default runner", or set `SINGULAR_RUNNER` in `singular.config.json`
 `env{}` (any of `claude-run.sh`, `codex-run.sh`, `gemini-run.sh`,
-`opencode-run.sh`, `cursor-run.sh`, `grok-run.sh` — check auth first via
-`singular console --providers`). Delete
-`.singular-state/planner-backoff.json` if its premise died with the switch;
+`opencode-run.sh`, `cursor-run.sh`, `openrouter-run.sh`, `grok-run.sh` — check auth first via
+`singular console --providers`). Use `singular clear-backoff` if its premise
+no longer holds after the switch;
 session-affinity's runner-changed gate correctly degrades persisted
 sessions to fresh.
 
@@ -399,5 +447,5 @@ stdin `</dev/null` for a reason).
 disagreement, fails on schema mismatch (`singular migrate` upgrades).
 `singular update <ver>` repins. `singular setup` resolves the pin, migrates, and
 re-validates in one pass when you would otherwise be running those verbs in
-sequence. Remember: the installed `~/.singular/bin/singular` drives — never run
-engine tree scripts directly.
+sequence. Use the CLI's engine resolution for consumer operations. Engine
+development and tests can select a checkout with `SINGULAR_ENGINE_HOME`.

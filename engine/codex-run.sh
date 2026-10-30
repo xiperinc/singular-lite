@@ -527,7 +527,7 @@ PY
 # The provider pipeline as a SESSION LEADER. singular_setsid_exec is the last
 # command, so the `&` below makes $! the leader itself (pid == pgid) and
 # singular_kill_tree can group-kill codex plus everything it spawned with one
-# negative pid — no `ps`, which is the whole point (PMGO-004: in a sandbox that
+# negative pid — no `ps`, which is the whole point (in a sandbox that
 # denies process enumeration, only the direct child was being signalled and the
 # provider's descendants survived every timeout, invisibly).
 #

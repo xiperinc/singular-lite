@@ -5,7 +5,7 @@
    refetches on each visible tick with a since-cursor. */
 
 import { S } from "../app.js";
-import { apiFetch } from "../core/api.js";
+import { apiFetch, onRecover } from "../core/api.js";
 
 // ---- DAG (singular.codex.dag.v0) ----
 let dag = null;
@@ -36,6 +36,10 @@ export function dagMaybeRefetch() {
   const sig = JSON.stringify(byNode || null);
   if (sig !== lastGatesSig) { lastGatesSig = sig; fetchDag(); }
 }
+
+// Reads were failing and came back: the gate-map signature may not have moved,
+// but what we hold may be older than the outage (or nothing at all).
+onRecover(() => { lastGatesSig = null; fetchDag(); });
 
 // ---- Derived DAG indexes (recomputed lazily per dag identity) ----
 let idxDag = null, idxCache = null;

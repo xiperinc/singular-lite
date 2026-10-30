@@ -1,46 +1,5 @@
 #!/usr/bin/env bash
-# Composed END-TO-END guard for the executable DAG node `subgraph-rehydrate`
-# (stage S6-graph, layer engine_runtime) — the stage exit gate the per-slice
-# tests never cover on their own. The whole runtime path is already integrated
-# and wired: the selection reader (TASK-0099
-# singular_ctx_rehydrate_subgraph_select), the node->source resolver (TASK-0101
-# singular_ctx_rehydrate_subgraph_sources), the order-preserving assembler
-# (TASK-0102 singular_ctx_rehydrate_subgraph_assemble), the A/B arm decider
-# (TASK-0104 singular_ctx_rehydrate_subgraph_arm_mode), the ctx-route.sh manifest
-# selector (TASK-0105 singular_ctx_route_subgraph_manifest), and the shared inject/
-# record selector (TASK-0106 singular_ctx_route_subgraph_render). Each is covered
-# ONLY by its own per-slice test; NONE exercises the whole requiredCompletion in
-# ONE fixture-lineage walk.
-#
-# This guard authors ONE deep-lineage fixture graph corpus (canonical nodes.jsonl
-# + edges.jsonl per schemas/context-graph.v0.schema.json) plus durable fixture
-# artifacts on disk at each node provenance.sourcePath, then drives the integrated
-# composed path — singular_ctx_rehydrate_subgraph_assemble and the WIRED selectors
-# singular_ctx_route_subgraph_render / singular_ctx_route_subgraph_manifest — and
-# asserts the documented selection in a single walk:
-#
-#   * Deep lineage walked: the task, its plan-version, a surviving critique
-#     finding, and an open assumption all appear in the selection.
-#   * Rejected observations excluded: a finding reached ONLY across a
-#     rejects_observation edge appears in NEITHER the packet NOR the manifest.
-#   * Contradictions surfaced first: the node flagged by an OPEN contradicts edge
-#     with no superseding resolution is the FIRST packet section.
-#   * Caps unchanged: section bodies capped at SINGULAR_CONTEXT_SECTION_MAX_CHARS
-#     and shrinking the knob shrinks a section deterministically.
-#   * Manifests unchanged: the manifest conforms to
-#     singular.orchestration.ctx-rehydrate-manifest.v0 and its source ids + sha256s
-#     EXACTLY match the packet's included sources (the same-sources invariant).
-#   * Determinism: the packet and manifest are byte-identical across repeat runs.
-#   * OFF-parity: with SINGULAR_CTX_SUBGRAPH_REHYDRATE unset/0 the wired selectors
-#     yield flat/empty, byte-identical to the flat capsule behavior.
-#   * Taint-unreachability / evidence invariance: the subgraph rehydrate path
-#     confers NO independence, records nothing authoritative, and the rehydrate
-#     strategy stays tainted per singular_ctx_route_strategy_tainted.
-#
-# This is a strict-test-first GUARD over the composed integrated path: it changes
-# NO engine/ code (tests/test-engine-clean.sh stays green) and reuses the fixture-
-# corpus authoring convention the integrated graph-query and selector tests use,
-# with only existing context-graph.v0 node/edge types.
+# Regression contracts for ctx-rehydrate-subgraph-e2e.
 set -uo pipefail
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then

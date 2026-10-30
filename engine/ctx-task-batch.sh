@@ -247,7 +247,7 @@ PY
     return 2
   fi
 
-  local destination_id source_id candidate v_id v_status v_area v_owned v_mode v_deps
+  local destination_id source_id candidate v_id v_status v_area v_owned v_mode v_deps parse_err
   local source_ids_json destination_ids_json internal_dep
   source_ids_json="$(cut -f2 "$manifest" | python3 -c \
     'import json,sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))')" || {
@@ -263,6 +263,19 @@ PY
   while IFS=$'\t' read -r destination_id source_id; do
     [[ -n "$destination_id" && -n "$source_id" ]] || continue
     candidate="$candidate_dir/$destination_id.candidate.md"
+    # The task parser's own diagnostic (0.23.7). It used to be discarded here
+    # (`2>/dev/null || true`), so a markdown the parser rejected surfaced as
+    # "task id mismatch: batch=TASK-0001 markdown=" and the planner, the
+    # operator and the event log never saw the line and rule that failed.
+    local parse_err=""
+    if ! parse_err="$(singular_task_json "$candidate" 2>&1 >/dev/null)"; then
+      parse_err="${parse_err//$candidate/$source_id.md}"
+      parse_err="$(printf '%s' "$parse_err" | tr '\n' ' ' | sed 's/  */ /g;s/ $//' | head -c 600)"
+      [[ -n "$parse_err" ]] || parse_err="task-parser: $source_id.md: the task markdown could not be parsed"
+      echo "task markdown rejected by the task parser: $parse_err" >&2
+      rm -rf -- "$candidate_dir"
+      return 2
+    fi
     v_id="$(singular_task_field "$candidate" taskId 2>/dev/null || true)"
     if [[ -z "$v_id" || "$v_id" != "$source_id" ]]; then
       echo "batch/markdown task id mismatch: batch=$source_id markdown=$v_id" >&2

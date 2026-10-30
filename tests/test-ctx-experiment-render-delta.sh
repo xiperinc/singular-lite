@@ -1,42 +1,5 @@
 #!/usr/bin/env bash
-# Covers the read-only experiment HEADLINE renderer engine/ctx-experiment-render-delta.sh.
-# TASK-0085 engine/ctx-experiment-render.sh renders the summary bundle's per-arm
-# ABSOLUTE tables, but the treatment-vs-control DELTA (TASK-0089
-# singular_ctx_experiment_delta_json) and the arm-integrity AUDIT (TASK-0097
-# singular_ctx_experiment_armaudit_json) are not rendered as markdown anywhere.
-# This brick renders BOTH, completing the report presentation.
-#
-# It ships NO metric of its own: it FORMATS the already-computed delta and audit
-# artifacts VERBATIM (no recompute, no reclassify) and emits markdown to STDOUT
-# ONLY. When no source is supplied the public entry obtains both artifacts by
-# delegating to their integrated json composers over the resolved corpus defaults.
-#
-# Three chained slices, all inside engine/ctx-experiment-render-delta.sh:
-#   1. singular_ctx_experiment_render_delta_table   — from the delta artifact,
-#      render a deterministic treatment-effect table (each metric's B-minus-A
-#      delta + neutral direction).
-#   2. singular_ctx_experiment_render_armaudit_table — from the audit artifact,
-#      render a per-arm integrity table (recorded / unrecorded / consistent /
-#      inconsistent counts + the flagged inconsistent runIds).
-#   3. singular_ctx_experiment_render_result_md [runs_dir] [events_file] [metrics_file]
-#      — obtain both artifacts by delegating to the composers (threading the
-#      corpus args per each composer's signature) and render both sections in a
-#      stable order to stdout as ONE markdown fragment.
-#
-# Guarantees pinned BEHAVIORALLY over fixtures (no absence greps, planner rule 9):
-#   - verbatim rendering: every rendered cell equals the corresponding artifact
-#     value formatted with the shared numeric convention; representative cells are
-#     cross-checked against the fixtures.
-#   - deterministic markdown: byte-identical across repeated runs on one input.
-#   - no-source delegation: the entry renders exactly what rendering the delegated
-#     delta + audit artifacts produces (threaded corpus args and env defaults).
-#   - fail-safe: zeroed/empty artifacts render well-formed zero tables + a zero
-#     exit, never an error or partial output.
-#   - STDOUT ONLY / read-only: the input fixture tree is byte-identical after every
-#     call (no file created, moved, or mutated — in particular no
-#     experiment-report.md and no run artifact/index/event/lease/task file), and
-#     engine/ctx-experiment-render.sh plus the sibling ctx-experiment-*.sh files
-#     are byte-unchanged.
+# Regression contracts for ctx-experiment-render-delta.
 set -uo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

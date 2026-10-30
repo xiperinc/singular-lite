@@ -31,7 +31,7 @@ SCHEMA_AUTHORED="$ENGINE_HOME/schemas/orchestration/ctx-rehydrate-authored-manif
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 # Source the engine so the real emitters are in scope (the ctx-*.sh files load
-# via the context-evolution glob block in engine/lib.sh).
+# via the context module glob block in engine/lib.sh).
 source "$ENGINE_HOME/engine/lib.sh"
 type singular_ctx_rehydrate_manifest >/dev/null 2>&1 \
   || fail "singular_ctx_rehydrate_manifest not defined after sourcing engine/lib.sh"
@@ -158,7 +158,7 @@ sys.stdout.write(json.dumps(obj, sort_keys=True))
 ')"
 assert_invalid "$SCHEMA_AUTHORED" "$AUTHORED_MUTATED" "authored entry with authoritative:true"
 
-# --- additive `authored` key (TASK-0063 shape) -------------------------------
+# --- additive `authored` key (authored source shape) -------------------------------
 # The event builder merges the whole authored manifest object under an optional
 # additive `authored` key on the core manifest. Build that shape from the two
 # LIVE emitter outputs (exactly as engine/ctx-rehydrate-event.sh does) and prove

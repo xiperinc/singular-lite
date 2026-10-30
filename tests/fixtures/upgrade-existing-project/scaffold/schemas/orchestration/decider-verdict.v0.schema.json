@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.decider-verdict.v0",
+  "title": "singular Autonomous Decider Verdict",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "failureClass",
+    "action",
+    "rationale",
+    "nextOwner"
+  ],
+  "properties": {
+    "schema": {
+      "const": "singular.orchestration.decider-verdict.v0"
+    },
+    "failureClass": {
+      "type": "string",
+      "minLength": 1
+    },
+    "taskId": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "campaignBinding": {
+      "type": "string",
+      "minLength": 1
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "retry",
+        "rerun-tests",
+        "rebase",
+        "fork",
+        "cancel",
+        "supersede",
+        "amend-scope",
+        "rebuild-context",
+        "revalidate-evidence",
+        "split-task",
+        "accept-waiver",
+        "release",
+        "escalate-infra",
+        "escalate-parked"
+      ]
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "nextOwner": {
+      "type": "string",
+      "minLength": 1
+    },
+    "confidence": {
+      "type": "number"
+    }
+  }
+}

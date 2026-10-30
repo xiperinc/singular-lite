@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Context-packet contract parser (stage S4-context-packets, node
-# context-packet-contract). Sourced exactly once by the context-evolution loader
+# context-packet-contract). Sourced exactly once by the context module loader
 # block in lib.sh (it matches the ctx-*.sh glob). This file defines a PURE helper
 # and is present-but-uncalled by every existing engine/CLI/driver path, so with
 # it sourced the engine stays byte-identical to prior behavior.

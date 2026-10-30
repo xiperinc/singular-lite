@@ -1,30 +1,5 @@
 #!/usr/bin/env bash
-# Covers the SECOND slice of the OPTIONAL authored-knowledge manifest ingestion
-# leaf (stage S5-routing, node `rehydrate-path`, layer engine_runtime).
-# `engine/ctx-rehydrate-authored-eligible.sh` ships a PURE, read-only,
-# present-but-uncalled eligibility filter
-#
-#   singular_ctx_rehydrate_authored_eligible <trigger> [<trigger> ...]
-#
-# that reads the selector's JSON-Lines (one authored-knowledge record per line,
-# each carrying id / source / class=authored-knowledge / authoritative=false /
-# load-when / freshness) on stdin and emits only the entries eligible to inject
-# for the current trigger context:
-#
-#   - load-when: an entry is eligible iff its load-when list is empty (the
-#     documented unconditional baseline) or contains at least one supplied
-#     trigger; ineligible entries are dropped.
-#   - freshness gate: an entry whose freshness is a documented stale/expired
-#     state is NEVER emitted as current (mirroring TASK-0058's
-#     description_unverified rule), so non-current authored knowledge can never
-#     be presented as current or authoritative.
-#   - class markers pass through unchanged: emitted entries keep
-#     class=authored-knowledge and authoritative=false; the filter never
-#     elevates an entry to authoritative.
-#   - deterministic, id-sorted output; identical input+triggers -> byte-identical.
-#   - pure / read-only / fail-soft: malformed JSONL lines are skipped, empty
-#     stdin yields empty output, it mutates nothing on disk, and never exits
-#     non-zero on well-formed input.
+# Regression contracts for ctx-rehydrate-authored-eligible.
 set -uo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

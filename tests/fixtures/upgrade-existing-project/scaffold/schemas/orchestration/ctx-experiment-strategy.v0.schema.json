@@ -1,0 +1,124 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://singular.local/schemas/orchestration/ctx-experiment-strategy.v0.schema.json",
+  "title": "singular.orchestration.ctx-experiment-strategy.v0",
+  "description": "Secondary raw-metrics artifact the operator's experiment-report.md references at merge alongside the ctx-experiment-report.v0 artifact: routing-derived resume/rehydrate hit rates (overall, sliceable per experiment arm and per role) and the gate-refusal reason mix (a sorted reason-to-count map over non-resume selections, plus a distinct resume-then-failed count). Emitted read-only from an events log; keys are sorted and deterministic for a fixed input set.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "hitRates", "refusalMix"],
+  "properties": {
+    "schema": {
+      "const": "singular.orchestration.ctx-experiment-strategy.v0"
+    },
+    "hitRates": {
+      "type": "object",
+      "description": "Resume/rehydrate hit rates. Each slice's denominator is the total strategy selections (routing decisions) in that slice, never accepted tasks.",
+      "additionalProperties": false,
+      "required": ["overall", "byArm", "byRole"],
+      "properties": {
+        "overall": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["total", "resume", "rehydrate", "resumeHitRate", "rehydrateHitRate"],
+          "properties": {
+            "total": { "type": "integer", "minimum": 0 },
+            "resume": { "type": "integer", "minimum": 0 },
+            "rehydrate": { "type": "integer", "minimum": 0 },
+            "resumeHitRate": { "type": "number", "minimum": 0 },
+            "rehydrateHitRate": { "type": "number", "minimum": 0 }
+          }
+        },
+        "byArm": {
+          "type": "object",
+          "description": "Both experiment arms (A = control / M0 knob-state, B = treatment), always present.",
+          "additionalProperties": false,
+          "required": ["A", "B"],
+          "properties": {
+            "A": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["total", "resume", "rehydrate", "resumeHitRate", "rehydrateHitRate"],
+              "properties": {
+                "total": { "type": "integer", "minimum": 0 },
+                "resume": { "type": "integer", "minimum": 0 },
+                "rehydrate": { "type": "integer", "minimum": 0 },
+                "resumeHitRate": { "type": "number", "minimum": 0 },
+                "rehydrateHitRate": { "type": "number", "minimum": 0 }
+              }
+            },
+            "B": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["total", "resume", "rehydrate", "resumeHitRate", "rehydrateHitRate"],
+              "properties": {
+                "total": { "type": "integer", "minimum": 0 },
+                "resume": { "type": "integer", "minimum": 0 },
+                "rehydrate": { "type": "integer", "minimum": 0 },
+                "resumeHitRate": { "type": "number", "minimum": 0 },
+                "rehydrateHitRate": { "type": "number", "minimum": 0 }
+              }
+            }
+          }
+        },
+        "byRole": {
+          "type": "object",
+          "description": "Routing roles (implementer, planner, reviewer), always present.",
+          "additionalProperties": false,
+          "required": ["implementer", "planner", "reviewer"],
+          "properties": {
+            "implementer": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["total", "resume", "rehydrate", "resumeHitRate", "rehydrateHitRate"],
+              "properties": {
+                "total": { "type": "integer", "minimum": 0 },
+                "resume": { "type": "integer", "minimum": 0 },
+                "rehydrate": { "type": "integer", "minimum": 0 },
+                "resumeHitRate": { "type": "number", "minimum": 0 },
+                "rehydrateHitRate": { "type": "number", "minimum": 0 }
+              }
+            },
+            "planner": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["total", "resume", "rehydrate", "resumeHitRate", "rehydrateHitRate"],
+              "properties": {
+                "total": { "type": "integer", "minimum": 0 },
+                "resume": { "type": "integer", "minimum": 0 },
+                "rehydrate": { "type": "integer", "minimum": 0 },
+                "resumeHitRate": { "type": "number", "minimum": 0 },
+                "rehydrateHitRate": { "type": "number", "minimum": 0 }
+              }
+            },
+            "reviewer": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["total", "resume", "rehydrate", "resumeHitRate", "rehydrateHitRate"],
+              "properties": {
+                "total": { "type": "integer", "minimum": 0 },
+                "resume": { "type": "integer", "minimum": 0 },
+                "rehydrate": { "type": "integer", "minimum": 0 },
+                "resumeHitRate": { "type": "number", "minimum": 0 },
+                "rehydrateHitRate": { "type": "number", "minimum": 0 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "refusalMix": {
+      "type": "object",
+      "description": "Gate-refusal reason mix: the routing gate reasons that declined resume, tallied over non-resume (fresh + rehydrate) selections, plus a distinct resume-then-failed count.",
+      "additionalProperties": false,
+      "required": ["reasonMix", "resumeFailed"],
+      "properties": {
+        "reasonMix": {
+          "type": "object",
+          "description": "Stable, sorted reason-to-count map over the reason field of non-resume selections. An absent/empty reason buckets under 'unspecified', never dropped.",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "resumeFailed": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

@@ -15,8 +15,6 @@ set -euo pipefail
 # than left to strand a worktree.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/lib.sh"
-source "$SCRIPT_DIR/lifecycle.sh"
 
 # `singular recover candidate ...` is the public route to the locked host ops
 # surface. Keep scan/prune behavior here; candidate authorization is delegated
@@ -38,12 +36,30 @@ if [[ "${1:-}" == "continuation-preparation" ]]; then
   exec "$SCRIPT_DIR/ops.sh" rearm-continuation-preparation "$@"
 fi
 
-mode="scan"
+recover_usage() {
+  echo "usage: $0 [--scan|--prune|--help|candidate TASK-XXXX ...|orphan-reservation TASK-XXXX ...|continuation TASK-XXXX ...|continuation-preparation TASK-XXXX ...]"
+}
+
+# Local modes take no values: help anywhere is usage only, and anything after
+# the mode is an error. Validate before loading configuration or creating state.
+# Delegated routes above keep their own parsing, including option values.
+for arg in "$@"; do
+  case "$arg" in
+    --help|-h) recover_usage; exit 0 ;;
+  esac
+done
 case "${1:-}" in
   --scan|"") mode="scan" ;;
   --prune) mode="prune" ;;
-  *) echo "usage: $0 [--scan|--prune|candidate TASK-XXXX ...|orphan-reservation TASK-XXXX ...|continuation TASK-XXXX ...|continuation-preparation TASK-XXXX ...]" >&2; exit 2 ;;
+  *) recover_usage >&2; exit 2 ;;
 esac
+if [[ $# -gt 1 ]]; then
+  recover_usage >&2
+  exit 2
+fi
+
+source "$SCRIPT_DIR/lib.sh"
+source "$SCRIPT_DIR/lifecycle.sh"
 
 singular_ensure_state_dirs
 stale_minutes="${SINGULAR_STALE_MINUTES:-60}"

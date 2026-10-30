@@ -7,7 +7,7 @@ set -euo pipefail
 # (a) Scheduler reservation refusals advanced no counter the breaker reads.
 #     reconcile logged origin.reservation_refused and moved on; autonomate never
 #     looked. A task refused every cycle spun at the poll interval with no bound
-#     and no park (field 2026-09-14: 28 refusals in nine minutes). The count must
+#     and no park. The count must
 #     key on a STABLE condition: keying on runId or reservation generation would
 #     reset it every attempt, which is exactly why the spin was unbounded.
 #

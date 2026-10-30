@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# B5 completion test: the evaluator computes the known labeled-corpus metrics,
+# Evaluation contract test: the evaluator computes the known labeled-corpus metrics,
 # the campaign analyser reports real campaign shapes and preserves missing-data
 # semantics, and both run through the public launcher from a foreign cwd
 # without any paid provider.
@@ -129,37 +129,14 @@ set -e
 [[ "$campaign_rc" -eq 2 ]] || { echo "expected exit 2 on absent events, got $campaign_rc" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
-# The evaluation surface is discoverable and the B5 documents exist.
+# The evaluation surface is discoverable and the adoption guide exists.
 # ---------------------------------------------------------------------------
 SINGULAR_ENGINE_HOME="$ROOT" bash "$ROOT/cli/singular" help \
   | grep -q 'context build|search|get|explain|evaluate|campaign-report'
 grep -q 'singular context evaluate' "$ROOT/README.md"
 grep -q 'singular context campaign-report' "$ROOT/README.md"
 
-for doc in docs/brain-build-plan/context-findings.md docs/brain-build-plan/context-adoption.md; do
-  [[ -s "$ROOT/$doc" ]] || { echo "missing B5 document: $doc" >&2; exit 1; }
-done
-
-# Findings must cite the real retained inputs and keep the unproven-reliability
-# and pending-obligation statements explicit.
-python3 - "$ROOT/docs/brain-build-plan/context-findings.md" <<'PY'
-import sys
-text = open(sys.argv[1], encoding="utf-8").read()
-required = [
-    ".singular-state/rescue-20260910/checkpoint.json",
-    ".singular-state/rescue-20260910/native-observations-before-A6.json",
-    ".singular-state/rescue-20260910/autonomous-recovery-20260912/operator-interventions.jsonl",
-    ".singular-state/events.ndjson",
-    "unknown",
-    "TASK-1110",
-    "TASK-1114",
-    "TASK-1015",
-]
-missing = [item for item in required if item not in text]
-assert not missing, f"findings report omits required references: {missing}"
-PY
-
-python3 - "$ROOT/docs/brain-build-plan/context-adoption.md" <<'PY'
+python3 - "$ROOT/docs/context-adoption.md" <<'PY'
 import sys
 text = open(sys.argv[1], encoding="utf-8").read().lower()
 required = ["install", "opt-in", "rollback", "immutable runtime", "memory", "project-local"]

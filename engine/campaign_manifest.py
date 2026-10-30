@@ -27,6 +27,9 @@ PER_RUN_SETTINGS = frozenset({"SINGULAR_INTEGRATION_RECEIPT_FILE"})
 # is pinned below as a value digest, including defaults applied by lib.sh and
 # consumer config/env overrides.
 INVOCATION_SETTING_NAMES = {
+    # The auto L1 planner cap reconcile derives from each cycle's resource
+    # plan (it tracks live machine capacity, so it is per-cycle by nature).
+    "SINGULAR_L1_AUTO_CONCURRENT",
     "SINGULAR_ATTEMPT_REVIEWER_STRATEGY",
     "SINGULAR_ATTEMPT_STARTED_AT",
     "SINGULAR_ATTEMPT_TASK_ID",
@@ -266,10 +269,10 @@ def model_identity() -> dict[str, dict[str, Any]]:
     identity: dict[str, dict[str, Any]] = {}
     for key, value in sorted(os.environ.items()):
         if key in PER_RUN_SETTINGS:
-            # Set by the reconciler for one integration run (TASK-1114's
+            # Set by the reconciler for one integration run (an
             # integration receipt); never part of the frozen configuration.
             # Capturing it made every integration under a manifest created
-            # before it existed report "drift" (2026-09-16).
+            # before it existed report "drift".
             continue
         if not key.startswith("SINGULAR_"):
             continue

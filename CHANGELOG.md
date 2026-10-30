@@ -7,16 +7,389 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## Unreleased
+
+## [0.24.0] — 2026-10-29 — The host proves the tests; one acceptance rule on every path
+
+The first public release since 0.23.4. Versions 0.23.5 to 0.23.7 were not
+published on their own; their entries below ship in this release, and so does
+every behaviour change they name. The defaults that change are the Claude model
+(0.23.7), the machine-sized worker and planner ceilings with the live-pressure
+admission gate and its minimum-progress floor (0.23.5, signal changed to CPU
+busy in 0.23.7), and operator verbs that wait for the loop's lock (0.23.7).
+These new steps run by default. Each of these can be switched off with the
+knob its entry names: the console reloads a changed configuration (0.23.5);
+audit verdicts are normalised for format (0.23.6); gate promotion is retried
+every cycle, and the planner gets one repair round (0.23.7). These cannot be
+switched off: a packet that fails three times is parked (0.23.6) and a task
+refused three times at dispatch is parked (0.23.7), each count set by the knob
+its entry names; bare-string `blockers` and `evidence` entries in state
+packets are wrapped (0.23.6);
+and a parked task's retained work is committed on its worker branch before a
+base refresh (0.23.7).
+The changes new in 0.24.0 keep every default: acceptance runs on the driver
+path only and red proof is off. With neither set, the new acceptance and proof
+paths do not run; task preflight still refuses a malformed proof declaration,
+and the other items below apply as they say.
+
+- **Red proof (opt-in, `SINGULAR_RED_PROOF`, default `off`).** A task can
+  declare `Proof command:` and `Proof tests:`; task preflight refuses one
+  without the other, a proof test outside the owned files, or an unsafe path.
+  With `observe` or `enforce`, after the worker's commit and before the audit,
+  the host itself runs the command in disposable checkouts: on the base with
+  only the proof tests taken from the candidate (it must fail for
+  `strict_test_first`, pass for `characterization_first`) and on the candidate
+  (it must pass). It writes one record per attempt
+  (`runs/<run>/red-proof-<attempt>.json`, schema
+  `singular.orchestration.red-proof.v0`) bound to the base, head, tree,
+  attempt, the command's hash, each proof file's hash and both logs' hashes.
+  Under `enforce`, `not-demonstrated` (the tests pass without the change) and
+  `green-failed` go back to the worker as product failures with a plain
+  message; a setup failure, a missing interpreter or a timeout is
+  infrastructure, retried once and then parked without charging a product
+  repair. With `enforce` and `SINGULAR_ACCEPTANCE=every-path` both set, the
+  acceptance rule gains a conjunct `V` on every publication path: a task that
+  declares a proof is accepted only with a matching `proved` record (or
+  `waived`, when its test policy is `test_after_waiver` or `not_applicable`,
+  under which nothing runs). Only the record the host writes counts:
+  `red-proof-<attempt>.json` (or the test fixtures'
+  `red-proof-attempt-<attempt>.json`) directly in the run folder; a proof
+  record in the worker's copied evidence or in any subfolder does not satisfy
+  `V`. Under
+  `observe` no outcome blocks a task. Preflight refuses malformed proof
+  declarations in every mode. Planner, plan-critic and worker prompts carry
+  the fields when red proof is on.
+  `SINGULAR_RED_PROOF_TIMEOUT_SEC` (default 1200) bounds each run. See
+  `docs/red-proof.md`.
+- **Acceptance on every path (opt-in, `SINGULAR_ACCEPTANCE=every-path`,
+  default `driver-only`).** Packet import (reconcile), `integrate` and
+  `accept-packet` run the same acceptance rule as the driver (host gate
+  verification, independent audit, review round, evidence manifest, and red
+  proof when declared), and stranded-packet recovery is handed to that strict
+  `accept-packet`. A refusal names the conjunct and reason and parks the task
+  once with a reason that names who resolves it and the command that does;
+  the next cycle does not repeat the refusal.
+  Under `every-path`, `accept-packet` writes no audit of its own: without
+  the independent audit and review round it prints what is missing and the
+  command that earns it. Under `every-path` an integration refusal names its subject in words
+  (for example `audit (A)`), an explicit re-import of a refused inbox packet
+  restores the retained copy and judges it again, and every artifact the
+  evidence manifest lists, except the run's `packet.json` (bound
+  separately), is checked against its hash. See
+  `docs/acceptance.md`.
+- **Operator verbs reject malformed calls.** Each mutating verb called with
+  `--help` prints its usage only; one called with an unknown option, a missing
+  value or a trailing argument is refused. Either way STOP, backoff, breaker,
+  task and lease state are unchanged; `resume --help` no longer clears STOP. `recover` validates its own modes'
+  arguments the same way.
+- **Two unused prompt templates are removed** from the engine; a fresh `init`
+  no longer scaffolds them, and an existing project's copies are untouched.
+- **The audit's disposable checkout reports set-up faults** with exit 20 and a
+  set-up-failure report instead of a crash; it fails closed on the same path.
+- **A test pins what a task that declares nothing produces** (run-folder file
+  names, event kinds, rendered prompts), so the opt-in features cannot change
+  the default path unnoticed.
+- **The public source tree.** Internal working records were removed, captured
+  regression inputs were replaced with synthetic fixtures, and the installer
+  payload includes `LICENSE`.
+
+## [0.23.7] — 2026-10-12 — Loop robustness and consistent release identity
+
+- **Claude's runtime default changes for existing projects.** The shipped
+  provider default changes from `claude-opus-4-8` to `claude-sonnet-5-5` for
+  every Claude call without a model override.
+  Effort defaults are unchanged. To keep every Claude call on the old model, set
+  `SINGULAR_CLAUDE_MODEL=claude-opus-4-8` in the project's configuration.
+  Nonempty role-specific settings (`SINGULAR_CLAUDE_L2_MODEL`,
+  `SINGULAR_CLAUDE_L1_MODEL`, `SINGULAR_CLAUDE_PLANNER_MODEL`,
+  `SINGULAR_CLAUDE_AUDITOR_MODEL`, `SINGULAR_CLAUDE_DECIDER_MODEL`) take precedence
+  over `SINGULAR_CLAUDE_MODEL` for calls that read them; the general setting
+  takes precedence over the provider default. The plan critic, the planner's
+  repair round, the paired audit, the supervisor briefing and `singular ask`
+  read only `SINGULAR_CLAUDE_MODEL`, then the provider default. A project that
+  pins models by role only must also set `SINGULAR_CLAUDE_MODEL` to keep those
+  calls on the old model; any role-specific pins for other models still win
+  for calls that read them.
+  For each setting, configuration loads over the environment in this order:
+  `singular.config.json` (`env`), `singular.config.sh`, then
+  `.singular-state/config.local.sh` (the default configuration paths); the
+  later layer wins.
+
+- **Front-door documents match the engine, and release versions agree.** The
+  agent instructions, README and orchestration skill were corrected to describe
+  what the code does. The engine version files, both configuration files and the
+  plugin manifest now share one release version, checked against `VERSION`
+  together with the changelog heading.
+
+- **Review rounds are charged to, and closed by, the right unit.**
+  The review unit is now the supersession chain, keyed by its root task
+  (`review-policy resolve`, called by the L1 driver): siblings get separate
+  series; a `Supersedes:` successor shares its predecessor's budget, extended
+  by `reviewPolicy.supersessionExtraRounds` (1) for at most
+  `maxSupersessionExtensions` (2) supersessions per series. A recorded
+  round that then ended as infrastructure (verdict could not be applied,
+  evidence writer failed, host verification inconclusive) is voided
+  (`review-policy void`, event `review.round_voided`): kept, not counted, not
+  closing. `grant` and `reopen` are unchanged; node-keyed entries from older
+  engines keep bounding the chains already in them. See
+  `docs/review-policy.md`.
+
+- **A parked task's work survives a base refresh, and a refused dispatch no
+  longer loops silently.**
+  - Before refreshing a retained branch, the driver commits a dirty retained
+    checkout on the worker branch as an engine WIP commit
+    (`wip(singular): preserve uncommitted TASK-… worker work before base
+    refresh`, trailer `Singular-WIP:`, event `l1.retained_wip_committed`). Only
+    paths inside the task's owned scope are committed; anything else dirty, a
+    forbidden path or an unfinished merge is a refusal whose last line names
+    the paths. The commit claims no gate and no audit; the drive that follows
+    gates and audits as usual.
+  - The reaper counts consecutive refusals (driver exit 2) per task and
+    reason. At `SINGULAR_DISPATCH_REFUSAL_PARK_THRESHOLD` (3) the task is
+    parked `blocked` with a recorded decision, one
+    `origin.dispatch_refusal_parked` event carrying the driver's reason, and an
+    ATTENTION line in `singular health` (`refusedDispatches` in `--json`) with
+    the reason and `singular unpark TASK`. `unpark` clears the record.
+
+- **Promotion is re-attempted on later cycles.** Every `reconcile --actuate`
+  cycle now runs a promotion sweep: each node `singular_node_pending_promotion`
+  reports gets `promote-gate --from-reconcile --if-ready NODE`, with an
+  `origin.promotion_reattempted` event. A node whose task set, statuses and
+  target HEAD are unchanged since its last attempt is skipped
+  (`.singular-state/promotion-attempts/`); at most
+  `SINGULAR_PROMOTION_SWEEP_MAX` (3) promoter runs per cycle;
+  `SINGULAR_AUTO_PROMOTE_GATES=0` disables it with the other automatic
+  promotion paths. A real gate transition counts as progress.
+
+- **The planner gets the real parser error and one repair.** A malformed
+  scope bullet could lose its parser diagnostic during batch validation and
+  exhaust infrastructure retries instead of being repaired. Three changes:
+  - The batch validator reports the parser's own diagnostic, with the task id
+    and line in place of the private candidate path.
+  - A task batch that fails host validation is sent back to the planner once
+    (`planner.output_repair_requested`): its own output, the exact diagnostic
+    and the scope rules. A corrected answer proceeds as a normal plan
+    (`planner.output_repaired`) and no failure is counted.
+    `SINGULAR_PLANNER_OUTPUT_REPAIR=0` disables the round.
+  - Output that is still malformed is its own class: `planner.failed` with
+    `failureClass: malformed-output`, `failureDomain: planner-output`, the
+    diagnostic and `repairOutcome`; `generate-tasks.sh` and `l1-plan-node.sh`
+    exit 4; the node driver does not spend its infrastructure retry and records
+    the lineage as `planner-output-malformed`, not
+    `initial-planner-infra-exhausted`; `origin.l1_planner_failed` carries
+    `failureKind` and the node driver's reason. A provider failure during the
+    repair call keeps its provider class.
+
+- **The circuit breaker emits events.** Breaker increments and halts were
+  previously visible only in logs, leaving event consumers unaware of a halt. `autonomate.breaker_incremented`
+  carries the new and previous count, the threshold, a `reason` naming the
+  counters that caused it (`no progress and planner-failures=2`) and all the
+  cycle counters. `autonomate.breaker_open` is emitted when the increment
+  reaches the threshold and when a loop refuses to run on an open breaker.
+  `autonomate.exited` carries `reason` (`circuit-breaker-open`,
+  `stop-sentinel`, `time-box`, `dag-complete`, `campaign-drift`,
+  `provider-wait-budget-exhausted`, `once`) and the breaker state.
+  `singular health` prints ATTENTION from 3 consecutive failures, with the last
+  increment's reason, before the loop halts.
+
+- **Operator commands wait for the origin lock.** Commands previously failed
+  immediately with `origin lock busy` while a loop cycle held the lock, making
+  intervention difficult during parallel planning. Lock-taking operator verbs (`unpark`, `supersede`,
+  `recover-candidate`, `reconcile-orphan-reservation`,
+  `authorize-continuation`, `rearm-continuation-preparation`, `gc`,
+  `plan archive`, and a direct `integrate`) now wait up to
+  `SINGULAR_LOCK_WAIT_SEC` (120) and print one
+  `waiting for the loop's lock…` line; `--wait=SECONDS` sets the bound for one
+  command and `--no-wait` / `--wait=0` / `SINGULAR_LOCK_WAIT_SEC=0` fail fast
+  as before. A waiting command registers itself, and `reconcile` checks for a
+  live waiter before it takes the lock and holds off up to
+  `SINGULAR_LOCK_YIELD_SEC` (20), so a cycle boundary lets the operator in even
+  when the loop never naps (`origin.lock_yielded`; a timeout is
+  `origin.lock_wait_timeout`). The loop itself still skips a cycle on a busy
+  lock. `drive --audit-only` takes the campaign publication lock, which already
+  waits (60 s), and is unchanged.
+
+- **The governor's pressure signal is CPU utilisation, not load average.**
+  Load average counts threads blocked on I/O and lags by a minute, so it can
+  throttle admission while CPU capacity remains available. Each
+  cycle now samples the CPU busy fraction over a short window (macOS
+  `top -l 2 -n 0`, Linux two readings of `/proc/stat` with iowait counted as
+  idle) and uses it as the admission signal with the same hysteresis:
+  `resources.cpuBusyHighWater` (`SINGULAR_CPU_BUSY_HIGH_WATER`, `0.90`) and
+  `cpuBusyLowWater` (`SINGULAR_CPU_BUSY_LOW_WATER`, `0.75`); the reason is
+  `cpu-busy` / `cpu-busy-floor`. Load per core stays as the fallback when the
+  CPU cannot be sampled (`pressureSignal` says which decided). The memory gate
+  and the minimum-progress floor are unchanged. `--cpu-busy` /
+  `SINGULAR_RESOURCE_CPU_BUSY` inject the fact; a caller that injects the load
+  instead is not sampled; `resources.cpuSampleSeconds`
+  (`SINGULAR_CPU_SAMPLE_SEC`, `1`; `0` = never sample) sets the window, and
+  `singular health` / `doctor` reuse the loop's sample for 30 s. The plan,
+  `origin.resource_plan`, health and doctor report `cpuBusy` and
+  `pressureSignal`.
+
+## [0.23.6] — 2026-10-05 — sized to the machine, finished work is not lost to format
+
+- **A correct audit verdict is no longer thrown away over its format.**
+  - `audit-verdict.v1` allows `assumptionId` on a classified finding, and the
+    assumption ledger reads it there (it only looked at `findings[]`, which are
+    strings in v1, so the citation never reached it).
+  - The host normalises format before validation
+    (`audit-verdict-host-bind.py --normalize-format`): unknown properties inside
+    `classifiedFindings[]` / `verificationResults[]` items are dropped; an
+    accepted verdict with an uncarried still-open prior is completed from the
+    findings ledger and the review round that classified it (P2/P3 as backlog,
+    a blocking prior as a required fix so the review policy returns `needs-fix`,
+    an unprovable severity still refused). Recorded in the verdict's new
+    host-owned `hostNormalization` member, in `l1.audit_verdict_normalized`, and
+    by keeping the response as received. Unknown top-level members, identity,
+    the verdict value and the verification classification stay fatal.
+    `SINGULAR_AUDIT_FORMAT_NORMALIZE=0` restores the strict behaviour.
+  - Finding coverage skips a bracketed reference tag next to the id
+    (`F1 (P3) [A3]: ...`), avoiding false `classification-incomplete`
+    results for fully classified reviews.
+  - Exhausted format-repair retries on a response with a valid verdict value,
+    task/branch identity and verification echo end as `awaiting-audit`
+    (`audit.format_exhausted`, `l1.task_awaiting_audit`), not `escalate-infra`:
+    the candidate is retained, nothing is charged, the refused response is moved
+    off `audit.json`, and `singular health` prints
+    `singular drive TASK --audit-only`. That new flag replays the retained
+    worker packet (no implementer launch), reruns the gate on the unchanged head
+    and audits it afresh; it also adopts a park written by 0.23.5 or earlier.
+  **Behaviour:** the task file still reads `Status: blocked` while it waits
+  (the engine has one parked state); the decision, the lease `auditRecheck`
+  record and the health line are what distinguish it. A refused auditor
+  response no longer remains in `audit.json` after any exhausted audit retry.
+  Both format rules are now stated in the engine-owned output contract that
+  every auditor prompt carries, and in the auditor template (`singular init`
+  does not rewrite a consumer's existing `prompts/auditor.md`). Schema:
+  `audit-verdict.v1` gains two optional members; the engine validates with its
+  own copy, and a consumer's `schemas/orchestration/` mirror is refreshed by
+  `singular init`. Regression test: `tests/test-audit-verdict-normalisation.sh`.
+
+- **A state packet is no longer refused over free text, and an unimportable
+  packet is parked instead of retried forever.**
+  - Bare-string entries in `blockers[]` and `evidence[]` are wrapped by the
+    host (`{"summary": …}`, `{"kind": "note", "ref": …}`) at worker exit,
+    before validation, host stamping and every hash that binds `packet.json`,
+    and again at import for packets an older engine already queued
+    (`packet.normalized`, with `stage` and the entries). `commands[]`,
+    `tests[]`, status, identity and unknown top-level members stay strict.
+  - Three consecutive failures of the same packet bytes with the same error
+    (`SINGULAR_IMPORT_FAIL_PARK`, default 3) emit one `packet.import_parked`
+    with the validation error; `singular health` reports it as ATTENTION naming
+    the task and the error; the packet is not validated again until its file
+    changes (edit it, or `touch` it to retry as is). `packet.import_failed` now
+    carries the task, the error and the consecutive count.
+  - The worker prompt contract and template state the `blockers[]` shape.
+  Regression test: `tests/test-packet-import-normalisation.sh`.
+
+---
+
+## [0.23.5] — 2026-10-05 — recoverable integration, honest console, no wasted planners
+
+- **The worker ceiling is sized from the machine by default, and the loop backs
+  off when the machine is saturated.** Capacity was computed from disk alone, so
+  the manually chosen ceiling could leave capacity idle or overload the host,
+  causing long planner and critic calls to fail as infrastructure failures. `resources.maxConcurrent` /
+  `SINGULAR_MAX_CONCURRENT` now accept `"auto"` and default to it: the ceiling
+  is the minimum of a CPU budget (cores minus 2, one worker per core, capped at
+  8), a memory budget (available memory minus a 2 GiB reserve, 1 GiB per
+  worker) and the existing disk budget. Before admitting anything, each cycle
+  also reads the 1-minute load per core and available memory; above 1.5 load
+  per core, or under the memory reserve, it starts no new worker or planner
+  (running work is never stopped) and resumes below 1.0 — `reason` says
+  `load-high` or `memory-low`. `origin.resource_plan` gains `cpuSlots`,
+  `memorySlots`, `diskSlots`, `loadPerCore`, `availableMemoryBytes`, `mode` and
+  `admission`; `singular health` prints them and `singular doctor` adds
+  `resources.machine-capacity`. `SINGULAR_MAX_L1_CONCURRENT` defaults to `auto`
+  (half the worker ceiling) and `SINGULAR_MAX_DISPATCH` follows the ceiling. A
+  probe that fails falls back to 3 workers and says `probe-unavailable`. All
+  constants are `resources{}` keys and env knobs; see README "Worker
+  concurrency: the resource governor". Regression test:
+  `tests/test-resource-governor.sh`.
+
+  **Behaviour changes to check.** (1) A consumer with **no** `maxConcurrent`
+  used to get 1 worker from `reconcile` (and `health` reported 3); it now gets
+  the machine-sized ceiling. (2) A consumer with an **explicit integer** keeps
+  its ceiling and its `resource-plan` record unchanged, but is now subject to
+  the live-pressure gate; set `resources.throttle` to `false`
+  (`SINGULAR_RESOURCE_THROTTLE=0`) to opt out, or switch to `"auto"`.
+  (3) The shipped `singular.config.json` template and the launchd launcher now
+  say `auto` instead of 3 and 5; existing copies are not rewritten.
+  (4) `SINGULAR_ENABLE_L1_PARALLEL` is still opt-in — see the README section
+  for why turning it on by default would plan less on a single-node frontier.
+  (5) The default `1.5` / `1.0` load marks are permissive: they would not have
+  throttled the field incident above (13 on 12 cores is 1.08 per core). A host
+  shared with other heavy processes may want `loadHighWater: 1.0` /
+  `loadLowWater: 0.75`. The defaults are unchanged.
+- **A saturated host cannot starve the loop (minimum-progress floor).** When
+  the live-pressure hold would apply and the loop has no active worker and no
+  active planner, the cycle admits exactly one unit of work — one worker if a
+  task is runnable, otherwise one planner — and the plan says so (`reason:
+  load-high-floor` / `memory-low-floor`, `progressFloor: true`). With anything
+  already running the hold is unchanged. `resources.progressFloor: 0`
+  (`SINGULAR_PROGRESS_FLOOR=0`) restores the strict hold.
+- **A red integration gate no longer strands an accepted candidate.** `integrate`
+  wrote `Status: integrated` into the task file before the gate and, on a red
+  gate, rolled it back to the committed `Status: ready`, while the lease stayed
+  bound to the hash of the file with `Status: accepted`. Ordinary retry then
+  failed with "accepted candidate identity changed" and `recover candidate` with
+  "recovery task contract changed"; the only way through was to edit the header
+  by hand. Integrate now restores the pre-merge task file after an abort, leases
+  written by 0.23.4 are repaired when the result is byte-identical to the bound
+  hash, a plain `singular integrate --task T` retries once the target head has
+  changed while the failure domain has capacity, and when it has none the skip
+  line and `singular health` print the exact `recover candidate … --action regate`
+  command. Regression test: `tests/test-integration-gate-red-recovery.sh`.
+- **`doctor` names a reformatted schema mirror for what it is.** When a consumer's
+  `schemas/orchestration/` differs from the engine bundle only by formatting
+  (a repo formatter rewrote it), `schema.bundle` says so and points at
+  `singular init` and the formatter exclusion.
+- **`SINGULAR_L1_SKIP_NODES_WITH_OPEN_TASKS=1` (opt-in).** Parallel L1 planning
+  selected a frontier node again on every cycle while its tasks were still being
+  worked. For a consumer whose planner batch covers the whole node the planner
+  could only answer `no_plannable_slice`, which occupied a planner slot
+  and was recorded as `planner.failed: invalid-output`.
+  With the knob set, `singular_select_l1_frontier` skips a node that has a task
+  whose status is ready, running, leased, dispatched or accepted. Default
+  behaviour is unchanged.
+
+
+- **The console survives a configuration change.** Regenerating the plan (or
+  editing `singular.config.json`) while the console was running made every data
+  route answer `409 configuration-changed` until it was restarted, while
+  `/api/health` stayed 200; the page showed stale data or "loading digest…"
+  forever. A changed input now starts a new generation in process: one `lib.sh`
+  resolution under the configuration lock, derived caches and cached engine
+  modules dropped, then served (`generation.reloadCount` / `lastReload` record
+  why). It still fails closed when the new configuration does not load, with
+  the parse error in the message, and recovers when the file is fixed; a
+  console can also be started on a broken configuration. `/api/health`, the
+  page shell and assets never run or wait behind a reload. **Behaviour:** reads
+  may now resolve configuration (once per detected change);
+  `SINGULAR_CONSOLE_CONFIG_RELOAD=0` restores the strict contract.
+- **The console page says when its data is not arriving.** A persistent banner
+  names the failing route, the server's message, since when (UTC) and the retry
+  countdown; a server that is gone reads "console server is not running — run
+  `singular console --ensure`" and the page reconnects by itself with backoff
+  (cap 10s). First-load failures show the error and a Retry button instead of
+  "loading …", last good data is kept but marked stale, and "updated Ns ago"
+  becomes a warning past three poll intervals. Tests:
+  `tests/test-console-data-health.sh`.
+- **The console keeps its address.** The bound port is saved in
+  `.singular-state/console.port` and reused on the next start
+  (`SINGULAR_CONSOLE_PORT` → saved port → 8765 → free port); a port taken by
+  another process falls back and updates `console.port` / `console.url`.
+
 ## [0.23.4] — 2026-10-02 — Acceptance is a predicate
 
-Closes the acceptance holes and accounting defects found by the 2026-09-16
-loop-economics consultation (action-plan items 7–11), and turns the suite green.
+Closes acceptance and review-accounting defects.
 `schemaVersion` stays **v2**. Several changes alter behaviour an operator can
 see; they are marked **Behaviour**.
 
 ### Acceptance
 
-- **One acceptance predicate for every publication (item 9; `f274758`).**
+- **One acceptance predicate for every publication.**
   `engine/acceptance_validator.py` rechecks, for the exact candidate: the
   host gate passed for this head, tree and attempt (G); a fresh, host-bound,
   completely classified, non-blocking audit (A); the durable review-ledger round
@@ -34,53 +407,52 @@ see; they are marked **Behaviour**.
   auto-healed.** `accept-existing-packet.sh` writes a host-authored verdict, which
   never counts as the audit.
 - **`normalize()` never overwrites a model-reported `failed-product` with the
-  host's `passed` (`4902cfe`).** Only a clean echo mismatch is rewritten.
+  host's `passed`.** Only a clean echo mismatch is rewritten.
 
-### Review policy (items 7 and 8)
+### Review policy
 
-- **Fail-closed classification (`9f9c87e`).** `review_policy.py record --apply`
+- **Fail-closed classification.** `review_policy.py record --apply`
   rewrites the verdict the driver gates on, so these were acceptance holes:
   an unsupported P0/P1 was demoted to P2; an `accepted` label skipped
   inspection; one classified nit hid an unclassified finding. Severity is now
   immutable, every verdict label is inspected, classification must cover every
   finding exactly, and P0/P1 is a floor for `blockingSeverities`. A completely
   classified P2/P3-only needs-fix is still accepted with backlog.
-- **Authoritative review ledger (`dad9fd5`).** `reserve` atomically admits one
+- **Authoritative review ledger.** `reserve` atomically admits one
   review operation; `record` completes it idempotently (same content no-op,
   different content conflict, exit 5) and refuses over the ceiling under the
   lock; an accepted round **closes** the logical change instead of silently
   resetting its budget, and `reopen --authority --reason --evidence` starts a new
   series. Grants bind to their series. Legacy rows keep their old semantics.
 
-### Loop economics (items 10 and 11)
+### Loop economics
 
-- **Provider window at every invocation boundary (`732cd37`).** A validated
+- **Provider window at every invocation boundary.** A validated
   quota, overload or entitlement limit on the current invocation's own runner
   result ends the phase as `provider-deferred` before packet validation, with no
   product-repair or infrastructure charge. Every worker, resume fallback,
   auditor and decider launch checks the window for the provider that role would
   use. **Behaviour:** a deferral parks the lease (with `providerDeferral`);
   resume with `singular unpark`.
-- **Exit 86 split (`2c0beda`).** `codex-run.sh` 86 now means only "resume refused
+- **Exit 86 split.** `codex-run.sh` 86 now means only "resume refused
   before provider work"; a resume that started and failed exits **87** and
   consumes the infrastructure allowance.
-- **findingsStatus contract (`61545cb`).** One prompt fragment in every auditor
+- **findingsStatus contract.** One prompt fragment in every auditor
   renderer; the host validates the map against the host-supplied prior findings.
   `reviewPolicy` is no longer listed as a model-permitted field.
-- **Review capacity before product work; packet-format domain (`108dbb8`).** The
+- **Review capacity before product work; packet-format domain.** The
   static `maxReviewRounds - 1` repair clamp is gone; the driver admits a review
   slot before every product pass. A worker that mis-emits its packet gets one
   read-only re-emission for the unchanged, fingerprinted candidate, shared
   across `worker-no-packet` and representational `packet-invalid`, charged to
   neither product repair nor review. Also fixes a silently skipped retained-branch
   base refresh (missing `.singular-state/tmp`).
-- **Integration seam (`7cfcd7f`).** A provider deferral inside the audit phase
+- **Integration seam.** A provider deferral inside the audit phase
   releases its reserved review operation.
 
 ### Fixes and tests
 
-- **`accept-existing-packet` could not accept any non-empty delta since
-  ff29c88** (`d7f34d9`): it never wrote the structured secret-scan result the
+- **`accept-existing-packet` could not accept any non-empty delta before this release**: it never wrote the structured secret-scan result the
   evidence manifest requires.
 - Seventeen failing tests repaired; see `tests/BASELINE-FAILURES.md`, which now
   records no known deterministic failures. New tests:
@@ -89,7 +461,7 @@ see; they are marked **Behaviour**.
   `test-audit-findings-status`, `test-packet-format-budget`,
   `test-risk-review-coupling`.
 
-**Known limits.** Task-sized clocks (item 12) still wait for telemetry. A
+**Known limits.** A
 provider deferral parks rather than re-admitting automatically when the window
 reopens, and one shared backoff record serves all providers.
 `import-packet.sh` / `integrate.sh` still accept legacy waiver packets for pre-v2
@@ -97,57 +469,40 @@ consumers. The `test-l1-parallel` fanout race is undiagnosed.
 
 ## [0.23.3] — 2026-10-02 — Lifecycle liveness and an honest ledger
 
-Repairs for the stalls the 2026-09-14 field campaign hit, each of which ended
-with an operator finishing state by hand. `schemaVersion` stays **v2**.
-Acceptance criteria are unchanged, and the landing rate was deliberately not
-optimised in this release; that waits for the clock work, which needs the
-telemetry below.
+Repairs lifecycle stalls and preserves durable accounting.
+`schemaVersion` stays **v2**. Acceptance criteria are unchanged.
 
-- **Durable lease state survives compatibility writes (`15c68a4`).**
+- **Durable lease state survives compatibility writes.**
   `singular_lease_write` rebuilt the record from a fixed allowlist and dropped
   `operatorReentries`, `campaignBinding`, `nextAction` and `failureReason` on
   every write, which also disabled the 0.22.0 history guard that depends on
   `operatorReentries`. Unknown keys are now carried forward.
-- **Reserve-before-bind deadlock (`edb39bb`).** A STOP-frozen or crashed
+- **Reserve-before-bind deadlock.** A STOP-frozen or crashed
   driver's `launched` dispatch record is closed independently of the
   successor's lease instead of being counted as a running worker forever.
-- **Per-generation dispatch exits (`81c0cc9`).** The exit file was per task, so
+- **Per-generation dispatch exits.** The exit file was per task, so
   a predecessor's exit sat on the successor's path and the reaper pinned the
   record as running. Exits are generation-qualified (the legacy path is still
   read).
-- **Driver admitted to its own reservation's retained worktree (`aaa0129`).**
+- **Driver admitted to its own reservation's retained worktree.**
   The retained-worktree guard refused the `planned` lease the scheduler had just
   handed the driver; it now compares reservation owner and generation.
-- **Interrupted continuation claims are repairable (`40479da`).** A crash
+- **Interrupted continuation claims are repairable.** A crash
   between the lease and dispatch-record commits left a consumed one-shot
   authority with no attempt; a re-claim by the same execution run repairs it
   without granting an extra invocation.
-- **Ownership proved before acceptance is published (`0f28ec2`).** A
+- **Ownership proved before acceptance is published.** A
   stale-generation driver could stamp `accepted` on a successor's lease and
   queue its packet before the owner check ran; the owner check now precedes
   publication.
-- **Reservation refusals counted; honest call ledger (`11edc40`).** Refusals of
+- **Reservation refusals counted; honest call ledger.** Refusals of
   the same normalized condition accumulate and feed the breaker (park at 3);
   the call ledger records operation ids, host wall time, provider durations and
   missing-vs-zero usage.
-- **Process-group fence (`376f4b3`).** Bind-failure cleanup killed only the
+- **Process-group fence.** Bind-failure cleanup killed only the
   detached child, so provider grandchildren survived and kept writing. Cleanup
   now kills the tree and classifies the outcome, with an engine-executable exit
   for the fence state.
-
-**Verification.** Full suite on the release tree (`7515dd0`), batched, on this
-host: 236 pass / 17 fail of 253. Fourteen failures fail identically on 0.23.2
-(`7ef2c52`): accept-existing-packet, candidate-recovery, capability-runtime,
-continuity-core, ctx-artifact-scan-hook, ctx-paired-audit,
-ctx-rehydrate-authored-config, detached-dispatch, dispatch-auto-accept,
-orphan-continuation, per-try-artifacts, session-affinity, singular-brand and
-storage-proof-redlog. Two are host-environmental: test-setup failed only under
-low disk and passes in isolation; test-exit-attribution's fixture run id `RUN-2`
-matches any live `RUN-2026…` run through the reaper's `pgrep -f` probe, and the
-test passes with host-unique ids. test-frozen-campaign-terminal, run alone, passes
-all 15 assertions and prints its `PASS:` line, then exits 1 from its known
-teardown (baseline entry 5). All seventeen are fixed in 0.23.4.
-`tests/BASELINE-FAILURES.md` listed only six of the pre-existing failures.
 
 ## [0.23.2] — 2026-09-16 — Correction to the 0.23.1 drift fix
 
@@ -158,61 +513,37 @@ teardown (baseline entry 5). All seventeen are fixed in 0.23.4.
 
 ## [0.23.1] — 2026-09-16 — Host-managed invocation admission
 
-- **Host-managed invocation admission and observability (TASK-1115).** The
+- **Host-managed invocation admission and observability.** The
   invocation envelope (authorization, model, provider, policy, capability)
   is bound at the host boundary, budgeted and observable; a retained
   session whose envelope binding has changed is refused for resume
   (exit 86) instead of being fed history it may no longer be authorized
   for, and the binding is persisted into the session-meta at creation so
-  that check is live on real sessions (round-2 audit finding F1, closed).
-  Gate: the declared nine-script gate, host-executed; fresh claude-opus-5
-  audit accepted in round 2 of 2. Round-1 P2/P3 findings stay on the
-  backlog.
+  that check is live on real sessions.
 - **Fix: integration refused as "campaign drift" under 0.23.0.** The
   reconciler sets `SINGULAR_INTEGRATION_RECEIPT_FILE` per integration run;
   the campaign manifest captured every `SINGULAR_*` setting, so any manifest
   frozen before that variable existed reported drift at integration entry.
-  Per-run settings are now excluded from the frozen identity. TASK-1115
-  itself was merged by hand for this reason (recorded in the merge commit).
+  Per-run settings are now excluded from the frozen identity.
 
 ## [0.23.0] — 2026-09-16 — Fair incremental reconciliation
 
-Closes the brain rescue campaign. `schemaVersion` stays **v2**.
+`schemaVersion` stays **v2**.
 
-- **Fair incremental reconciliation discovery (TASK-1114).** The reconciler
+- **Fair incremental reconciliation discovery.** The reconciler
   keeps a durable reconcile index (`engine/reconcile_index.py`) so steady
   cycles examine only what changed since the last acknowledged sweep instead
   of re-observing every retained artifact; `integrate.sh` and `ops.sh` read
   and settle the same index, `singular ops health` reports it, and
-  `docs/incremental-reconciliation.md` records the contract. Worker
-  candidate produced by a contained claude-opus-5/high implementer, adopted
-  under supervisor provenance after two packet-format slips, then qualified
-  on exact source: gate green, fresh claude-opus-5 audit accepted (1 P2,
-  3 P3 backlog). Proof: `tests/test-incremental-reconcile.sh`,
-  `tests/test-ops-health.sh`.
+  `docs/incremental-reconciliation.md` records the contract. Covered by
+  `tests/test-incremental-reconcile.sh` and `tests/test-ops-health.sh`.
 - **Packet hygiene.** A complete state packet that lacks only `createdAt`
   is stamped by the host instead of refused (`packet repaired: defaulted
   missing createdAt`); the omission had parked an audited-clean candidate.
-- **Campaign evaluation.** `claudedocs/brain-campaign-evaluation-20260916.md`
-  and its raw metrics: spend, cycle times, where the time went, and the
-  engine recommendations that follow from six days of field operation.
-- **Known limits.** TASK-1115 (host-managed invocation admission and
-  observability) is parked: its final bounded attempt passed the host gate but the fresh
-  audit found one P1 (the envelope binding is never persisted into the
-  session-meta, so the new resume-refusal check is inert); the candidate is
-  preserved on its branch for a future round. The two lifecycle deadlocks documented
-  in the 2026-09-14 audit remain open. Final host regression on this tree:
-  228 pass / 15 pre-existing host failures (245 scripts).
 
-## [0.22.1] — 2026-09-15 — B5: evaluation harness and campaign analysis
+## [0.22.1] — 2026-09-15 — Evaluation harness and campaign analysis
 
-Completes the brain campaign. TASK-1106 was accepted by the fresh
-claude-opus-5 audit at 13:13Z and integrated (`8ed75c3`) minutes after 0.22.0
-was cut — the auto-integration had been refused for 100 minutes because the
-release edits sat uncommitted in the live target checkout ("working tree has
-non-control-state changes"), which is now a documented operating rule.
-
-- **B5 — Evaluation and operational documentation.** A deterministic labeled
+- **Evaluation and operational documentation.** A deterministic labeled
   retrieval corpus and harness (`singular context evaluate`) over contracts,
   prior failures, wrong versions, stale docs, missing knowledge, long
   documents and role restrictions, reporting inclusion/recall within budget,
@@ -220,25 +551,18 @@ non-control-state changes"), which is now a documented operating rule.
   preserved; a campaign analysis command over events and runner-result
   sidecars (invocations and tokens by role and model, retries, time to
   integration, failure causes, missing observations); adoption/rollback
-  instructions and a findings report from the retained campaign
-  observations (`docs/brain-build-plan/context-findings.md`,
-  `context-adoption.md`). Proof: `tests/test-context-evaluation-e2e.sh`,
-  plus the five-script task gate and the exact-tree integration gate.
+  instructions in `docs/context-adoption.md`. Covered by
+  `tests/test-context-evaluation-e2e.sh`.
 - No engine change relative to 0.22.0.
 
 ## [0.22.0] — 2026-09-15 — A brain, and the red tape cut
 
-0.21 made the factory fast. This release gives it a memory and a knowledge
-service, and then removes the ceremony that a three-day field campaign showed
-was stalling the factory more than protecting it. Everything below landed
-through the engine's own reviewed integration path on the `codex/brain-integration`
-line (campaign BRAIN-RESCUE-20260910, runtimes A9–A15); the last lifecycle
-fixes were applied directly under operator authority and are marked as such.
+This release adds a knowledge service, reviewed memory and lifecycle repairs.
 `schemaVersion` stays **v2**; new schemas are additive.
 
 ### The brain: vendored knowledge, bounded context, reviewed memory
 
-- **B1 — Package and ingest (`singular manifest gen|check|lint|bless`).** The
+- **Package and ingest (`singular manifest gen|check|lint|bless`).** The
   upstream `singular-brain` generator is vendored byte-for-byte under
   `vendor/singular-brain` and consumed through a validated adapter for
   `singular-brain.manifest.v1`. Paths resolve against declared roots with
@@ -246,7 +570,7 @@ fixes were applied directly under operator authority and are marked as such.
   wrong-root and missing-source entries are classified, not guessed; live
   source hashes are kept distinct from review hashes. Node stays optional
   when brain is unconfigured. Proof: `tests/test-brain-ingestion-e2e.sh`.
-- **B2 — Context service (`singular context build|search|get|explain`).** A
+- **Context service (`singular context build|search|get|explain`).** A
   local Python library (`engine/context_service.py`, `engine/brain_documents.py`)
   builds one immutable, atomically published bundle from brain documents,
   selected worktree code and run records: full-source and excerpt hashes,
@@ -255,13 +579,13 @@ fixes were applied directly under operator authority and are marked as such.
   aggregate budget fails explicitly when they cannot fit. Search/get/explain
   are read-only by construction and are proven so under an OS deny-write
   policy. Proof: `tests/test-context-service-e2e.sh`.
-- **B3 — Invocation coverage.** Planner and worker first attempts and retries
+- **Invocation coverage.** Planner and worker first attempts and retries
   receive the service's bundle regardless of the session router's choice;
   resumes receive a documented delta; auditors stay fresh and receive only
   policy-selected references, never a worker-authored conclusion
   (`engine/evidence_delivery.py` brokers what each role may see). Feature-off
   behaviour is unchanged. Proof: `tests/test-context-invocation-e2e.sh`.
-- **B4 — Reviewed memory (`singular memory propose|review|approve|reject|
+- **Reviewed memory (`singular memory propose|review|approve|reject|
   quarantine|supersede|tombstone|checkpoint|show|rebuild`).** Model-written
   content starts *proposed* and is never trusted automatically; approval
   authority is verified, not a caller label. One transaction and snapshot
@@ -273,17 +597,13 @@ fixes were applied directly under operator authority and are marked as such.
   sources participate in delta revocation and both context-bundle schema
   copies; the memory credential key never reaches provider children.
   Proof: `tests/test-memory-lifecycle-e2e.sh`, `tests/test_memory_lifecycle.py`
-  (14 cases). Independently audited on exact source by claude-opus-5 with
-  no blocking finding (AF-1117-1..3 are P2/P3 backlog).
-- **B5 — Evaluation harness.** Not in this release; TASK-1106 is queued
-  behind it (see "Known limits").
+  (14 cases).
 
 ### Providers: per-role runners, OS-enforced containment, a review policy
 
 - **Per-role runners** (`roleRunners` in `singular.config.json`): implementer,
   auditor, planner, decider, critic, supervisor and integrator each select
-  their adapter. The field campaign ran claude-opus-5/high implementers,
-  claude-opus-5/medium auditors and gpt-6-astra/low intelligence roles.
+  their adapter.
 - **claude-run.sh** now contains *writable* levels too: an l1/l2 worker runs
   under `sandbox-exec` with the repository root and the durable state
   directory denied and only its worktree, TMPDIR and build cache allowed;
@@ -299,7 +619,7 @@ fixes were applied directly under operator authority and are marked as such.
   evidence, and a ledger that is never reset — historical rounds are
   backfilled, not forgotten.
 
-### Lifecycle: the recoveries a real campaign needed
+### Lifecycle recovery
 
 - **Owner-generation reservations** (`engine/task_lifecycle.py`,
   `engine/lifecycle.sh`): reserve, bind-dispatch, record-attempt, finish,
@@ -320,17 +640,12 @@ fixes were applied directly under operator authority and are marked as such.
   re-published per epoch (`promote-gate`), and the doctor reports role
   routing, sandbox posture and frontier health.
 
-### Cut the red tape (A15, operator-applied, 2026-09-14)
-
-A 48-hour audit (`claudedocs/engine-architecture-audit-20260914.md`) found
-that every stall of the campaign was the lifecycle layer refusing its own
-legitimate state — one stray `"]` in a *successful* worker's packet deadlocked
-the queue — while the product guards never false-positived. So:
+### Packet and retained-work recovery
 
 - **Packet extraction repairs shape, not content.** `singular_extract_json`
   drops unmatched closers, closes unclosed brackets and trailing commas as a
   last resort, never touches string content, and logs `packet repaired: …`.
-  The real field packet is a fixture (`tests/test-worker-packet-repair.sh`).
+  A synthetic malformed packet tests this (`tests/test-worker-packet-repair.sh`).
 - **`singular unpark` yields a dispatchable lease.** The prior attempt is
   archived into `attemptHistory`/`terminalDispositionHistory` with an
   `operatorReentries[]` record, so `reserve()` admits the re-entry; a refused
@@ -347,28 +662,14 @@ the queue — while the product guards never false-positived. So:
 
 ### Known limits
 
-- Two lifecycle deadlocks are documented but not yet fixed in the engine
-  (audit §5): a STOP-frozen driver does not finalize its dispatch record, and
-  the retained-worktree guard refuses the driver's own `planned` reservation.
-  Both have operator workarounds recorded in the campaign state.
-- The full regression on this tree reports the same pre-existing host
-  failures as 0.21.0's line (`test-accept-existing-packet`,
-  `test-orphan-continuation`, `test-per-try-artifacts`); the exact counts of
-  this cut's run are in the release commit message.
-- B5 (evaluation harness and operational documentation) is not included.
+- A STOP-frozen driver does not finalize its dispatch record, and the retained
+  worktree guard can refuse the driver's own planned reservation.
+- The evaluation harness is not included in this release.
 
 ## [0.21.0] — 2026-09-05 — Throughput without assumption
 
-The 0.20 line finished the governance work: every decision in a run is bound,
-budgeted, and terminates. This release turns to the other half of a factory,
-throughput, and it starts from a measurement rather than a hunch. The
-35-hour field campaign on the previous engine spent 855 provider invocations
-to integrate six tasks. Planners and critics took 430 of them; the critic
-returned `revise` on 113 of 140 critiques, 335 of its findings were marked
-blocking, and every node parked on revision-budget exhaustion. Per accepted
-task the host ran the consumer's full regression suite four times on trees it
-had already proven. None of that produced software. `schemaVersion` stays
-**v2**.
+This release improves throughput while preserving evidence and review bounds.
+`schemaVersion` stays **v2**.
 
 ### The plan critic is calibrated, and its findings travel
 
@@ -429,7 +730,7 @@ had already proven. None of that produced software. `schemaVersion` stays
   (`aggregate.roles`) and a `ceremony` block: control-plane versus implementer
   invocation and input-token fractions, invocations per accepted task, and
   input tokens per integration, all from the runner-result sidecars every
-  invocation already writes. The field audit had to reconstruct these by hand.
+  invocation already writes, eliminating manual reconstruction of these metrics.
 
 ### The engine's own gate is four times faster
 
@@ -669,19 +970,10 @@ the real-PostgreSQL egress a provider sandbox blocks. Module order matters —
 `singular_select_l2_runner`; last one wins) — and the module documents this.
 Covered by `singular-ext/tests/test-grok-implementer-selection.sh`.
 
-### Recovery governance
-
-The V9 recovery contract module is now fully frozen (14/14 objects `uchg`) and
-its anchored verifier reports `verified-frozen`. The paused recovery lanes
-resume against their pinned base under the V9 authority.
-
 ## [0.18.0] — 2026-08-11 — Quiet at full scale
 
-The 68-node, 45-stage AXON plan exposed console problems that small fixtures
-could not: navigation scrolled away, a lens rail consumed useful canvas, most
-Timeline bars had no readable label, repeating Matrix lines overpowered the
-data, and the Agents model picker offered no option for the model actually in
-use. The console refinements do not change orchestration semantics or schema
+Large-plan console refinements improve navigation, labels, layout and model
+selection. The console refinements do not change orchestration semantics or schema
 shape; the pre-launch namespace cut below changes every product-facing
 identity. `schemaVersion` stays **v2**.
 
@@ -725,9 +1017,7 @@ Home and End operate the tablist, including the empty-DAG Tasks fallback.
 
 Visible bar labels use the numeric task suffix (`0041`), while the full task id
 and title remain in the tooltip, accessible name and detail view. Label placement
-can use any retry segment or a quiet outside gap. Before this pass 86 of 107 bar
-segments had no label; in the final AXON window 32 of 37 distinct tasks have a
-visible label.
+can use any retry segment or a quiet outside gap.
 
 Scale is driven by legibility: the median interval targets 56px, then yields to
 an absolute full-canvas ceiling of eight pane widths. Compressed idle gaps share
@@ -780,14 +1070,8 @@ by this release; those installations remain untouched.
 
 ## [0.17.0] — 2026-08-10 — Proof, not assumption
 
-Two field reports, one release. The Spokit localization sessions found six
-reliability defects; an AXON consumer session then took installed 0.16.0 into a
-restricted sandbox and found ten more, plus two consumer-side observations.
-They share a shape: the engine reported success it had not verified, or
-reported a fact it had merely inferred. Cleanup that could not prove it worked
-returned zero. A process that could not be inspected was called dead. A graph
-that was parallel was drawn as a queue. Gates accepted last June were counted
-as progress made today.
+This release improves process cleanup, diagnostics, graph layout and progress
+reporting.
 
 `schemaVersion` stays **v2**. Every contract change here is additive: new
 schema files, new API fields, new environment knobs, new CLI verbs.
@@ -800,8 +1084,7 @@ heredoc wrapped in `2>/dev/null || true`. Where `ps` was denied — a restricted
 sandbox, a hardened CI image — the child map came back empty, only the recorded
 root was signalled, and the function returned 0. The descendants kept running,
 kept writing to a worktree the engine believed it had reclaimed, and nothing
-anywhere said so. The AXON session reproduced it as a clean-suite timeout case
-where the direct child died and its grandchild did not.
+anywhere said so.
 
 Enumeration was never the right primary mechanism; it was the only one
 available, because no runner had ever been given a session of its own. Each
@@ -834,9 +1117,7 @@ chain, and an attended Ctrl-C still behaves.
 Doctor probed each pidfile with `os.kill(pid, 0)` under
 `except (OSError, ValueError)` and called every failure a stale pidfile. Three
 different facts collapsed into one verdict, and the wrong one is dangerous:
-`EPERM` means the process may well exist and cannot be inspected. In the AXON
-sandbox doctor called console PID 14763 stale while it was the live graph
-server.
+`EPERM` means the process may well exist and cannot be inspected.
 
 Four verdicts now, and a live PID is reported for the first time (it previously
 produced no check at all). `unknown-permission` says what happened and, pointedly,
@@ -856,9 +1137,9 @@ overrides for operators who accept the risk. Attended commands are never gated.
 ### A parallel plan drawn as a single queue
 
 The DAG lens grouped nodes by `stage`, gave each stage a column, and computed
-depth **only from dependencies whose source and target shared a stage**. AXON
-uses a distinct stage per milestone, so every cross-stage edge was dropped from
-layout and 44 nodes rendered as one horizontal rail. The dependency data was
+depth **only from dependencies whose source and target shared a stage**.
+Cross-stage edges were dropped from layout, collapsing distinct dependency
+ranks into a single rail. The dependency data was
 correct the whole time — `collect_dag_view` emitted every edge, and the lens's
 own ancestry walk used all of them. Only the placement lied. The server made it
 worse by ordering stages on a `D`-prefix-then-numeric-suffix key, which could
@@ -879,22 +1160,12 @@ and three live bugs fell out along the way: `passed-with-acknowledged-baseline`
 had been classified as queued, an active L1 lease rendered as queued, and the
 frontier arm was dead code because the server always emits a status string.
 
-### Thirteen gates from June, counted as this campaign's progress
+### Historical gates are reported separately from current progress
 
-The workbench reported `30% — 13 / 44 DAG nodes gated complete` while the loop
-was stopped and the new plan had never been actuated. Every one of those gates
-was legitimate: AXON deliberately preserved thirteen authoritative results from
-late June, marked `evidenceClass: grandfathered`. The number was true and the
-sentence it formed was false — an operator could reasonably conclude the run had
-already executed work, or that STOP had failed, or that green gates had been
-manufactured during setup.
-
-Progress now splits into cohorts derived from the provenance already on disk:
-`historical accepted 13/13`, `current campaign 0/31`, with the combined figure
-demoted to secondary. The derivation is server-side and emitted in the API only.
-Writing a `campaign` field into the gate files would have meant a schema bump, a
-migration, and rewriting the hashes of authoritative historical records — which
-is precisely what AXON preserved them to avoid.
+Progress now splits into cohorts derived from provenance already on disk:
+historical accepted results and the current campaign, with the combined figure
+secondary. This preserves authoritative historical gate records and their
+hashes while distinguishing retained evidence from newly completed work.
 
 ### "Connected" is not "running", and a stopped loop should say why
 
@@ -907,8 +1178,8 @@ reason rides alongside the plan title: `Stopped — operator approval required f
 G100`, derived from a pending human gate on a dependency-ready node.
 
 Relatedly, safe serialization used to look like a broken scheduler. The engine
-deliberately refuses to plan two nodes in the same area concurrently, so AXON's
-four-wide wave runs three — correct, and invisible. A read-only replica of
+deliberately refuses to plan two nodes in the same area concurrently, so the
+runnable frontier can be smaller than the dependency-ready frontier. A read-only replica of
 `singular_select_l1_frontier` now runs in the console and surfaces
 `ready 4 · runnable 3 · cap 3` with the reason per node (`mcp area already
 selected`). The replica declares its own coverage in a `policy` list: the
@@ -928,7 +1199,7 @@ approving actuation. None of that is discoverable, and getting the order wrong
 is destructive.
 
 `singular setup` is one idempotent command that performs or explains every step.
-The verb is `setup`, not the field report's `bootstrap`, because `bootstrap`
+The verb is `setup`; `bootstrap`
 already means per-worktree dependency install in four places including a doctor
 check id. Prerequisites fail before any mutation. **STOP is the first repo
 write** — before the pin, before the scaffold, before the migration — and setup
@@ -987,15 +1258,14 @@ previously walked into a cascade.
 ### Two settings, one value, and no warning
 
 `singular_json_config_to_env` emits structured configuration first and the legacy
-`env{}` map last, so a later duplicate silently wins. AXON's config asked for
-`resources.maxConcurrent: 3` and `SINGULAR_MAX_CONCURRENT: "2"`; it got two, and
-nothing said which had won or that there had been a contest. A new
+`env{}` map last, so a later duplicate silently wins. Conflicting structured
+and environment settings previously produced no explanation of the winner. A new
 `config.source-conflict` check runs the real generator and inspects its emission
 order rather than reimplementing the mapping — so it covers the whole shadowable
 surface and cannot rot as fields are added — and names the key, both values,
 both sources and the effective winner.
 
-### From the Spokit sessions
+### Provider and audit reliability
 
 Six reliability fixes from the same cycle. The auditor contract is now exact and
 a schema-invalid verdict is retried with a bounded repair prompt carrying the
@@ -1054,12 +1324,8 @@ file, last writer wins, and `singular health` could never report more than
 `phases: 1` however many were running. An operator watching `phases: 1` against
 `leases l1=2` mid-incident learned to distrust the phase counter.
 
-The 0.15.1 handoff attributed this to a shallow scan (`runs.glob("*/…")` finding
-only direct children). It is not: the records were never written separately in
-the first place, and deepening the glob would have fixed nothing while breaking
-the console's `runId == <dirname>` guard. Each planner now derives its own status
-id, exactly as `integrate.sh` already does per task, so the record lands as a
-direct child of `runs/` and **no scan changes anywhere**. Both layers that write
+Each planner now derives its own status id, exactly as `integrate.sh` does
+per task, so the record lands as a direct child of `runs/`. Both layers that write
 planner status — `l1-plan-node.sh` and `generate-tasks.sh`, which inherits the
 origin id through `SINGULAR_PLANNING_RUN_ID` — derive the same id, so one planner
 still means one record.
@@ -1112,8 +1378,8 @@ branch, because everything after them would be noise.
 
 ## [0.15.1] — 2026-07-25 — What the engine already knew
 
-Three defects from the same 26-node localization program, all one shape: **the
-engine had the right information and threw it away.** It classified a 529 as
+Three defects shared one cause: **the engine had the right information and
+threw it away.** It classified a 529 as
 transient and then treated it as a usage limit. It hashed a gate log correctly
 and cited it in a form its own validator must reject. It produced a precise DAG
 diagnostic and sent it to `/dev/null`.
@@ -1191,8 +1457,8 @@ total, structural failure stayed invisible.
 
 `dag.sh` emits a precise diagnostic and exits 2. Five call sites piped it to
 `/dev/null` and reported an empty frontier, so one malformed gate file was
-indistinguishable from an idle graph — 34 minutes of a field run spent reading
-`frontier=0` while three nodes were ready.
+indistinguishable from an idle graph, reporting `frontier=0` even when nodes
+were ready.
 
 `singular_dag_next_areas_json` now captures stderr, warns, and emits
 `dag.evaluation_failed` (throttled per distinct diagnostic, so the per-cycle
@@ -1241,7 +1507,7 @@ destructive — every byte it removes or overwrites is copied to a quarantine
 directory first — and it stays out of engine-owned directories entirely, so the
 concurrent-writer case cannot arise. Paths are handled null-delimited with
 `:(literal)` pathspecs; the old guard silently no-op'd on any path git would
-quote, which for a localization program is most of them.
+quote, including paths with non-ASCII characters.
 
 It also now runs on the paths that mattered. `ask`/`supervise`/`decide`
 SIGKILLed on timeout, and the guard was straight-line code after the run, so on
@@ -1277,8 +1543,7 @@ The engine's "the gate could not run" log heuristics lived in
 is every current consumer, they were dead code: any gate that exited non-zero
 without an adapter observation became a **product** failure. A worktree missing
 its dependencies read as a code defect, and the decider spent the entire budget
-asking a model to fix code that was never broken. That is TASK-0006: five
-attempts at a byte-identical head SHA against a TS2688 no edit could fix.
+asking a model to fix code that was never broken.
 
 Patterns now live in `engine/infra-patterns.tsv`, shared by both modules, with a
 **scope column** — only signatures application code cannot plausibly produce
@@ -1348,9 +1613,7 @@ broke for everyone else.
 
 ## [0.14.0] — 2026-07-25 — Console reliability, observability and redaction
 
-Remediates the console-side half of the 2026-07-24 field report. (Its engine
-findings — free-text quota scanning, auditor cache writes, model-cache errors —
-were already fixed in 0.13.0; that audit ran against a live 0.11.1 daemon.)
+Improves console reliability, observability and redaction.
 
 ### Security
 
@@ -1444,7 +1707,7 @@ Suites: bash 178, python 242.
   configuration defaults, dual-read compatibility for existing v0 records,
   and validation-preserving support for consumer-only schema extensions.
 - Added a non-destructive release-promotion canary for the captured 26-node
-  localization graph and all ten field-report regression scenarios.
+  synthetic graph and diagnostic regression scenarios.
 - Added strict `SINGULAR_CODEX_BIN` resolution shared by doctor and the Codex
   runner. Doctor now spawns the selected CLI with bounded `--version` and
   authentication probes, catching broken packaged native executables.
@@ -1885,7 +2148,7 @@ API change is additive (three new endpoints, new fields on existing ones);
   limits — the console observes, it never writes.
 
 ### Design system
-- Adopted the warm-neutral **pm-go token layer** (`tokens.css`): warm paper
+- Adopted the warm-neutral **design token layer** (`tokens.css`): warm paper
   + 24px printer's line grid, flat white panels (glass/backdrop-blur
   retired), six-tone signal language with **coral replacing violet** as the
   attention accent, Inter + Roboto Mono. Legacy token names alias to the new
@@ -1930,12 +2193,10 @@ API change is additive (three new endpoints, new fields on existing ones);
 
 ---
 
-## [0.5.0] — 2026-07-17 — Field-hardening from the first external consumer run
+## [0.5.0] — 2026-07-17 — Orchestration reliability
 
-Every change in this release traces to the singular-frontend V1 field run
-(Jul 13–16, codex session 019f5ce7): a 4-day, 78-dispatch, 47-node run that
-converged but lost ~40 of ~96 hours to engine defects and needed ~15 manual
-state surgeries. `schemaVersion` stays **v1** — all schema changes are
+This release hardens failure classification, retries and recovery to reduce
+manual intervention. `schemaVersion` stays **v1** — all schema changes are
 additive (`authority` node field; new `gate-review.v0`), so `singular migrate`
 is a no-op for 0.4.0 consumers.
 
@@ -2087,15 +2348,10 @@ is a no-op for 0.4.0 consumers.
 
 ---
 
-## [0.4.0] — 2026-07-13 — Context-aware orchestration (self-hosted S0–S7 complete)
+## [0.4.0] — 2026-07-13 — Context-aware orchestration
 
-Completes the context-evolution plan the engine built against itself: 107
-worker-implemented, independently audited, gate-promoted tasks across 20
-executable DAG nodes, closed by an operator-authored experiment report
-(`docs/context-build-plan/experiment-report.md`). Additive and default-OFF at
-the raw engine level; the **shipped config flips five knobs ON per the
-report's per-knob decisions** (see below). Raw-default flips are deferred to
-0.5 with a test-migration slice (OFF-parity tests pin unset == legacy).
+Context features are additive and default-OFF at the raw engine level; the
+shipped configuration enables five settings as detailed below.
 
 - **Context packets + assumption ledger** (`SINGULAR_CTX_PACKET`): planner
   reasoning residue (decisions / assumptions / rejected alternatives /
@@ -2148,11 +2404,9 @@ report's per-knob decisions** (see below). Raw-default flips are deferred to
 
 ---
 
-## [0.4.0-m1] — 2026-07-11 — Context-evolution M0–M3 (self-hosted, unreleased dev pin)
+## [0.4.0-m1] — 2026-07-11 — Context orchestration (unreleased development pin)
 
-Built by the engine itself under `docs/context-build-plan/` (self-docked, all
-tasks worker-implemented, independently audited, and gate-promoted with hashed
-evidence). Everything below is additive and default-OFF unless noted.
+Everything below is additive and default-OFF unless noted.
 
 - **Self-measurement**: `singular metrics --json` over the attempts index +
   event log; deterministic per-task A/B arms (`SINGULAR_CTX_AB`); sampled

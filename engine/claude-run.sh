@@ -142,7 +142,7 @@ singular_claude_model() {
 claude_model="$(singular_claude_model "$level" "$prompt_file")"
 
 # --- Reasoning-effort selection (per-role, env-overridable; empty = model default).
-# Implementer (l2) runs Opus at medium effort for bulk code-writing; the gatekeeping
+# Implementer (l2) runs at medium effort for bulk code-writing; the gatekeeping
 # planner + auditor run at xhigh. Decider/L1/other left at the model default (empty).
 singular_claude_effort() {
   local level="$1" prompt_file="$2" prompt_name

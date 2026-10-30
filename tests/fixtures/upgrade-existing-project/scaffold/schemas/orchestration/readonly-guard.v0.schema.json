@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.readonly-guard.v0",
+  "title": "singular Read-only Working-tree Guard Result",
+  "description": "What the read-only guard found and what it did about it. Written to result.json in the journal directory after every restore, including the ones that had nothing to do.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "journal", "worktree", "mode", "outcome", "actions"],
+  "properties": {
+    "schema": { "const": "singular.orchestration.readonly-guard.v0" },
+    "journal": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Directory holding the pre-run journal, the content blobs and the quarantine."
+    },
+    "worktree": { "type": "string" },
+    "mode": { "type": "string", "enum": ["restore", "report"] },
+    "outcome": {
+      "type": "string",
+      "enum": ["clean", "restored", "reported", "degraded", "no-journal"],
+      "description": "clean: the run left nothing behind. restored: the guard put something back — a containment failure that was repaired. reported: report mode found work it did not do. degraded: the guard could not act on a complete picture, so the run was effectively unguarded. no-journal: nothing to restore, usually because a prior restore already consumed it."
+    },
+    "reason": { "type": "string" },
+    "quarantine": {
+      "type": "string",
+      "description": "Where bytes removed or overwritten by the restore were copied first. The guard never destroys content: when it cannot tell whether the agent or a concurrent writer produced a file, the answer is a move, not a loss."
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "action"],
+        "properties": {
+          "path": { "type": "string" },
+          "action": {
+            "type": "string",
+            "enum": [
+              "restored-dirty",
+              "restored-index",
+              "reverted-to-head",
+              "quarantined-new",
+              "would-restore-dirty",
+              "would-revert-to-head",
+              "would-quarantine-new",
+              "skipped-unmerged",
+              "unreadable",
+              "quarantine-failed",
+              "checkout-failed",
+              "index-restore-failed",
+              "index-remove-failed"
+            ]
+          },
+          "detail": { "type": "string" }
+        }
+      }
+    }
+  }
+}

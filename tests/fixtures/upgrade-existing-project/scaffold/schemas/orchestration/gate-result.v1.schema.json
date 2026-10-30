@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.gate-result.v1",
+  "title": "singular Orchestration Gate Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "node",
+    "status",
+    "authoritative",
+    "evidenceClass",
+    "evidence",
+    "decidedBy",
+    "recordedAt"
+  ],
+  "properties": {
+    "schema": { "const": "singular.orchestration.gate-result.v1" },
+    "node": { "type": "string", "minLength": 1 },
+    "status": {
+      "type": "string",
+      "enum": [
+        "passed",
+        "passed-with-acknowledged-baseline",
+        "failed",
+        "blocked",
+        "proposed",
+        "stale"
+      ]
+    },
+    "authoritative": { "type": "boolean" },
+    "campaignBinding": { "type": "string", "minLength": 1 },
+    "blockerClass": {
+      "type": "string",
+      "enum": ["needs-work", "blocked-external"],
+      "description": "Machine-readable lifecycle disposition for an authoritative blocked gate. needs-work remains planner-eligible; blocked-external requires external input or an explicit override. Legacy blocked records without this field are treated conservatively as blocked-external."
+    },
+    "evidenceClass": { "type": "string", "minLength": 1 },
+    "verificationClassification": {
+      "type": "string",
+      "enum": [
+        "passed",
+        "failed-product",
+        "inconclusive-infrastructure",
+        "not-rerun-evidence-verified"
+      ]
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "ref", "sha256"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "source-path",
+              "task-set",
+              "command-log",
+              "gate-report",
+              "human-approval"
+            ]
+          },
+          "ref": { "type": "string", "minLength": 1 },
+          "taskIds": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "command": { "type": "string", "minLength": 1 },
+          "exitCode": { "type": "integer" },
+          "logRef": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "headSha": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "gateReportRef": { "type": "string", "minLength": 1 },
+    "humanGateRef": { "type": "string", "minLength": 1 },
+    "humanApprovalRef": { "type": "string", "minLength": 1 },
+    "blockedNodes": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "upstreamGates": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "decidedBy": { "type": "string", "minLength": 1 },
+    "rationale": { "type": "string" },
+    "recordedAt": { "type": "string", "format": "date-time" }
+  }
+}

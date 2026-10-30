@@ -1,58 +1,6 @@
 #!/usr/bin/env bash
-# ctx-experiment-render-delta.sh — read-only HEADLINE renderer for the
-# `experiment-run` executable DAG node (layer evaluation). TASK-0085
-# engine/ctx-experiment-render.sh renders the summary bundle's per-arm ABSOLUTE
-# tables (escape/cost/bias, strategy, attempts), but the treatment-vs-control
-# DELTA (TASK-0089 singular_ctx_experiment_delta_json — the actual experiment
-# finding) and the arm-integrity AUDIT (TASK-0097
-# singular_ctx_experiment_armaudit_json — whether each arm actually ran its
-# intended knob-state) are rendered as markdown NOWHERE. This brick renders BOTH,
-# completing the report presentation.
-#
-# It ships NO metric of its own: it FORMATS the already-computed delta and audit
-# artifacts VERBATIM (no recomputation, no reclassification) and emits markdown to
-# STDOUT ONLY. When no source is supplied the public entry obtains both artifacts
-# by delegating to their integrated json composers over the resolved corpus
-# defaults, threading the corpus args per each composer's signature.
-#
-# Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines NEW
-# functions only; NO existing engine path invokes them, so with this file
-# present-but-uncalled the engine is byte-identical to prior behavior (OFF-parity
-# intrinsic, mirroring the sibling engine/ctx-experiment-*.sh idiom). It does NOT
-# edit engine/ctx-experiment-render.sh, the sibling ctx-experiment-*.sh files,
-# cli/singular, or any other pre-existing file.
-#
-# STRICTLY STDOUT-ONLY / READ-ONLY: it creates, moves, or mutates NOTHING — no run
-# artifact, index, event, lease, or task file, and never writes
-# docs/context-build-plan/experiment-report.md (an operator-owned concept). It
-# neither declares nor gates node completion, never runs the paired-audited A/B
-# experiment, and records no per-knob default decisions (all operator authority).
-#
-# It produces METRICS TABLES ONLY — no experiment narrative, no bias
-# interpretation, no per-knob default decisions. Evidence invariance /
-# advocate-skeptic line preserved: it only formats measured values and
-# reclassifies nothing.
-#
-# Fail-safe: a zeroed/empty artifact renders well-formed zero tables and a zero
-# exit, never an error or partial output.
-#
-# Three chained slices (all here):
-#   1. singular_ctx_experiment_render_delta_table [delta_artifact_json]
-#      — from the delta artifact, render a deterministic treatment-effect table:
-#        each headline metric's a, b, B-minus-A delta and neutral direction.
-#   2. singular_ctx_experiment_render_armaudit_table [audit_artifact_json]
-#      — from the audit artifact, render a per-arm integrity table: recorded,
-#        unrecorded, consistent, inconsistent counts plus the flagged runIds.
-#   3. singular_ctx_experiment_render_result_md [runs_dir] [events_file] [metrics_file]
-#      — obtain both artifacts by delegating to their json composers and render
-#        both sections in a stable order to stdout as ONE markdown fragment.
+# Render treatment-versus-control deltas and arm-integrity findings in experiment reports.
 
-# --- Slice 1: treatment-effect table renderer --------------------------------
-# Reads the delta artifact (singular.orchestration.ctx-experiment-delta.v0) passed
-# as the first argument, and renders each metric's a / b / delta / direction into
-# a deterministic sorted-key markdown table. Values are formatted verbatim with
-# the shared numeric convention. A missing / empty deltas map renders the table
-# skeleton (header + separator) only.
 singular_ctx_experiment_render_delta_table() {
   SINGULAR_RENDER_DELTA="${1-}" python3 - <<'PY' || true
 import json, os, sys

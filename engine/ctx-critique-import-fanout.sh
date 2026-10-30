@@ -58,8 +58,8 @@ singular_ctx_critique_import_fanout() {
     return 0
   fi
 
-  local cap="${SINGULAR_MAX_L1_CONCURRENT:-3}"
-  [[ "$cap" =~ ^[0-9]+$ && "$cap" -ge 1 ]] || cap=1
+  local cap
+  cap="$(singular_l1_concurrency_cap)"
   [[ -n "$remaining_capacity" ]] || remaining_capacity="$cap"
   [[ "$remaining_capacity" =~ ^[0-9]+$ ]] || remaining_capacity=0
   [[ "$cap" -gt "$remaining_capacity" ]] && cap="$remaining_capacity"

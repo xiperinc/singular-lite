@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Contract tests for the B5 evaluation harness and campaign analyser.
+"""Contract tests for the context evaluation harness and campaign analyser.
 
 Two independent surfaces are exercised here:
 
 *   the deterministic labeled retrieval corpus in
     ``tests/fixtures/context-evaluation/corpus.json``, evaluated against the
-    real B2 context service and compared with the corpus' own known metrics,
+    real context service and compared with the corpus' own known metrics,
     and
 *   the campaign analyser, run over a deterministic events/sidecar fixture
     whose absent counters must be reported as ``unknown`` rather than zero.

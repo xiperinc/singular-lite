@@ -80,12 +80,14 @@ export SINGULAR_GENERATE="${SINGULAR_GENERATE:-1}"
 export SINGULAR_AUTO_PROMOTE_GATES="${SINGULAR_AUTO_PROMOTE_GATES:-1}"
 export SINGULAR_L2_SANDBOX="${SINGULAR_L2_SANDBOX:-danger-full-access}"
 export SINGULAR_ENABLE_L1_PARALLEL="${SINGULAR_ENABLE_L1_PARALLEL:-1}"
-export SINGULAR_MAX_L1_CONCURRENT="${SINGULAR_MAX_L1_CONCURRENT:-3}"
+export SINGULAR_MAX_L1_CONCURRENT="${SINGULAR_MAX_L1_CONCURRENT:-auto}"
 export SINGULAR_L1_TASKS_PER_NODE="${SINGULAR_L1_TASKS_PER_NODE:-1}"
 export SINGULAR_L2_SLICE_BUDGET="${SINGULAR_L2_SLICE_BUDGET:-1}"
 export SINGULAR_L2_SLICE_BUDGET_MAX="${SINGULAR_L2_SLICE_BUDGET_MAX:-3}"
-export SINGULAR_MAX_CONCURRENT="${SINGULAR_MAX_CONCURRENT:-5}"
-export SINGULAR_MAX_DISPATCH="${SINGULAR_MAX_DISPATCH:-5}"
+# auto = sized from this machine every cycle (cores, available memory, disk),
+# and held while it is saturated. An integer pins a fixed ceiling instead.
+export SINGULAR_MAX_CONCURRENT="${SINGULAR_MAX_CONCURRENT:-auto}"
+export SINGULAR_MAX_DISPATCH="${SINGULAR_MAX_DISPATCH:-auto}"
 export SINGULAR_MAX_HOURS="${SINGULAR_MAX_HOURS:-12}"
 # Default 1 = fire-and-forget dispatch (reconcile returns in seconds; the
 # reaper attributes worker outcomes on later cycles). Set 0 for legacy batch wait.

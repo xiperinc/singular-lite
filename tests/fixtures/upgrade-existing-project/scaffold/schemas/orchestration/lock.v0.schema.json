@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.lock.v0",
+  "title": "singular Lock",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "owner", "runId", "startedAt", "expiresAt", "pid"],
+  "properties": {
+    "schema": { "const": "singular.orchestration.lock.v0" },
+    "owner": { "type": "string", "minLength": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" },
+    "pid": { "type": "integer", "minimum": 1 },
+    "capabilitySha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

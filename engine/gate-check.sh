@@ -165,7 +165,7 @@ gate_timeout="${SINGULAR_GATE_TIMEOUT_SEC:-3600}"
 # The gate as a SESSION LEADER. A gate is an arbitrary, uncooperative tree — a
 # shell wrapping a test runner wrapping workers — so containment cannot depend
 # on `ps`: where enumeration is denied the old walk found no children and killed
-# only the top shell (PMGO-004). singular_setsid_exec is the LAST command here,
+# only the top shell. singular_setsid_exec is the LAST command here,
 # so $! below is the leader itself (pid == pgid) and one negative pid reaches
 # everything. The gate keeps its argv form; it is never re-parsed by a shell.
 singular_gate_spawn() {

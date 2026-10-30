@@ -1,0 +1,255 @@
+[
+  {
+    "name": "valid",
+    "changes": [],
+    "accepted": true
+  },
+  {
+    "name": "schema-owned-by-rule",
+    "changes": [
+      {
+        "file": "audit.json",
+        "path": [
+          "rationale"
+        ],
+        "delete": true
+      }
+    ],
+    "conjunct": "A",
+    "reason": "audit-schema-invalid",
+    "rebindArtifacts": true
+  },
+  {
+    "name": "G",
+    "changes": [
+      {
+        "file": "audit-verification.json",
+        "path": [
+          "verificationRequest",
+          "headSha"
+        ],
+        "value": "0000000000000000000000000000000000000000"
+      }
+    ],
+    "conjunct": "G",
+    "reason": "host-report-head-mismatch",
+    "rebindArtifacts": true
+  },
+  {
+    "name": "A",
+    "changes": [
+      {
+        "file": "audit.json",
+        "path": [
+          "classifiedFindings"
+        ],
+        "value": [
+          {
+            "id": "F1",
+            "severity": "P1",
+            "summary": "Synthetic blocker"
+          }
+        ]
+      }
+    ],
+    "conjunct": "A",
+    "reason": "blocking-finding-open",
+    "rebindArtifacts": true
+  },
+  {
+    "name": "D",
+    "changes": [
+      {
+        "file": "ledger.json",
+        "path": [
+          "logicalChanges",
+          "TASK-0001",
+          "rounds"
+        ],
+        "value": []
+      }
+    ],
+    "conjunct": "D",
+    "reason": "review-round-missing"
+  },
+  {
+    "name": "E",
+    "changes": [
+      {
+        "file": "audit.json",
+        "path": [
+          "rationale"
+        ],
+        "value": "Changed after binding"
+      }
+    ],
+    "conjunct": "E",
+    "reason": "evidence-manifest-stale"
+  },
+  {
+    "name": "manifest-schema",
+    "changes": [
+      {
+        "file": "evidence-manifest.json",
+        "path": [
+          "diffSha256"
+        ],
+        "delete": true
+      }
+    ],
+    "conjunct": "E",
+    "reason": "evidence-manifest-schema-invalid"
+  },
+  {
+    "name": "audit-disabled",
+    "changes": [],
+    "args": [
+      "--require-audit",
+      "0"
+    ],
+    "conjunct": "A",
+    "reason": "audit-disabled"
+  },
+  {
+    "name": "explicit-blocking-policy",
+    "changes": [
+      {
+        "file": "audit.json",
+        "path": [
+          "classifiedFindings"
+        ],
+        "value": [
+          {
+            "id": "F2",
+            "severity": "P2",
+            "summary": "Synthetic backlog"
+          }
+        ]
+      }
+    ],
+    "args": [
+      "--policy-env-json",
+      "{\"SINGULAR_REVIEW_BLOCKING_SEVERITIES\": \"P0,P1,P2\"}"
+    ],
+    "conjunct": "A",
+    "reason": "blocking-finding-open"
+  },
+  {
+    "name": "ambient-policy-ignored",
+    "changes": [],
+    "env": {
+      "SINGULAR_REVIEW_POLICY_JSON": "not-json",
+      "SINGULAR_JSON_CONFIG_FILE": "missing-config"
+    },
+    "accepted": true
+  },
+  {
+    "name": "run-echo-remains-warning",
+    "changes": [
+      {
+        "file": "audit.json",
+        "path": [
+          "runId"
+        ],
+        "value": "RUN-other"
+      }
+    ],
+    "rebindArtifacts": true,
+    "accepted": true
+  },
+  {
+    "name": "legacy-v0",
+    "changes": [
+      {
+        "file": "audit.json",
+        "path": [
+          "schema"
+        ],
+        "value": "singular.orchestration.audit-verdict.v0"
+      },
+      {
+        "file": "audit.json",
+        "path": [
+          "verificationResults"
+        ],
+        "delete": true
+      },
+      {
+        "file": "audit.json",
+        "path": [
+          "reviewPolicy"
+        ],
+        "delete": true
+      }
+    ],
+    "rebindArtifacts": true,
+    "args": [],
+    "accepted": true,
+    "legacyAudit": false
+  },
+  {
+    "name": "legacy-pmgo",
+    "changes": [
+      {
+        "file": "audit.json",
+        "path": [
+          "schema"
+        ],
+        "value": "pmgo.orchestration.audit-verdict.v0"
+      },
+      {
+        "file": "audit.json",
+        "path": [
+          "verificationResults"
+        ],
+        "delete": true
+      },
+      {
+        "file": "audit.json",
+        "path": [
+          "reviewPolicy"
+        ],
+        "delete": true
+      }
+    ],
+    "rebindArtifacts": true,
+    "args": [],
+    "accepted": true,
+    "legacyAudit": true
+  },
+  {
+    "name": "legacy-pmgo-reject",
+    "changes": [
+      {
+        "file": "audit.json",
+        "path": [
+          "schema"
+        ],
+        "value": "pmgo.orchestration.audit-verdict.v0"
+      },
+      {
+        "file": "audit.json",
+        "path": [
+          "verificationResults"
+        ],
+        "delete": true
+      },
+      {
+        "file": "audit.json",
+        "path": [
+          "reviewPolicy"
+        ],
+        "delete": true
+      }
+    ],
+    "rebindArtifacts": true,
+    "args": [
+      "--legacy-schema-mode",
+      "reject"
+    ],
+    "accepted": false,
+    "legacyAudit": false,
+    "conjunct": "A",
+    "reason": "audit-schema-invalid"
+  }
+]

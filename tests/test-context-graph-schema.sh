@@ -18,7 +18,7 @@ ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCHEMA="$ENGINE_HOME/schemas/context-graph.v0.schema.json"
 NODES="$ENGINE_HOME/tests/fixtures/context-graph/nodes.jsonl"
 EDGES="$ENGINE_HOME/tests/fixtures/context-graph/edges.jsonl"
-MAPPING="$ENGINE_HOME/docs/context-build-plan/graph-event-mapping.md"
+MAPPING="$ENGINE_HOME/docs/context-graph.md"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -245,7 +245,7 @@ assert_invalid "$(printf '{"schema":"singular.orchestration.context-graph.v0","i
 # --- mapping doc names every S0-S5 durable record/event type ------------------
 [[ -f "$MAPPING" ]] || fail "missing mapping doc: $MAPPING"
 
-# S0-S5 durable record/event types drawn from docs/context-build-plan/stage-0..5.
+# S0-S5 durable record/event types produced by the engine.
 # Each must be named in the mapping table so every projected line has a source.
 S0_S5_RECORDS=(
   # S0 — baseline / instrumentation
@@ -304,7 +304,7 @@ done
 # pure-projection / never-authored-directly-by-a-model invariant in the mapping
 # doc, so the guarantee is asserted behaviorally rather than by a temporal
 # absence-grep over engine/cli (which goes red the instant graph-projector
-# legitimately references the schema — planner-contract rule 9). ----------------
+# legitimately references the schema). ----------------
 grep -qi "pure projection" "$MAPPING" \
   || fail "mapping doc must document the graph as a PURE PROJECTION"
 grep -qi "never authored" "$MAPPING" \

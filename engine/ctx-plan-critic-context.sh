@@ -1,51 +1,6 @@
 #!/usr/bin/env bash
-# ctx-plan-critic-context.sh — assemble the read-only staged-candidate critic
-# context the S2 skeptic (node plan-critic-driver, layer engine_runtime) must
-# actually receive. The output may include the critic policy itself, making it
-# the complete prompt passed to the runner rather than an unused side artifact.
-#
-# Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines NEW
-# functions only; NO existing engine path invokes them, so with this file
-# present-but-uncalled the engine is byte-identical to prior behavior (mirroring
-# engine/ctx-plan-critic.sh and engine/ctx-paired-audit.sh).
-#
-# Purpose: the integrated driver engine/ctx-plan-critic.sh (TASK-0013) wires the
-# fresh, read-only default-runner critic call but invokes the runner with ONLY
-# the base plan-critic prompt — it never composes the candidate CONTENT, so the
-# critic is flown blind. This brick closes that gap: it builds the composed
-# critic input from exactly what the driver stages — the rendered candidate task
-# files in the node-local stage dir (`*.candidate.md`), the existing-task summary
-# the planner itself was shown, and the node's own stage file under
-# docs/context-build-plan/. Wiring the assembled context into the driver's runner
-# invocation belongs to a later slice and is out of scope here.
-#
-# The assembler is PURE and READ-ONLY: it reads the staged inputs and writes ONLY
-# its single composed output file. It appends no events, spawns no runner, and
-# mutates nothing else — preserving the advocate/skeptic line and evidence
-# invariance (the critic stays read-only, fresh-by-default, on the default runner,
-# and never weakens, resumes into, or bypasses the un-bypassable implementation
-# auditor). Candidate bodies compose in a stable (sorted) order so the composed
-# context is byte-stable across runs for a fixed input set.
-#
-# Public entry points:
-#   singular_ctx_plan_critic_stage_file <node>
-#     Pure: print the node's stage file path under docs/context-build-plan/
-#     (SINGULAR_PLAN_DIR), or empty when no stage file declares the node. Read-only;
-#     depends on no network or mutable run state.
-#   singular_ctx_plan_critic_context <node> <stage_dir> <out_file> [summary_file]
-#                                    [prompt_file] [base_sha]
-#     Pure: compose the read-only critic context — every `*.candidate.md` body in
-#     <stage_dir> (sorted), the existing-task summary (summary_file, else
-#     <stage_dir>/existing-tasks.md), and the node's stage-file content — into
-#     <out_file>. When prompt_file is supplied, prepend its policy verbatim so
-#     <out_file> is directly runnable. Writes ONLY <out_file>; appends no events;
-#     invokes no runner.
+# Assemble bounded planning context for the read-only critic from staged tasks and source records.
 
-# Pure resolver: print the node's stage file under the context-build-plan dir, or
-# empty when no plan file declares the node. A node is "declared" by a
-# backtick-wrapped mention of its name (e.g. "## Node `plan-critic-driver`").
-# Files are scanned in sorted glob order and the first match wins, so resolution
-# is deterministic. No side effects.
 singular_ctx_plan_critic_stage_file() {
   local node="$1"
   [[ -n "$node" ]] || { printf '%s' ""; return 0; }
@@ -84,6 +39,7 @@ singular_ctx_plan_critic_context() {
     if [[ -n "$prompt_file" && -f "$prompt_file" ]]; then
       printf '# Critic Policy\n\n'
       cat "$prompt_file"
+      singular_red_proof_prompt
       printf '\n\n---\n\n'
     fi
     printf '# Plan Critic Context: %s\n\n' "$node"

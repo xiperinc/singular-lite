@@ -1,7 +1,7 @@
 {
   "schema": "singular.context.evaluation-corpus.v1",
   "corpusVersion": "1",
-  "title": "B5 labeled retrieval corpus",
+  "title": "Synthetic labeled retrieval corpus",
   "project": "project",
   "brainConfig": "brain/singular-brain.config.json",
   "configs": {

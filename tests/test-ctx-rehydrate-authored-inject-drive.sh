@@ -6,7 +6,7 @@ set -euo pipefail
 # asserts THIS slice's driver wire-in: the OPTIONAL authored-knowledge
 # augmentation of the rehydration packet for node `rehydrate-path`. On a
 # `rehydrate` implementer decision (a refused resume upgraded behind
-# SINGULAR_REHYDRATE=1), AFTER the durable rehydration packet (TASK-0057) is
+# SINGULAR_REHYDRATE=1), AFTER the durable rehydration packet is
 # appended, the driver ALSO appends the eligible authored-knowledge entries —
 # equal to `singular_ctx_rehydrate_authored_config_render implement` — under a
 # reference-only / NOT-authoritative wrapper. The append is delegated entirely
@@ -218,7 +218,7 @@ expected_authored() {
     singular_ctx_rehydrate_authored_config_render implement
 }
 
-# Durable provenance/taint header (TASK-0057) and the authored wrapper header.
+# Durable provenance/taint header and the authored wrapper header.
 PROV_HEADER="## Injected durable context (rehydrated from a refused-resume lineage)"
 AUTHORED_HEADER="## Injected authored knowledge (reference material, NOT authoritative)"
 

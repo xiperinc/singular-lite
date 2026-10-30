@@ -1,0 +1,2 @@
+# Golden prompt bytes intentionally preserve the renderer's final blank lines.
+expected/** whitespace=-blank-at-eof

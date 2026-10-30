@@ -1,62 +1,6 @@
 #!/usr/bin/env bash
-# ctx-critic-recheck-classify.sh — the per-finding critic-recheck CLASSIFIER: the
-# signature OUTPUT of the executable DAG node critic-carryover (stage
-# S3-plan-revision, area plancritic, layer engine_runtime). Given a prior
-# plan-critique.v0 record and a resumed critic's recheck self-report, map each
-# prior finding id to a disposition in `addressed | survives | obsolete`, and emit
-# the record-only `ctx.critic_recheck` provenance event named verbatim in the
-# node's requiredCompletion.
-#
-# TASK-0027 integrated the deterministic post-acceptance sampling gate
-# (engine/ctx-critic-recheck.sh, behind default-OFF SINGULAR_CRITIC_RECHECK_PCT)
-# that decides WHETHER an accepted task is sampled; this brick supplies the node's
-# signature output — the per-finding disposition set and the ctx.critic_recheck
-# events — as a pure, side-effect-free primitive the later read-only
-# critic-resume runner will consult.
-#
-# Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines NEW
-# functions only; NO existing engine path invokes them, so with this file
-# present-but-uncalled the engine is byte-identical to prior behavior (mirroring
-# TASK-0027 and the classifier/record pairing of
-# engine/ctx-plan-revise-dispositions.sh, TASK-0021). It never owns engine/lib.sh,
-# adds no driver-file hook, invokes no runner, resumes no session, touches no
-# lease, and writes no state other than the one provenance event the recorder
-# appends.
-#
-# Advocate/skeptic line + evidence invariance: the recheck records ONLY — it never
-# blocks or changes any accept/reject outcome, never weakens a gate, and never
-# makes the fresh implementation auditor bypassable. The conservative `survives`
-# default keeps the critic a skeptic (an unproven concern is assumed to persist).
-# The whole recheck stays default-OFF behind SINGULAR_CRITIC_RECHECK_PCT
-# (TASK-0027), consulted upstream by the follow-up runner. The read-only
-# critic-session RESUME over the accepted diff, the skeptic role gate, and the
-# l1-drive.sh post-acceptance hook are the sanctioned follow-up slices of
-# critic-carryover and are OUT OF SCOPE here.
-#
-# Public entry points:
-#   singular_ctx_critic_recheck_classify <prior_critique_record> <recheck_output>
-#     PURE and READ-ONLY. Reads every `f-[0-9a-f]{12}` finding id from the prior
-#     singular.orchestration.plan-critique.v0 record and the resumed critic's
-#     recheck self-report at <recheck_output> (JSON: a `findings` array of
-#     {id,status} objects, status in addressed|survives|obsolete). Prints one
-#     TAB-separated `<finding-id>\t<disposition>` line per PRIOR finding in
-#     id-sorted order; disposition in {addressed, survives, obsolete}. Conservative
-#     skeptic-safe fail-closed default = `survives` for any id whose status cannot
-#     be positively established — a missing/unparseable record or output, an
-#     unknown/ambiguous status, or an id absent from the recheck output — NEVER
-#     fabricating addressed or obsolete. Appends no event, mutates nothing, ALWAYS
-#     exits 0.
-#   singular_ctx_critic_recheck_record <node> <run_id> <task_id> \
-#                                     <prior_critique_record> <recheck_output>
-#     Records ONLY. Classifies (via the pure function above) and emits EXACTLY ONE
-#     `ctx.critic_recheck` event through singular_append_event carrying node,
-#     runId, taskId, role = plan-critic (skeptic), and the full id-sorted
-#     per-finding id->disposition set. Changes no outcome, promotes/quarantines no
-#     candidate, invokes no runner, touches no lease, never mutates any
-#     accept/reject decision. Events land only in the pinned SINGULAR_EVENTS_FILE.
+# Classify prior findings after an accepted-change recheck and record their dispositions.
 
-# Pure, read-only classifier. Prints `<finding-id>\t<disposition>` per prior
-# finding in id-sorted order; always exits 0. See header for the full contract.
 singular_ctx_critic_recheck_classify() {
   local critique_record="${1:-}" recheck_output="${2:-}"
   python3 - "$critique_record" "$recheck_output" <<'PY' 2>/dev/null || true

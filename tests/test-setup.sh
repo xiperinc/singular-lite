@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PMGO-006: `singular setup` — one idempotent path from "a repository" to a
+# `singular setup` — one idempotent path from "a repository" to a
 # verified, STOPPED repository.
 #
 # What is actually being pinned here is the safety ordering, not the happy path:

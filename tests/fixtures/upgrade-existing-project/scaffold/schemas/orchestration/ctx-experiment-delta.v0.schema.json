@@ -1,0 +1,119 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://singular.local/schemas/orchestration/ctx-experiment-delta.v0.schema.json",
+  "title": "singular.orchestration.ctx-experiment-delta.v0",
+  "description": "Treatment-vs-control CONTRAST for the experiment-run node: arm B (treatment) minus arm A (control / M0 knob state) for each headline metric. This artifact ships NO base metric of its own — it reads ONLY the summary bundle (ctx-experiment-summary.v0) and DIFFERENCES the already-computed per-arm values (single upstream definition site; no re-derivation). Each record carries the two per-arm values verbatim (a = arm A, b = arm B), their difference (delta = b - a), and a NEUTRAL direction in {lower, higher, equal} describing B relative to A. It emits NO better/worse or knob-flip judgment and NO per-knob attribution — per-knob default decisions remain operator authority. Keys are sorted and deterministic for a fixed input set; validation fails closed. The bias directional-disagreement rate is a single cross-arm aggregate, so it is surfaced with a == b and delta 0 (no arm attribution). Missing or empty inputs yield well-formed zeroed deltas.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "deltas"],
+  "properties": {
+    "schema": {
+      "const": "singular.orchestration.ctx-experiment-delta.v0"
+    },
+    "deltas": {
+      "type": "object",
+      "description": "Per-headline-metric treatment-effect records, keyed by metric name and sorted.",
+      "additionalProperties": false,
+      "required": [
+        "attemptsToAcceptMean",
+        "biasDirectionalDisagreementRate",
+        "costTokensPerTask",
+        "costWallClockMsPerTask",
+        "escapeRate",
+        "findingsPerAttemptMean",
+        "rehydrateHitRate",
+        "resumeHitRate"
+      ],
+      "properties": {
+        "attemptsToAcceptMean": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["a", "b", "delta", "direction"],
+          "properties": {
+            "a": { "type": "number" },
+            "b": { "type": "number" },
+            "delta": { "type": "number" },
+            "direction": { "enum": ["lower", "higher", "equal"] }
+          }
+        },
+        "biasDirectionalDisagreementRate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["a", "b", "delta", "direction"],
+          "properties": {
+            "a": { "type": "number" },
+            "b": { "type": "number" },
+            "delta": { "type": "number" },
+            "direction": { "enum": ["lower", "higher", "equal"] }
+          }
+        },
+        "costTokensPerTask": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["a", "b", "delta", "direction"],
+          "properties": {
+            "a": { "type": "number" },
+            "b": { "type": "number" },
+            "delta": { "type": "number" },
+            "direction": { "enum": ["lower", "higher", "equal"] }
+          }
+        },
+        "costWallClockMsPerTask": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["a", "b", "delta", "direction"],
+          "properties": {
+            "a": { "type": "number" },
+            "b": { "type": "number" },
+            "delta": { "type": "number" },
+            "direction": { "enum": ["lower", "higher", "equal"] }
+          }
+        },
+        "escapeRate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["a", "b", "delta", "direction"],
+          "properties": {
+            "a": { "type": "number" },
+            "b": { "type": "number" },
+            "delta": { "type": "number" },
+            "direction": { "enum": ["lower", "higher", "equal"] }
+          }
+        },
+        "findingsPerAttemptMean": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["a", "b", "delta", "direction"],
+          "properties": {
+            "a": { "type": "number" },
+            "b": { "type": "number" },
+            "delta": { "type": "number" },
+            "direction": { "enum": ["lower", "higher", "equal"] }
+          }
+        },
+        "rehydrateHitRate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["a", "b", "delta", "direction"],
+          "properties": {
+            "a": { "type": "number" },
+            "b": { "type": "number" },
+            "delta": { "type": "number" },
+            "direction": { "enum": ["lower", "higher", "equal"] }
+          }
+        },
+        "resumeHitRate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["a", "b", "delta", "direction"],
+          "properties": {
+            "a": { "type": "number" },
+            "b": { "type": "number" },
+            "delta": { "type": "number" },
+            "direction": { "enum": ["lower", "higher", "equal"] }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,43 +1,6 @@
 #!/usr/bin/env bash
-# ctx-rehydrate-event.sh — pure, read-only strategy-event payload builder (stage
-# S5-routing, node `rehydrate-path`, layer engine_runtime). Sourced exactly once
-# by the context-evolution loader block in lib.sh (it matches the ctx-*.sh glob),
-# and called by the rehydrate strategy path before worker invocation.
-#
-#   singular_ctx_rehydrate_event_data \
-#     <role> <task-id> <run-id> <attempt> <reason> <run_dir> [extra-id=path ...]
-#
-# Prints a single compact JSON object on stdout, suitable as the third (`data`)
-# argument to `singular_append_event "context.strategy_selected"`. It extends the
-# existing resume/fresh strategy payload shape ADDITIVELY:
-#
-#   {"taskId":…,"runId":…,"role":…,"attempt":<n>,"strategy":"rehydrate",
-#    "reason":"<reason>","manifest":<manifest-json>}
-#
-# with `attempt` numeric, the other scalars strings, and `manifest` a NESTED JSON
-# object (not a stringified blob) so `singular_append_event`'s json.loads stores it
-# as structured data rather than a {"raw":…} fallback.
-#
-# `manifest` is the deterministic output of singular_ctx_rehydrate_manifest applied
-# to singular_ctx_rehydrate_sources <run_dir> [extra…] — i.e.
-#   {"schema":"singular.orchestration.ctx-rehydrate-manifest.v0",
-#    "sources":[{"id","sha256"}…]}
-# recording exactly which surviving durable artifacts, at which content hashes,
-# the run rehydrates from. It records the MANIFEST (ids + hashes) only, never the
-# packet body, so durable artifact bytes are not duplicated into the event stream.
-#
-# Quarantine-aware transitively: quarantined artifacts are absent from
-# manifest.sources because the assembler already composes
-# singular_ctx_artifact_exclude. Deterministic: identical run_dir bytes yield
-# byte-identical event data. Robust to an empty source set: manifest.sources is []
-# and the object is still well-formed valid JSON.
-#
-# Pure and READ-ONLY: it reads artifact bytes (transitively, to hash them) but
-# never writes, renames, or deletes anything, and appends NO events itself (it
-# produces the data string; l1-drive.sh records it). It confers NO independence:
-# `rehydrate` remains tainted per singular_ctx_route_strategy_tainted.
+# Record the sources and content hashes used by a rehydration packet for later verification.
 
-# singular_ctx_rehydrate_event_data <role> <task-id> <run-id> <attempt> <reason> <run_dir> [extra-id=path ...]
 singular_ctx_rehydrate_event_data() {
   local role="${1-}" task_id="${2-}" run_id="${3-}" attempt="${4-}" reason="${5-}" run_dir="${6-}"
   [[ $# -ge 6 ]] && shift 6 || shift $#
@@ -75,23 +38,23 @@ singular_ctx_rehydrate_event_data() {
   # OPTIONAL authored-knowledge counterpart (node rehydrate-path; NOT part of
   # requiredCompletion, does NOT gate the node). ALSO record the config-gated
   # authored manifest entries alongside the durable sources, using the SAME
-  # trigger set TASK-0062 injects with so the recorded authored entries match the
+  # trigger set as the prompt injector so the recorded entries match the
   # injected authored section (consistency invariant). The set comes from the pure
-  # builder singular_ctx_rehydrate_authored_triggers (TASK-0064): the run's
+  # builder singular_ctx_rehydrate_authored_triggers: the run's
   # deterministic, de-duplicated `load-when` tokens (role `implementer`, step
   # `implement`, task id) rather than the bare literal `implement`, so authored
   # entries scoped to a role or task — not only the literal step — become
   # eligible. The enriched set is a strict superset of {implement}, so
   # implement-scoped entries still match (backward compatible), and the injection
   # site (engine/l1-drive.sh) passes the IDENTICAL set. This is a minimal
-  # delegation into the integrated config gate (TASK-0058–0061): no
+  # delegation into the integrated config gate: no
   # config/selection/render logic is inlined here. The gate internally checks
   # SINGULAR_CTX_MANIFEST (default 0) and the OPTIONAL singular.config.json
   # `contextManifest` field, so with either OFF it returns empty and nothing is
   # merged — OFF-parity keeps the event data byte-identical to the durable-only
   # payload. Non-fatal: on any error nothing is merged.
   #
-  # NODE dimension (TASK-0066 -> TASK-0067): resolve the run's executable DAG node
+  # NODE dimension: resolve the run's executable DAG node
   # via the pure read-only resolver singular_ctx_rehydrate_authored_node from this
   # site's own "$task_id" parameter (no signature change) and thread it into the
   # builder's position-3 [node] slot so node-scoped `load-when` entries become

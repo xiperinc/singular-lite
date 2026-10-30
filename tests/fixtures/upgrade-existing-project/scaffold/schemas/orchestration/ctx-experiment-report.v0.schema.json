@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://singular.local/schemas/orchestration/ctx-experiment-report.v0.schema.json",
+  "title": "singular.orchestration.ctx-experiment-report.v0",
+  "description": "Raw metrics artifact the operator's experiment-report.md references at merge: per-arm escape rate, per-arm cost rollup (tokens + wall-clock per accepted task), and the bias directional-disagreement rate. Emitted read-only from an events log plus per-task metrics; keys are sorted and deterministic for a fixed input set.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "arms", "bias"],
+  "properties": {
+    "schema": {
+      "const": "singular.orchestration.ctx-experiment-report.v0"
+    },
+    "arms": {
+      "type": "object",
+      "description": "Both experiment arms (A = control / M0 knob-state, B = treatment), always present.",
+      "additionalProperties": false,
+      "required": ["A", "B"],
+      "properties": {
+        "A": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["escapeRate", "accepted", "flagged", "cost"],
+          "properties": {
+            "escapeRate": { "type": "number", "minimum": 0 },
+            "accepted": { "type": "integer", "minimum": 0 },
+            "flagged": { "type": "integer", "minimum": 0 },
+            "cost": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["tasks", "tokensTotal", "wallClockMsTotal", "tokensPerTask", "wallClockMsPerTask"],
+              "properties": {
+                "tasks": { "type": "integer", "minimum": 0 },
+                "tokensTotal": { "type": "integer", "minimum": 0 },
+                "wallClockMsTotal": { "type": "integer", "minimum": 0 },
+                "tokensPerTask": { "type": "number", "minimum": 0 },
+                "wallClockMsPerTask": { "type": "number", "minimum": 0 }
+              }
+            }
+          }
+        },
+        "B": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["escapeRate", "accepted", "flagged", "cost"],
+          "properties": {
+            "escapeRate": { "type": "number", "minimum": 0 },
+            "accepted": { "type": "integer", "minimum": 0 },
+            "flagged": { "type": "integer", "minimum": 0 },
+            "cost": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["tasks", "tokensTotal", "wallClockMsTotal", "tokensPerTask", "wallClockMsPerTask"],
+              "properties": {
+                "tasks": { "type": "integer", "minimum": 0 },
+                "tokensTotal": { "type": "integer", "minimum": 0 },
+                "wallClockMsTotal": { "type": "integer", "minimum": 0 },
+                "tokensPerTask": { "type": "number", "minimum": 0 },
+                "wallClockMsPerTask": { "type": "number", "minimum": 0 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "bias": {
+      "type": "object",
+      "description": "Directional disagreement between the tainted context-aware reviewer (ctx.critic_recheck) and the independent fresh paired auditor: the rate at which findings on fresh-paired-audit-flagged tasks were dispositioned addressed|obsolete rather than survives.",
+      "additionalProperties": false,
+      "required": ["flaggedFindings", "directionalDisagreements", "directionalDisagreementRate"],
+      "properties": {
+        "flaggedFindings": { "type": "integer", "minimum": 0 },
+        "directionalDisagreements": { "type": "integer", "minimum": 0 },
+        "directionalDisagreementRate": { "type": "number", "minimum": 0 }
+      }
+    }
+  }
+}

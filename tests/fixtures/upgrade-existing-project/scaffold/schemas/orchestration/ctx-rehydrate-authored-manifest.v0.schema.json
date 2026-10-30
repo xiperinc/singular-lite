@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.ctx-rehydrate-authored-manifest.v0",
+  "title": "singular Rehydrate Authored-Knowledge Manifest",
+  "description": "Additive contract for the config-gated authored-knowledge manifest emitted by singular_ctx_rehydrate_authored_manifest and recorded under the core manifest's optional `authored` key. Records which human-curated authored entries were injected, at which content hashes. Every entry is pinned class=authored-knowledge and authoritative=false so the schema can never certify an authored entry as authoritative.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "sources"],
+  "properties": {
+    "schema": { "const": "singular.orchestration.ctx-rehydrate-authored-manifest.v0" },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "sha256", "class", "authoritative"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "class": { "const": "authored-knowledge" },
+          "authoritative": { "const": false }
+        }
+      }
+    }
+  }
+}

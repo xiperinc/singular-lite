@@ -79,24 +79,29 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+# Importing the shared rule must also work in a read-only engine checkout.
+sys.dont_write_bytecode = True
+import acceptance_validator
+
 LEDGER_SCHEMA = "singular.review-policy.ledger.v1"
 POLICY_VERSION = 1
 # Two total rounds: the initial review plus at most one follow-up. The L1
 # driver bounds product repairs to maxReviewRounds - 1, so high-risk tasks are
 # also capped here unless a project raises maxReviewRounds explicitly.
 DEFAULT_MAX_REVIEW_ROUNDS = 2
-DEFAULT_BLOCKING = ["P0", "P1"]
-SEVERITIES = ("P0", "P1", "P2", "P3")
+DEFAULT_BLOCKING = acceptance_validator.DEFAULT_BLOCKING
+# Supersession chains share one budget; each engine-issued successor extends it
+# by a fixed amount, a bounded number of times (see docs/review-policy.md).
+DEFAULT_SUPERSESSION_EXTRA_ROUNDS = 1
+DEFAULT_MAX_SUPERSESSION_EXTENSIONS = 2
+SUPERSESSION_WALK_LIMIT = 32
+SEVERITIES = acceptance_validator.SEVERITIES
+UNCLASSIFIABLE_SCHEMAS = acceptance_validator.UNCLASSIFIABLE_SCHEMAS
+CLASSIFIED_TEXT_FIELDS = acceptance_validator.CLASSIFIED_TEXT_FIELDS
+SUPPORT_FIELDS = acceptance_validator.SUPPORT_FIELDS
 VERDICTS = ("accepted", "needs-fix", "blocked", "needs-human")
 LANES = ("native", "maintenance", "consultant")
 ROUND_KINDS = ("initial", "followup")
-# Schemas whose documents cannot carry classifiedFindings.
-UNCLASSIFIABLE_SCHEMAS = (
-    "singular.orchestration.audit-verdict.v0",
-    "pmgo.orchestration.audit-verdict.v0",
-)
-CLASSIFIED_TEXT_FIELDS = ("trigger", "impact", "requirement", "location")
-SUPPORT_FIELDS = ("trigger", "impact", "requirement")
 OP_RESERVED = "reserved"
 OP_COMPLETED = "completed"
 OP_RELEASE_STATUSES = ("infrastructure-exhausted", "abandoned")
@@ -257,6 +262,13 @@ def _apply_json_policy(policy: dict[str, Any], sources: dict[str, str], blob: An
             )
         policy["requireClassification"] = flag
         sources["requireClassification"] = source
+    for key in ("supersessionExtraRounds", "maxSupersessionExtensions"):
+        if key in blob:
+            value = blob[key]
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise PolicyError(f"reviewPolicy.{key} must be an integer >= 0, got {value!r}")
+            policy[key] = value
+            sources[key] = source
 
 
 def load_policy(env: dict[str, str] | None = None, config_path: str | None = None) -> dict[str, Any]:
@@ -270,12 +282,16 @@ def load_policy(env: dict[str, str] | None = None, config_path: str | None = Non
         "maxReviewRounds": DEFAULT_MAX_REVIEW_ROUNDS,
         "blockingSeverities": list(DEFAULT_BLOCKING),
         "requireClassification": True,
+        "supersessionExtraRounds": DEFAULT_SUPERSESSION_EXTRA_ROUNDS,
+        "maxSupersessionExtensions": DEFAULT_MAX_SUPERSESSION_EXTENSIONS,
     }
     sources = {
         "version": "default",
         "maxReviewRounds": "default",
         "blockingSeverities": "default",
         "requireClassification": "default",
+        "supersessionExtraRounds": "default",
+        "maxSupersessionExtensions": "default",
     }
 
     json_blob = None
@@ -319,11 +335,21 @@ def load_policy(env: dict[str, str] | None = None, config_path: str | None = Non
         )
         sources["requireClassification"] = "env"
 
+    for name, key in (
+        ("SINGULAR_REVIEW_SUPERSESSION_EXTRA_ROUNDS", "supersessionExtraRounds"),
+        ("SINGULAR_REVIEW_MAX_SUPERSESSION_EXTENSIONS", "maxSupersessionExtensions"),
+    ):
+        if name in env and env[name] != "":
+            policy[key] = _parse_int_ge(env[name], name, 0)
+            sources[key] = "env"
+
     # Empty-but-present env vars are invalid, never a silent default.
     for name in (
         "SINGULAR_REVIEW_MAX_ROUNDS",
         "SINGULAR_REVIEW_BLOCKING_SEVERITIES",
         "SINGULAR_REVIEW_REQUIRE_CLASSIFICATION",
+        "SINGULAR_REVIEW_SUPERSESSION_EXTRA_ROUNDS",
+        "SINGULAR_REVIEW_MAX_SUPERSESSION_EXTENSIONS",
     ):
         if name in env and env[name] == "":
             raise PolicyError(f"{name} is empty; omit it to use JSON/defaults")
@@ -333,249 +359,17 @@ def load_policy(env: dict[str, str] | None = None, config_path: str | None = Non
     return out
 
 
-def _classified_entry(entry: Any) -> dict[str, Any] | None:
-    """Normalize one classifiedFindings entry, or None when it is malformed."""
-    if not isinstance(entry, dict):
-        return None
-    ident = entry.get("id")
-    severity = entry.get("severity")
-    summary = entry.get("summary")
-    if not _nonblank(ident) or not isinstance(severity, str) or severity not in SEVERITIES:
-        return None
-    if not _nonblank(summary):
-        return None
-    item = {"id": ident.strip(), "severity": severity, "summary": summary}
-    for key in CLASSIFIED_TEXT_FIELDS:
-        if key not in entry or entry[key] is None:
-            continue
-        if not isinstance(entry[key], str):
-            return None
-        item[key] = entry[key]
-    return item
-
-
-def _parse_classified(verdict: dict[str, Any]) -> tuple[bool, list[dict[str, Any]], list[dict[str, Any]]]:
-    """Return (present, valid items, unresolved items) for classifiedFindings.
-
-    ``present`` is false when the member is absent, null, or an empty list.
-    Malformed entries and ids repeated with differing content are unresolved.
-    """
-    raw = verdict.get("classifiedFindings")
-    if raw is None or raw == []:
-        return False, [], []
-    if not isinstance(raw, list):
-        return True, [], [{
-            "id": "malformed-classification",
-            "severity": "unresolved",
-            "summary": "classifiedFindings is not a list",
-            "reason": "malformed-classification",
-        }]
-    unresolved: list[dict[str, Any]] = []
-    by_id: dict[str, list[dict[str, Any]]] = {}
-    order: list[str] = []
-    for index, entry in enumerate(raw, start=1):
-        item = _classified_entry(entry)
-        if item is None:
-            unresolved.append({
-                "id": f"malformed-{index}",
-                "severity": "unresolved",
-                "summary": json.dumps(entry, ensure_ascii=False, sort_keys=True)[:500],
-                "reason": "malformed-classification",
-            })
-            continue
-        if item["id"] not in by_id:
-            by_id[item["id"]] = []
-            order.append(item["id"])
-        by_id[item["id"]].append(item)
-    items: list[dict[str, Any]] = []
-    for ident in order:
-        group = by_id[ident]
-        if any(other != group[0] for other in group[1:]):
-            unresolved.append({
-                "id": ident,
-                "severity": "unresolved",
-                "summary": f"classified id {ident!r} is repeated with conflicting content",
-                "reason": "conflicting-duplicate-id",
-            })
-            continue
-        items.append(group[0])
-    return True, items, unresolved
-
-
-def _finding_strings(verdict: dict[str, Any]) -> list[str]:
-    out: list[str] = []
-    seen: set[str] = set()
-    for key in ("findings", "requiredFixes"):
-        raw = verdict.get(key)
-        if not isinstance(raw, list):
-            continue
-        for item in raw:
-            text = _as_str(item).strip()
-            if not text or text in seen:
-                continue
-            seen.add(text)
-            out.append(text)
-    return out
-
-
-def _coverage(text: str, items: list[dict[str, Any]]) -> tuple[bool, str | None]:
-    """(covered, conflicting-id) for one finding string under the exact rule."""
-    for item in items:
-        if item["summary"] is not None and text == item["summary"].strip():
-            return True, None
-    # Longest id first so `F1-a: ...` binds to F1-a, never to F1.
-    for item in sorted(items, key=lambda entry: len(entry["id"]), reverse=True):
-        pattern = (
-            re.escape(item["id"])
-            + r"(?:\s*\((P[0-3])\))?(?:\s*:|\s+[-–—](?=\s|$)|\s*$)"
-        )
-        match = re.match(pattern, text)
-        if not match:
-            continue
-        if match.group(1) and item["severity"] and match.group(1) != item["severity"]:
-            return True, item["id"]
-        return True, None
-    return False, None
-
-
-def _reason(reasons: list[str], reason: str) -> None:
-    if reason not in reasons:
-        reasons.append(reason)
-
-
 def classify(verdict: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]:
-    """Apply the fail-closed classification rules. Never mutates the input verdict."""
-    original = _as_str(verdict.get("verdict"))
-    # P0/P1 are a floor even for a caller-built policy dict.
-    blocking_severities = set(policy.get("blockingSeverities") or DEFAULT_BLOCKING)
-    blocking_severities.update(DEFAULT_BLOCKING)
-    require_classification = bool(policy.get("requireClassification", True))
+    return acceptance_validator.classify(verdict, policy)
 
-    result: dict[str, Any] = {
-        "originalVerdict": original,
-        "effectiveVerdict": original,
-        "applied": False,
-        "blocking": [],
-        "backlog": [],
-        "downgraded": [],
-        "unsupported": [],
-        "unresolved": [],
-        "unclassifiedCount": 0,
-        "reason": None,
-        "reasons": [],
-        "items": [],
-    }
 
-    present, items, unresolved = _parse_classified(verdict)
-    strings = _finding_strings(verdict)
-    reasons: list[str] = result["reasons"]
-
-    if not present:
-        legacy = _as_str(verdict.get("schema")) in UNCLASSIFIABLE_SCHEMAS
-        must_classify = require_classification and (
-            original == "needs-fix" or (original == "accepted" and strings and not legacy)
-        )
-        if not must_classify:
-            # The auditor's own label stands; a needs-fix is never upgraded.
-            return result
-        unclassified = [
-            {"id": f"unclassified-{index}", "severity": "unclassified", "summary": text}
-            for index, text in enumerate(strings, start=1)
-        ]
-        if not unclassified:
-            unclassified.append(
-                {"id": "unclassified-1", "severity": "unclassified", "summary": "unclassified finding"}
-            )
-        result["items"] = unclassified
-        result["blocking"] = [item["id"] for item in unclassified]
-        result["unclassifiedCount"] = len(unclassified)
-        _reason(reasons, "classification-missing")
-        result["reason"] = reasons[0]
-        result["effectiveVerdict"] = "needs-fix" if original in ("accepted", "needs-fix") else original
-        result["applied"] = result["effectiveVerdict"] != original
-        return result
-
-    blocking: list[str] = []
-    backlog: list[str] = []
-    processed: list[dict[str, Any]] = []
-    if unresolved:
-        _reason(
-            reasons,
-            "classification-malformed"
-            if any(entry["reason"] == "malformed-classification" for entry in unresolved)
-            else "classification-conflict",
-        )
-    for item in items:
-        copy = dict(item)
-        if copy["severity"] in DEFAULT_BLOCKING:
-            missing = [key for key in SUPPORT_FIELDS if not _nonblank(copy.get(key, ""))]
-            if missing:
-                # Severity is immutable: missing support never demotes a blocker.
-                copy["supportMissing"] = missing
-                copy["supportReason"] = "unsupported-blocking-claim"
-                result["unsupported"].append(copy["id"])
-                _reason(reasons, "unsupported-blocking-claim")
-        if copy["severity"] in blocking_severities:
-            blocking.append(copy["id"])
-        else:
-            backlog.append(copy["id"])
-        processed.append(copy)
-    for entry in unresolved:
-        blocking.append(entry["id"])
-        processed.append(dict(entry))
-        result["unresolved"].append(entry["id"])
-
-    # A finding that names a conflicting id is represented (and already
-    # blocking through that id); it is not additionally uncovered.
-    coverage_items = items + [
-        {"id": entry["id"], "severity": None, "summary": None}
-        for entry in unresolved if entry["reason"] == "conflicting-duplicate-id"
-    ]
-    uncovered = 0
-    for text in strings:
-        covered, conflict = _coverage(text, coverage_items)
-        if conflict:
-            ident = f"severity-tag-conflict-{conflict}"
-            if ident not in result["unresolved"]:
-                processed.append({
-                    "id": ident,
-                    "severity": "unresolved",
-                    "summary": text,
-                    "reason": "severity-tag-conflict",
-                })
-                blocking.append(ident)
-                result["unresolved"].append(ident)
-            _reason(reasons, "classification-conflict")
-            continue
-        if covered:
-            continue
-        uncovered += 1
-        ident = f"unclassified-{uncovered}"
-        processed.append({"id": ident, "severity": "unclassified", "summary": text})
-        _reason(reasons, "classification-incomplete")
-        # requireClassification=false lets an accepted label keep uncovered
-        # informational text; it never lets a needs-fix through incomplete.
-        if require_classification or original != "accepted":
-            blocking.append(ident)
-
-    result["items"] = processed
-    result["blocking"] = blocking
-    result["backlog"] = backlog
-    result["unclassifiedCount"] = uncovered
-    if blocking:
-        if original == "accepted" and any(
-            item["id"] in blocking for item in items
-        ):
-            _reason(reasons, "blocking-finding")
-        result["effectiveVerdict"] = "needs-fix" if original in ("accepted", "needs-fix") else original
-    elif original == "needs-fix":
-        # Completely classified, nothing blocking or unresolved: accepted with backlog.
-        result["effectiveVerdict"] = "accepted"
-    else:
-        result["effectiveVerdict"] = original
-    result["applied"] = result["effectiveVerdict"] != original
-    result["reason"] = reasons[0] if reasons else None
-    return result
+# Kept importable for audit normalization callers.
+covering_item = acceptance_validator.covering_item
+_classified_entry = acceptance_validator._classified_entry
+_parse_classified = acceptance_validator._parse_classified
+_finding_strings = acceptance_validator._finding_strings
+_coverage = acceptance_validator._coverage
+_reason = acceptance_validator._reason
 
 
 def empty_ledger() -> dict[str, Any]:
@@ -593,6 +387,7 @@ def _validate_entry(entry: Any, logical_change: str) -> dict[str, Any]:
         raise LedgerError(f"{where} is not an object")
     for key, kind in (
         ("rounds", list), ("exceptions", list), ("reopenings", list), ("operations", dict),
+        ("chain", list), ("supersessions", list),
     ):
         if key in entry and not isinstance(entry[key], kind):
             raise LedgerError(f"{where} {key} is not a {kind.__name__}")
@@ -752,11 +547,16 @@ def _is_legacy(row: dict[str, Any]) -> bool:
     return "series" not in row
 
 
+def _is_voided(row: dict[str, Any]) -> bool:
+    """A round the host voided as an infrastructure outcome: kept, never counted."""
+    return bool(row.get("voided"))
+
+
 def _legacy_open_count(entry: dict[str, Any]) -> int:
     """Legacy rows after the last legacy accepted row (the old reset rule)."""
     used = 0
     for row in entry.get("rounds") or []:
-        if not _is_legacy(row):
+        if not _is_legacy(row) or _is_voided(row):
             continue
         if row.get("effectiveVerdict") == "accepted":
             used = 0
@@ -768,7 +568,7 @@ def _legacy_open_count(entry: dict[str, Any]) -> int:
 def _legacy_last_accept(entry: dict[str, Any]) -> str:
     stamp = ""
     for row in entry.get("rounds") or []:
-        if _is_legacy(row) and row.get("effectiveVerdict") == "accepted":
+        if _is_legacy(row) and not _is_voided(row) and row.get("effectiveVerdict") == "accepted":
             stamp = max(stamp, _as_str(row.get("recordedAt")))
     return stamp
 
@@ -777,7 +577,7 @@ def _series_rows(entry: dict[str, Any]) -> list[dict[str, Any]]:
     series = _series(entry)
     return [
         row for row in entry.get("rounds") or []
-        if not _is_legacy(row) and row.get("series") == series
+        if not _is_legacy(row) and row.get("series") == series and not _is_voided(row)
     ]
 
 
@@ -832,10 +632,29 @@ def _grant_applies(exc: dict[str, Any], entry: dict[str, Any], task_id: str | No
     return not last_accept or _as_str(exc.get("grantedAt")) > last_accept
 
 
+def supersession_extension(entry: dict[str, Any], policy: dict[str, Any]) -> int:
+    """Rounds added by engine supersessions registered in the current series.
+
+    Fixed per supersession and capped, so a chain of successors can never mint
+    an unlimited budget.
+    """
+    series = _series(entry)
+    links = [
+        row for row in entry.get("supersessions") or []
+        if isinstance(row, dict) and row.get("series", 1) == series
+    ]
+    count = min(len(links), int(policy.get("maxSupersessionExtensions", 0)))
+    return count * int(policy.get("supersessionExtraRounds", 0))
+
+
+def _base_rounds(entry: dict[str, Any], policy: dict[str, Any]) -> int:
+    return int(policy["maxReviewRounds"]) + supersession_extension(entry, policy)
+
+
 def allowed_rounds(entry: dict[str, Any], task_id: str | None, policy: dict[str, Any]) -> tuple[int, int]:
     """(completed rounds in the current series, rounds allowed in it)."""
     used = _used_rounds(entry)
-    allowed = int(policy["maxReviewRounds"])
+    allowed = _base_rounds(entry, policy)
     for exc in entry.get("exceptions") or []:
         if _grant_applies(exc, entry, task_id):
             allowed += _grant_extra(exc)
@@ -844,7 +663,7 @@ def allowed_rounds(entry: dict[str, Any], task_id: str | None, policy: dict[str,
 
 def _grant_for_slot(entry: dict[str, Any], task_id: str | None, policy: dict[str, Any], slot: int) -> str:
     """Id of the grant that supplies 0-based slot ``slot``, or '' for a base slot."""
-    bound = int(policy["maxReviewRounds"])
+    bound = _base_rounds(entry, policy)
     if slot < bound:
         return ""
     for exc in entry.get("exceptions") or []:
@@ -872,6 +691,7 @@ def _admission(
         "series": _series(entry),
         "closed": closing is not None,
         "status": entry.get("status") or "open",
+        "supersessionExtension": supersession_extension(entry, policy),
     }
     if closing is not None:
         out["allowed"] = False
@@ -1041,6 +861,219 @@ def release(
     return {"operationId": op_id, "status": status, "released": True, "idempotent": False}
 
 
+def void_round(
+    ledger: dict[str, Any],
+    logical_change: str,
+    op_id: str,
+    reason: str,
+    policy: dict[str, Any],
+) -> dict[str, Any]:
+    """Void the completed round of ``op_id`` as an infrastructure outcome.
+
+    The host calls this when a review that was recorded could not be used for a
+    reason that is not the product's (the verdict could not be applied, the
+    evidence writer failed, host verification was inconclusive). The row stays
+    in the ledger for audit; it no longer counts toward the budget and cannot
+    close the logical change. Idempotent; an operation with no recorded round
+    is a no-op.
+    """
+    if not _nonblank(reason):
+        raise PolicyError("void requires a non-blank reason")
+    changes = ledger.get("logicalChanges") or {}
+    entry = changes.get(logical_change)
+    if not isinstance(entry, dict):
+        return {"logicalChange": logical_change, "operationId": op_id, "voided": False,
+                "reason": "unknown logical change"}
+    _validate_entry(entry, logical_change)
+    row = None
+    for candidate in entry.get("rounds") or []:
+        if candidate.get("operationId") == op_id:
+            row = candidate
+    if row is None:
+        return {"logicalChange": logical_change, "operationId": op_id, "voided": False,
+                "reason": "no recorded round for this operation"}
+    if _is_voided(row):
+        return {"logicalChange": logical_change, "operationId": op_id, "voided": True,
+                "idempotent": True, "round": row.get("round")}
+    row["voided"] = {"at": _utc_now(), "reason": reason, "class": "infrastructure"}
+    op = (entry.get("operations") or {}).get(op_id)
+    if isinstance(op, dict):
+        op["voided"] = True
+    task_id = _as_str(row.get("taskId")) or None
+    _refresh_status(entry, policy, task_id)
+    used, allowed = allowed_rounds(entry, task_id, policy)
+    return {
+        "logicalChange": logical_change, "operationId": op_id, "voided": True,
+        "idempotent": False, "round": row.get("round"), "used": used,
+        "allowedRounds": allowed, "status": entry.get("status"),
+    }
+
+
+_SUPERSEDES_HEADER = re.compile(r"^Supersedes:[ \t]*(.*)$", re.IGNORECASE)
+_TASK_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_]*-[0-9]+")
+
+
+def _task_file(tasks_dir: Path, task_id: str) -> Path | None:
+    for candidate in (tasks_dir / f"{task_id}.md", tasks_dir / "superseded" / f"{task_id}.md"):
+        if candidate.is_file():
+            return candidate
+    try:
+        for candidate in sorted(tasks_dir.glob(f"*/{task_id}.md")):
+            if candidate.is_file():
+                return candidate
+    except OSError:
+        pass
+    return None
+
+
+def _supersedes_of(tasks_dir: Path, task_id: str) -> list[str]:
+    """Task ids named by the ``Supersedes:`` header of a task record."""
+    path = _task_file(tasks_dir, task_id)
+    if path is None:
+        return []
+    out: list[str] = []
+    try:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if line.startswith("## "):
+                    break
+                match = _SUPERSEDES_HEADER.match(line.rstrip("\n"))
+                if match:
+                    for token in _TASK_TOKEN.findall(match.group(1)):
+                        if token != task_id and token not in out:
+                            out.append(token)
+    except OSError:
+        return []
+    return out
+
+
+def supersession_ancestors(tasks_dir: Path | None, task_id: str) -> list[str]:
+    """Ancestors of ``task_id`` along ``Supersedes:`` links, nearest first.
+
+    Only ancestors whose task record exists are followed: a header naming a
+    task the engine never published proves nothing and extends nothing.
+    """
+    if tasks_dir is None or not tasks_dir.is_dir():
+        return []
+    seen = [task_id]
+    frontier = [task_id]
+    while frontier and len(seen) < SUPERSESSION_WALK_LIMIT:
+        current = frontier.pop(0)
+        for parent in _supersedes_of(tasks_dir, current):
+            if parent in seen or _task_file(tasks_dir, parent) is None:
+                continue
+            seen.append(parent)
+            frontier.append(parent)
+    return seen[1:]
+
+
+def _entry_tasks(entry: dict[str, Any]) -> set[str]:
+    out = {_as_str(row.get("taskId")) for row in entry.get("rounds") or [] if isinstance(row, dict)}
+    out |= {
+        _as_str(op.get("taskId")) for op in (entry.get("operations") or {}).values()
+        if isinstance(op, dict)
+    }
+    out.discard("")
+    return out
+
+
+def resolve_unit(
+    ledger: dict[str, Any],
+    task_id: str,
+    dag_node: str | None,
+    ancestors: list[str],
+) -> dict[str, Any]:
+    """Pick the ledger entry that bounds reviews of ``task_id``.
+
+    The review unit is the supersession chain, keyed by its root task:
+
+    * a task with no predecessor is its own unit, so two tasks a planner issues
+      for one DAG node in the same batch never close or charge each other;
+    * a task whose ``Supersedes:`` header names a published task joins that
+      task's unit. The chain shares one budget, extended by a fixed, capped
+      amount per registered supersession;
+    * a node-keyed entry written before this model keeps bounding the chains
+      that already have rounds in it, unless a task outside the chain closed it.
+
+    Mutates ``ledger`` only to register a supersession; ``changed`` reports it.
+    """
+    changes = ledger.setdefault("logicalChanges", {})
+    chain = [task_id] + [item for item in ancestors if item != task_id]
+    node = _as_str(dag_node)
+    if node in ("null", "None"):
+        node = ""
+
+    def _result(key: str, unit: str, changed: bool) -> dict[str, Any]:
+        entry = changes.get(key) if isinstance(changes.get(key), dict) else {}
+        return {
+            "logicalChange": key,
+            "unit": unit,
+            "taskId": task_id,
+            "dagNode": node,
+            "chain": list(entry.get("chain") or [task_id]),
+            "ancestors": list(ancestors),
+            "supersessions": len(entry.get("supersessions") or []),
+            "changed": changed,
+        }
+
+    def _join(key: str, parent: str, unit: str) -> dict[str, Any]:
+        entry = _change_entry(ledger, key)
+        members = entry.setdefault("chain", [])
+        changed = False
+        if not members and unit == "task":
+            members.append(key)
+            changed = True
+        if task_id not in members:
+            for member in reversed(chain[1:]):
+                if member not in members and unit == "task":
+                    members.append(member)
+            members.append(task_id)
+            entry.setdefault("supersessions", []).append({
+                "from": parent,
+                "to": task_id,
+                "series": _series(entry),
+                "registeredAt": _utc_now(),
+            })
+            changed = True
+        if unit == "task" and entry.get("unit") != "task":
+            entry["unit"] = "task"
+            changed = True
+        if node and not entry.get("dagNode") and unit == "task":
+            entry["dagNode"] = node
+            changed = True
+        return _result(key, unit, changed)
+
+    # 1. Already a registered member of a unit.
+    for key, entry in changes.items():
+        if isinstance(entry, dict) and task_id in (entry.get("chain") or []):
+            return _result(key, "legacy-node" if entry.get("unit") != "task" else "task", False)
+
+    # 2. A node-keyed entry from before task units, still owned by this chain.
+    legacy = changes.get(node) if node and node != task_id else None
+    if isinstance(legacy, dict) and legacy.get("unit") != "task":
+        _validate_entry(legacy, node)
+        present = _entry_tasks(legacy)
+        closing = _closing_row(legacy)
+        if present & set(chain) and (closing is None or _as_str(closing.get("taskId")) in chain):
+            if task_id in present:
+                return _result(node, "legacy-node", False)
+            parent = next(item for item in chain[1:] if item in present)
+            return _join(node, parent, "legacy-node")
+
+    # 3. Join the unit of the nearest ancestor that has one.
+    for parent in chain[1:]:
+        for key, entry in changes.items():
+            if not isinstance(entry, dict) or key == node and entry.get("unit") != "task":
+                continue
+            if key == parent or parent in (entry.get("chain") or []):
+                return _join(key, chain[1], "task")
+
+    # 4. Own unit, or a new unit rooted at the oldest ancestor.
+    if len(chain) == 1:
+        return _result(task_id, "task", False)
+    return _join(chain[-1], chain[1], "task")
+
+
 def _item_by_id(classification: dict[str, Any], ident: str) -> dict[str, Any] | None:
     for item in classification.get("items") or []:
         if isinstance(item, dict) and item.get("id") == ident:
@@ -1173,14 +1206,7 @@ def record(
         )
         op["implicit"] = True
 
-    classification = classify(verdict, policy)
-    if host_verification == "failed-product" and classification["effectiveVerdict"] == "accepted":
-        # The host gate failed the product on this head: the review cannot close it.
-        classification["effectiveVerdict"] = "needs-fix"
-        classification["applied"] = classification["originalVerdict"] != "needs-fix"
-        classification["blocking"].append("host-verification-failed-product")
-        classification["reasons"].append("host-verification-failed-product")
-        classification["reason"] = classification["reasons"][0]
+    classification = acceptance_validator.classify_review(verdict, policy, host_verification)
     round_no = len(entry["rounds"]) + 1
     kind = "initial" if round_no == 1 else "followup"
     series_round = len(_series_rows(entry)) + 1
@@ -1353,7 +1379,7 @@ def grant(
             "closed series (use reopen)"
         )
     used = _used_rounds(entry)
-    bound = max_rounds
+    bound = _base_rounds(entry, policy)
     for exc in entry["exceptions"]:
         if not _grant_applies(exc, entry, task_id):
             continue
@@ -1745,6 +1771,32 @@ def _cmd_release(ns: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cmd_void(ns: argparse.Namespace) -> int:
+    policy = load_policy(os.environ, _resolve_config(ns))
+    state_dir = _resolve_state_dir(ns)
+    with locked_ledger(state_dir) as ledger:
+        result = void_round(ledger, ns.logical_change, ns.operation, ns.reason, policy)
+    _print_json(result)
+    return EXIT_OK
+
+
+def _cmd_resolve(ns: argparse.Namespace) -> int:
+    state_dir = _resolve_state_dir(ns)
+    tasks_dir = Path(ns.tasks_dir) if ns.tasks_dir else None
+    if tasks_dir is None and os.environ.get("SINGULAR_TASKS_DIR"):
+        tasks_dir = Path(os.environ["SINGULAR_TASKS_DIR"])
+    ancestors = supersession_ancestors(tasks_dir, ns.task)
+    # Read first: the common case (a task that is its own unit, or one already
+    # registered) writes nothing and creates no state.
+    with locked_ledger(state_dir, write=False) as ledger:
+        probe = resolve_unit(json.loads(json.dumps(ledger)), ns.task, ns.dag_node, ancestors)
+    if probe["changed"] and not ns.dry_run:
+        with locked_ledger(state_dir) as ledger:
+            probe = resolve_unit(ledger, ns.task, ns.dag_node, ancestors)
+    _print_json(probe)
+    return EXIT_OK
+
+
 def _cmd_reopen(ns: argparse.Namespace) -> int:
     policy = load_policy(os.environ, _resolve_config(ns))
     state_dir = _resolve_state_dir(ns)
@@ -1873,6 +1925,17 @@ def build_parser() -> argparse.ArgumentParser:
     rel.add_argument("--reason", required=True)
     rel.add_argument("--status", default="infrastructure-exhausted", choices=OP_RELEASE_STATUSES)
 
+    vd = sub.add_parser("void", help="void a recorded round as an infrastructure outcome")
+    vd.add_argument("--logical-change", required=True)
+    vd.add_argument("--operation", required=True)
+    vd.add_argument("--reason", required=True)
+
+    rsv = sub.add_parser("resolve", help="resolve the review unit (ledger key) of a task")
+    rsv.add_argument("--task", required=True)
+    rsv.add_argument("--dag-node", default="")
+    rsv.add_argument("--tasks-dir", default="", help="task records (default: $SINGULAR_TASKS_DIR)")
+    rsv.add_argument("--dry-run", action="store_true", help="never register a supersession")
+
     rop = sub.add_parser("reopen", help="start a new review series for a closed logical change")
     rop.add_argument("--logical-change", required=True)
     rop.add_argument("--reason", required=True)
@@ -1912,6 +1975,8 @@ def main(argv: list[str] | None = None) -> int:
         "reserve": _cmd_reserve,
         "record": _cmd_record,
         "release": _cmd_release,
+        "void": _cmd_void,
+        "resolve": _cmd_resolve,
         "reopen": _cmd_reopen,
         "grant": _cmd_grant,
         "backfill": _cmd_backfill,

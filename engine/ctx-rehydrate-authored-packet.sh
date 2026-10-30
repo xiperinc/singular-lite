@@ -1,54 +1,6 @@
 #!/usr/bin/env bash
-# ctx-rehydrate-authored-packet.sh — pure, read-only authored-knowledge packet
-# composer (stage S5-routing, node `rehydrate-path`, layer engine_runtime;
-# singular-brain integration point 3). Sourced exactly once by the
-# context-evolution loader block in lib.sh (it matches the ctx-*.sh glob). This
-# file DEFINES new functions only and is present-but-uncalled by every existing
-# engine/CLI/driver path, so with it sourced the engine stays byte-identical to
-# prior behavior.
-#
-# This is the THIRD slice of the explicitly-OPTIONAL authored-knowledge
-# deliverable. TASK-0058 (singular_ctx_rehydrate_authored_select) and TASK-0059
-# (singular_ctx_rehydrate_authored_eligible) reduce a FIXTURE authored-knowledge
-# manifest to the eligible entries as JSON Lines. This slice composes those two
-# integrated leaves into the two artifacts the eventual wire-in will merge: an
-# injectable capped packet SECTION and the authored MANIFEST entries recording
-# which authored ids were injected. It is NOT part of the `rehydrate-path` node's
-# requiredCompletion and does NOT gate the node. SINGULAR_CTX_MANIFEST (default 0)
-# gates the later config/driver wire-in, NOT this pure leaf. It takes NO
-# dependency on any singular-brain runtime.
-#
-#   singular_ctx_rehydrate_authored_render   <manifest-path> [trigger ...]
-#   singular_ctx_rehydrate_authored_manifest <manifest-path> [trigger ...]
-#
-# Both compose `singular_ctx_rehydrate_authored_select <manifest-path>` piped
-# through `singular_ctx_rehydrate_authored_eligible [trigger ...]` — inheriting the
-# quarantine, description_unverified, stale-freshness, and trigger-mismatch
-# exclusions of those integrated leaves; the composer introduces no content that
-# bypasses them — and resolve each eligible entry's body (an inline `body`, or the
-# contents of a `path`-backed entry read READ-ONLY):
-#
-#   - `..._render` prints the injectable packet section on stdout: one labeled
-#     `=== authored:<id> ===` section per eligible entry, headed by an explicit
-#     AUTHORED-KNOWLEDGE / NOT AUTHORITATIVE marker, then the resolved body,
-#     truncated to at most SINGULAR_CONTEXT_SECTION_MAX_CHARS (default 4000,
-#     honoring the engine/lib.sh knob) with a stable truncation marker. No
-#     rendered section is ever marked authoritative.
-#   - `..._manifest` prints a deterministic JSON sources list on stdout: one
-#     {id, sha256, class:"authored-knowledge", authoritative:false} per injected
-#     id, the sha256 taken over that entry's resolved body bytes ("which authored
-#     entries, which hashes") — recording which authored entries were injected,
-#     like any other rehydration source, and NEVER as authoritative.
-#
-# Deterministic: entries are emitted in a fixed id-sorted order, so identical
-# manifest bytes and triggers yield byte-identical section and manifest.
-#
-# Pure and READ-ONLY: it reads the manifest and path-backed bodies but never
-# writes, renames, or deletes anything; appends no events; and never exits
-# non-zero on well-formed input. An absent, empty, or malformed manifest yields an
-# empty section and empty manifest sources (fail-soft).
+# Compose selected, eligible authored knowledge into a bounded rehydration packet.
 
-# singular_ctx_rehydrate_authored_render <manifest-path> [trigger ...]
 singular_ctx_rehydrate_authored_render() {
   local manifest="${1-}"
   [[ $# -gt 0 ]] && shift

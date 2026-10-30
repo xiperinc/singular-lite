@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.gate-result.v0",
+  "title": "singular Orchestration Gate Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "node",
+    "status",
+    "authoritative",
+    "evidenceClass",
+    "evidence",
+    "decidedBy",
+    "recordedAt"
+  ],
+  "properties": {
+    "schema": { "const": "singular.orchestration.gate-result.v0" },
+    "node": { "type": "string", "minLength": 1 },
+    "status": {
+      "type": "string",
+      "enum": ["passed", "failed", "blocked", "proposed"]
+    },
+    "authoritative": { "type": "boolean" },
+    "campaignBinding": { "type": "string", "minLength": 1 },
+    "blockerClass": {
+      "type": "string",
+      "enum": ["needs-work", "blocked-external"],
+      "description": "Machine-readable lifecycle disposition for an authoritative blocked gate. needs-work remains planner-eligible; blocked-external requires external input or an explicit override. Legacy blocked records without this field are treated conservatively as blocked-external."
+    },
+    "evidenceClass": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Project-defined evidence class. A module may give specific values meaning (e.g. a 'deterministic-proof' gate may be required to carry a red/green skip-guard)."
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "ref"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["source-path", "task-set", "command-log"]
+          },
+          "ref": { "type": "string", "minLength": 1 },
+          "description": { "type": "string" },
+          "taskIds": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "command": { "type": "string", "minLength": 1 },
+          "exitCode": { "type": "integer" },
+          "logRef": { "type": "string", "minLength": 1 },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "headSha": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40,64}$"
+          }
+        }
+      }
+    },
+    "upstreamGates": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "decidedBy": { "type": "string", "minLength": 1 },
+    "rationale": { "type": "string" },
+    "recordedAt": { "type": "string", "format": "date-time" }
+  }
+}

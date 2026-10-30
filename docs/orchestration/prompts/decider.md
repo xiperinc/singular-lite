@@ -15,8 +15,14 @@ one action.
 
 ## Action vocabulary
 
-- `retry` / `rerun-tests`: the failure looks transient or fixable by re-running
-  the worker/gate. Only choose if retries remain (retryCount < maxRetries).
+- `retry` / `rerun-tests`: run the worker again with the failure as fix hints.
+  Only choose if retries remain (retryCount < maxRetries). **This is not cheap
+  and `rerun-tests` is not a lighter variant of `retry`** — both spend a full
+  worker model invocation plus a gate run; the engine treats them identically.
+  Choose one only when the next attempt has something new to act on. If the
+  previous attempt failed the same way at the same commit with the same
+  uncommitted changes, it does not, and the engine will stop the task itself
+  rather than spend the budget.
 - `amend-scope`: the worker needed a file just outside the declared scope; expand
   the owned files minimally and retry.
 - `rebase`: the branch is behind or diverged from the target; rebase and re-verify.
@@ -29,8 +35,16 @@ one action.
 - `accept-waiver`: the evidence is genuinely sufficient despite a non-accept
   verdict; accept with a recorded waiver. Use sparingly and justify strongly.
 - `release`: promote accepted work toward `main`. High bar.
-- `escalate-parked`: record the decision and PARK it for human review instead of
-  acting now.
+- `escalate-infra`: the WORK is fine and the ENVIRONMENT is not — a missing
+  dependency, an unprovisioned workspace, a full disk, an unreachable service.
+  Choose this whenever the failure would reproduce on correct code, and never
+  spend a retry on it: no model edit can install a package. It parks the task
+  with the diagnosis attached, and an operator returns it with
+  `singular unpark TASK-XXXX` once the environment is repaired.
+- `escalate-parked`: record the decision and PARK it for HUMAN JUDGMENT instead
+  of acting now. Use this when a person has to decide something; use
+  `escalate-infra` when a person has to fix something. Both are recoverable
+  through `singular unpark`.
 
 ## Judgment guidance (hard-nevers)
 

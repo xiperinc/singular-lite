@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.human-approval.v0",
+  "title": "singular Human Gate Approval",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "gateId",
+    "node",
+    "requestRef",
+    "requestSha256",
+    "approver",
+    "decision",
+    "answers",
+    "artifacts",
+    "evidence",
+    "rationale",
+    "approvedAt",
+    "expiresAt"
+  ],
+  "properties": {
+    "schema": { "const": "singular.orchestration.human-approval.v0" },
+    "gateId": { "type": "string", "minLength": 1 },
+    "node": { "type": "string", "minLength": 1 },
+    "requestRef": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "requestSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "approver": { "type": "string", "minLength": 1 },
+    "decision": { "type": "string", "enum": ["approved", "rejected"] },
+    "answers": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref", "sha256"],
+        "properties": {
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+          },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref", "sha256"],
+        "properties": {
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+          },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "rationale": { "type": "string", "minLength": 1 },
+    "approvedAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" }
+  }
+}

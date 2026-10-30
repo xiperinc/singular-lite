@@ -120,8 +120,8 @@ grep -q "STOP sentinel" "$root/.singular-state/autonomate.log" || fail "loop log
 #
 # This loop dispatches agents nobody is watching and kills them on timeout. On a
 # host where the group kill does not contain the tree, that cleanup silently
-# leaves descendants writing to a worktree — the field case behind PMGO-004. The
-# refusal has to release the claim it just took, or one degraded start would
+# leaves descendants writing to a worktree. Refusing to start must release
+# the claim just taken, or one degraded start would
 # lock every later `singular auto` out of the pidfile.
 rm -f "$root/.singular-state/STOP" "$root/.singular-state/autonomate.pid" \
   "$root/.singular-state/autonomate.pid.identity"

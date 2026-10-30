@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.state-packet.v0",
+  "title": "singular State Packet",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "packetId",
+    "runId",
+    "taskId",
+    "area",
+    "role",
+    "status",
+    "baseRef",
+    "branch",
+    "headSha",
+    "workspace",
+    "ownedFiles",
+    "changedFiles",
+    "commands",
+    "tests",
+    "evidence",
+    "blockers",
+    "nextAction",
+    "createdAt"
+  ],
+  "properties": {
+    "schema": { "const": "singular.orchestration.state-packet.v0" },
+    "packetId": { "type": "string", "minLength": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "taskId": { "type": "string", "pattern": "^TASK-[0-9]{4,}$" },
+    "area": { "type": "string", "minLength": 1 },
+    "role": { "type": "string", "minLength": 1 },
+    "status": {
+      "type": "string",
+      "enum": [
+        "planned",
+        "ready",
+        "running",
+        "blocked",
+        "needs-review",
+        "needs-human",
+        "accepted",
+        "failed",
+        "cancelled",
+        "superseded"
+      ]
+    },
+    "baseRef": { "type": "string", "minLength": 1 },
+    "branch": { "type": "string", "minLength": 1 },
+    "headSha": { "type": "string", "minLength": 1 },
+    "workspace": { "type": "string", "minLength": 1 },
+    "ownedFiles": { "type": "array", "items": { "type": "string" } },
+    "changedFiles": { "type": "array", "items": { "type": "string" } },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["cmd", "exitCode"],
+        "properties": {
+          "cmd": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "description": "Exact executable shell text only; human annotations and result summaries belong in rationale or evidence."
+          },
+          "exitCode": { "type": "integer" },
+          "logRef": { "type": "string" },
+          "rationale": {
+            "type": "string",
+            "description": "Optional human-readable context about the command or its result; never append this text to cmd."
+          }
+        }
+      }
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["name", "phase", "status"],
+        "properties": {
+          "name": { "type": "string" },
+          "phase": { "type": "string" },
+          "status": { "type": "string" },
+          "logRef": { "type": "string" }
+        }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["kind", "ref"],
+        "properties": {
+          "kind": { "type": "string" },
+          "ref": { "type": "string" }
+        }
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "nextAction": { "type": "string", "minLength": 1 },
+    "createdAt": { "type": "string", "format": "date-time" }
+  }
+}

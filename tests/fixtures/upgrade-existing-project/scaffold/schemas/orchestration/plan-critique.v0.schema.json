@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.plan-critique.v0",
+  "title": "singular Plan Critique",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "node",
+    "runId",
+    "batchTaskIds",
+    "verdict",
+    "findings",
+    "assumptionsChallenged",
+    "rationale"
+  ],
+  "properties": {
+    "schema": { "const": "singular.orchestration.plan-critique.v0" },
+    "node": { "type": "string", "minLength": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "batchTaskIds": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^TASK-[0-9]{4,}$" }
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["approve", "revise", "park"]
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "severity", "claim", "evidence"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^f-[0-9a-f]{12}$" },
+          "severity": {
+            "type": "string",
+            "enum": ["blocking", "should-fix", "note"]
+          },
+          "claim": { "type": "string", "minLength": 1 },
+          "evidence": { "type": "string", "minLength": 1 },
+          "suggestedChange": { "type": "string" }
+        }
+      }
+    },
+    "assumptionsChallenged": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "rationale": { "type": "string", "minLength": 1 }
+  }
+}

@@ -2,7 +2,7 @@
 # ctx-route-taint.sh — the taint / independence pin: the structural guarantee
 # that resumed/rehydrated sessions can never satisfy an independence-required
 # step (final audit, paired audit). Honors the advocate/skeptic line and evidence
-# invariance (planner-contract rule 8): no knob may reroute an independence step.
+# invariance: no knob may reroute an independence step.
 #
 # Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines new
 # functions only; NO existing engine path invokes them, so with this file

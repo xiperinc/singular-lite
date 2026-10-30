@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "singular.orchestration.context-graph.v0",
+  "title": "singular Context Provenance Graph (append-only JSONL line)",
+  "description": "One line of the append-only JSONL corpus under .singular-state/graph/ — either a node record (nodes.jsonl) or an edge record (edges.jsonl). PURE PROJECTION: derived from the event log, decision records, gate results, critiques, and ledgers; rebuildable from scratch and never authored directly by a model. Fail-closed: closed objects (additionalProperties:false); every node carries evidenceClass (authoritative|claim) and provenance (source record path + content hash). Mirrors schemas/plan-critique.v0.schema.json.",
+  "oneOf": [
+    { "$ref": "#/$defs/node" },
+    { "$ref": "#/$defs/edge" }
+  ],
+  "$defs": {
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Where this projected record came from. The source record path + its content hash make every graph line traceable to host state and let a rebuild verify byte-identity.",
+      "required": ["sourcePath", "contentHash"],
+      "properties": {
+        "sourcePath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repo- or state-relative path of the durable source record the projector read (e.g. an event-log line file, a critique record, a gate-result, a commit ref)."
+        },
+        "contentHash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "sha256 digest of the source record's canonical content — the stable identity a deterministic rebuild reproduces."
+        },
+        "recordType": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional S0-S5 source record/event type this line projects from (see docs/context-build-plan/graph-event-mapping.md)."
+        }
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A node record — one line of nodes.jsonl.",
+      "required": ["schema", "kind", "id", "type", "evidenceClass", "provenance"],
+      "properties": {
+        "schema": { "const": "singular.orchestration.context-graph.v0" },
+        "kind": { "const": "node" },
+        "id": {
+          "type": "string",
+          "pattern": "^n-[0-9a-f]{12}$",
+          "description": "Stable node id: hash of the source record identity (assigned by the projector; deterministic on rebuild)."
+        },
+        "type": {
+          "type": "string",
+          "description": "Node-type taxonomy — the complete S0-S5 semantic vocabulary.",
+          "enum": [
+            "goal",
+            "plan-batch",
+            "plan-version",
+            "critique",
+            "finding",
+            "assumption",
+            "task",
+            "attempt",
+            "commit",
+            "gate-result",
+            "audit",
+            "decision",
+            "capsule"
+          ]
+        },
+        "evidenceClass": {
+          "type": "string",
+          "description": "authoritative ONLY for host-verified records (gate results, commits, scope/secret scans); claim for every model-authored statement.",
+          "enum": ["authoritative", "claim"]
+        },
+        "provenance": { "$ref": "#/$defs/provenance" },
+        "label": {
+          "type": "string",
+          "description": "Optional human-readable summary for the node."
+        },
+        "attributes": {
+          "type": "object",
+          "description": "Optional projected key/values from the source record (e.g. verdict, severity, status). Never a substitute for provenance."
+        }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An edge record — one line of edges.jsonl. Directed from `from` to `to`.",
+      "required": ["schema", "kind", "id", "type", "from", "to", "provenance"],
+      "properties": {
+        "schema": { "const": "singular.orchestration.context-graph.v0" },
+        "kind": { "const": "edge" },
+        "id": {
+          "type": "string",
+          "pattern": "^e-[0-9a-f]{12}$",
+          "description": "Stable edge id: hash of (from, type, to) source identity (deterministic on rebuild)."
+        },
+        "type": {
+          "type": "string",
+          "description": "Edge-type taxonomy — the complete S0-S5 relational vocabulary.",
+          "enum": [
+            "depends_on",
+            "derived_from",
+            "revises",
+            "critiques",
+            "accepts_observation",
+            "rejects_observation",
+            "implements",
+            "verifies",
+            "contradicts",
+            "invalidates",
+            "supersedes"
+          ]
+        },
+        "from": {
+          "type": "string",
+          "pattern": "^n-[0-9a-f]{12}$",
+          "description": "Source node id."
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^n-[0-9a-f]{12}$",
+          "description": "Target node id."
+        },
+        "provenance": { "$ref": "#/$defs/provenance" },
+        "attributes": {
+          "type": "object",
+          "description": "Optional projected key/values for the edge (e.g. disposition, finding id)."
+        }
+      }
+    }
+  }
+}
